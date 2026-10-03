@@ -20,6 +20,10 @@ import {
   NUMBER_PROTECTION_SKILL, EMAIL_WRITING_SKILL,
 } from "./internal";
 import { HUMAN_WRITING_SKILL, DIALECT_MATCH_SKILL } from "./writing";
+import {
+  DELIVERABILITY_SKILL, EMAIL_FUNNEL_SKILL, SUBJECT_SKILL,
+  REPLY_TRIAGE_SKILL, EMAIL_FOLLOWUP_SKILL, EMAIL_GUARD_SKILL,
+} from "./email";
 import { logger } from "../logger";
 
 export type SkillDef = { name: string; intents: string[]; instruction: string };
@@ -30,6 +34,10 @@ export const LIBRARY: SkillDef[] = [
   STAGE_SKILL, NEGOTIATION_SKILL, DISCOVERY_SKILL, COMPLAINT_SKILL,
   FOLLOWUP_WRITING_SKILL, ANALYSIS_SKILL, COACHING_SKILL, SALES_MANAGEMENT_SKILL,
   NUMBER_PROTECTION_SKILL, EMAIL_WRITING_SKILL,
+  // The email team's own craft. Five of its six members carried no skills at
+  // all before this — a persona and two tasks, and nothing about the job.
+  DELIVERABILITY_SKILL, EMAIL_FUNNEL_SKILL, SUBJECT_SKILL,
+  REPLY_TRIAGE_SKILL, EMAIL_FOLLOWUP_SKILL, EMAIL_GUARD_SKILL,
 ];
 
 // Skills a library version used to install under another name. Seeding
@@ -67,7 +75,19 @@ export const GRANTS: Record<string, string[]> = {
   collector: [ANALYSIS_SKILL.name],
   intake:    [ANALYSIS_SKILL.name],
   ops:       [NUMBER_PROTECTION_SKILL.name],
-  email:     [EMAIL_WRITING_SKILL.name, ANALYSIS_SKILL.name, NEGOTIATION_SKILL.name, DISCOVERY_SKILL.name],
+
+  // ── The email team ──
+  // Every one of them carries the deliverability skill: a burnt domain ends
+  // the channel for all six, so it is not one person's job to know.
+  email:            [DELIVERABILITY_SKILL.name, SUBJECT_SKILL.name, EMAIL_FOLLOWUP_SKILL.name,
+                     EMAIL_WRITING_SKILL.name, DISCOVERY_SKILL.name, NEGOTIATION_SKILL.name, HUMAN_WRITING_SKILL.name],
+  email_strategist: [DELIVERABILITY_SKILL.name, EMAIL_FUNNEL_SKILL.name, ANALYSIS_SKILL.name, SUBJECT_SKILL.name],
+  email_followup:   [DELIVERABILITY_SKILL.name, EMAIL_FOLLOWUP_SKILL.name, SUBJECT_SKILL.name, EMAIL_FUNNEL_SKILL.name],
+  email_replies:    [DELIVERABILITY_SKILL.name, REPLY_TRIAGE_SKILL.name, NEGOTIATION_SKILL.name,
+                     DISCOVERY_SKILL.name, HUMAN_WRITING_SKILL.name],
+  email_guard:      [EMAIL_GUARD_SKILL.name, DELIVERABILITY_SKILL.name],
+  email_creator:    [DELIVERABILITY_SKILL.name, SUBJECT_SKILL.name, EMAIL_FUNNEL_SKILL.name,
+                     EMAIL_WRITING_SKILL.name, DISCOVERY_SKILL.name, HUMAN_WRITING_SKILL.name],
 };
 
 export type SeedResult = { created: number; updated: number; untouched: number; granted: number };

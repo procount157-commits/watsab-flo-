@@ -25,6 +25,7 @@ import { saveToNewGroup, validateInBackground } from "../lib/contact-save";
 import { folderForSector, listSector } from "../lib/folders";
 import { deleteContacts, deleteList } from "../lib/email/delete";
 import { diagnose } from "../lib/email/diagnose";
+import { campaignReadiness } from "../lib/email/readiness";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { createWithCreator, SERVICES as CREATOR_SERVICES } from "../lib/email/creator";
 import { getAutopilot, saveAutopilot, runAutopilot } from "../lib/email/autopilot";
@@ -52,6 +53,19 @@ router.use(requireAuth);
  * wrong password and a sleeping laptop fail identically from the outside.
  */
 router.get("/diagnose", async (req, res) => res.json(await diagnose(req.session.userId!)));
+
+/**
+ * Whether this campaign can be published, and what happens if it is.
+ *
+ * Read before the button rather than thrown after it. The old path refused
+ * with one sentence and never mentioned the commonest cause — a list that
+ * exists and holds nobody who can be written to.
+ */
+router.get("/campaigns/:id/readiness", async (req, res) => {
+  const r = await campaignReadiness(req.session.userId!, Number(req.params.id));
+  if (!r) return res.status(404).json({ error: "الحملة غير موجودة" });
+  res.json(r);
+});
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
 

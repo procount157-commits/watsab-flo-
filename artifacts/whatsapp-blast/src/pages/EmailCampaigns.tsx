@@ -215,6 +215,17 @@ function Builder({ form, setForm, onDone }: { form: Form; setForm: (f: Form | nu
         await api(`/api/email/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ scheduledAt: new Date(form.at).toISOString() }) });
         toast.success(`جُدولت — تبدأ ${new Date(form.at).toLocaleString("ar-AE", { dateStyle: "medium", timeStyle: "short" })}`);
       } else if (form.when === "now") {
+        // Checked before launching, not after. Starting used to throw one
+        // terse sentence and never named the commonest cause — a list that
+        // exists and holds nobody who can be written to. The campaign is
+        // saved either way, so a refusal costs the owner nothing but a click.
+        const r = await api(`/api/email/campaigns/${id}/readiness`);
+        if (!r.canPublish) {
+          setBlocked(r);
+          toast.error(r.verdict);
+          return;
+        }
+        setBlocked(null);
         const d = await api(`/api/email/campaigns/${id}/start`, { method: "POST" });
         toast.success(`انطلقت — ${n(d.queued)} رسالة في الطابور، تُرسل بحصة الساعة وساعات العمل`);
       } else toast.success("حُفظت كمسودة");
@@ -222,6 +233,9 @@ function Builder({ form, setForm, onDone }: { form: Form; setForm: (f: Form | nu
     } catch (e: any) { toast.error(e.message); }
     finally { setBusy(null); }
   };
+  // What stopped the last publish attempt, kept on screen until it is fixed.
+  const [blocked, setBlocked] = useState<any>(null);
+
   const sendTest = async () => {
     setBusy("test");
     try { const id = await save(); const d = await api(`/api/email/campaigns/${id}/test`, { method: "POST", body: JSON.stringify({}) }); toast.success(`أُرسلت نسخة تجربة إلى ${d.to} — الحملة محفوظة كمسودة`); }
@@ -319,6 +333,28 @@ function Builder({ form, setForm, onDone }: { form: Form; setForm: (f: Form | nu
         </div>
         <p className="text-[10px] text-muted-foreground">الإرسال يتوزع بحصة الساعة واليوم وساعات العمل من الإعدادات، ويتوقف تلقائياً إن ارتفع الارتداد.</p>
       </div>
+
+      {blocked && (
+        <div className="px-4 pb-2">
+          <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
+            <p className="text-sm font-semibold text-red-300">{blocked.verdict}</p>
+            <div className="mt-2.5 space-y-1.5">
+              {blocked.checks.filter((c: any) => c.state !== "ok").map((c: any) => (
+                <p key={c.id} className="text-[11px] leading-relaxed">
+                  <span className={c.state === "blocked" ? "text-red-300 font-medium" : "text-yellow-400 font-medium"}>
+                    {c.state === "blocked" ? "⛔" : "⚠️"} {c.title}:
+                  </span>{" "}
+                  <span className="text-muted-foreground">{c.detail}</span>
+                  {c.fix && <span className="text-primary"> ← {c.fix}</span>}
+                </p>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-3">
+              الحملة محفوظة كمسودة — أصلح ما سبق ثم اضغط «ابدأ الآن» مرة أخرى.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="p-4 flex gap-2 flex-wrap items-center">
         <button onClick={finish} disabled={!!busy} className={primary}>
