@@ -502,8 +502,18 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
     fileName = req.file.originalname;
     try { parsed = parseTables(readWorkbook(req.file.buffer), country); }
     catch { return res.status(400).json({ error: "تعذّر قراءة الملف — تأكد أنه Excel أو CSV" }); }
-    // The email half reads the same rows, already mapped.
-    rawRows = parsed.rows.map((r) => ({ email: r.email ?? "", name: r.person ?? "", company: r.company ?? "", phone: r.whatsapp?.e164 ?? "", industry: r.industry ?? "", city: r.city ?? "" }));
+    // One row per address, not per line of the file. A company with "Email"
+    // and "Email 2", or two addresses in one cell, used to contribute exactly
+    // one — the reader kept only the first match. Each address carries its own
+    // company, which is the pairing the owner actually wants; only the first
+    // keeps the person's name, since a second address on the same line belongs
+    // to the company rather than to that person.
+    rawRows = parsed.rows.flatMap((r) => {
+      const found = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+      const common = { name: "", company: r.company ?? "", phone: r.whatsapp?.e164 ?? "", industry: r.industry ?? "", city: r.city ?? "" };
+      if (!found.length) return [{ email: "", ...common, name: r.person ?? "" }];
+      return found.map((email, i) => ({ ...common, email, name: i === 0 ? (r.person ?? "") : "" }));
+    });
   } else if (Array.isArray(body.rows)) {
     rawRows = body.rows;
   } else if (typeof body.rows === "string") {
@@ -530,6 +540,11 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
     for (const r of report.rows) (r as any).mxOk = mx.get(r.email.split("@")[1]!) ?? null;
     mxBad = report.rows.filter((r) => (r as any).mxOk === false).length;
   }
+
+  // Rows with a phone and no address. They used to be counted invalid and
+  // dropped; a directory export is full of them and they are still companies
+  // this business can reach — just through the other door.
+  const phoneOnly = report.phoneOnly ?? [];
 
   const sectorOverride = typeof body.sector === "string" && body.sector.trim() ? body.sector.trim().slice(0, 60) : null;
   const listNameHint = String(body.listName ?? "");
@@ -625,6 +640,11 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
   res.json({
     file: fileName || null, columns, total: report.total, kept: report.kept, inserted, alreadyKnown: report.kept - inserted,
     invalid: report.invalid, duplicates: report.duplicates, roleAddresses: report.roleAddresses, mxBad,
+    // What the owner could not see before: addresses beyond the first on a
+    // line, and the companies that have a phone but no address at all.
+    extraAddresses: report.extraAddresses ?? 0,
+    phoneOnly: phoneOnly.length,
+    phoneOnlySample: phoneOnly.slice(0, 5),
     list: { id: listId, name: listName }, addedTo: reused, folder: folder?.name || null, subLists, enrolled, sample: report.sample,
     whatsapp, sheets: parsed?.sheets ?? null, byCountry: parsed?.byCountry ?? null,
   });

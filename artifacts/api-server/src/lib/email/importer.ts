@@ -26,9 +26,33 @@ export interface ImportReport {
   roleAddresses: number;       // info@, sales@ … kept, but counted
   columns: Record<string, string | null>;
   sample: ImportRow[];
+  /** Rows carrying a phone and no address at all. */
+  phoneOnly: PhoneOnlyRow[];
+  /** More than one address against one company. */
+  extraAddresses: number;
+}
+
+/**
+ * A row with a phone and no e-mail.
+ *
+ * These used to be counted as invalid and dropped on the floor. A directory
+ * export is full of them, and a company with a phone is worth something to the
+ * WhatsApp side of this system even when it is worth nothing to the e-mail
+ * side — losing it silently is the one outcome that helps nobody.
+ */
+export interface PhoneOnlyRow {
+  phone: string;
+  company?: string;
+  name?: string;
+  city?: string;
+  industry?: string;
 }
 
 const EMAIL_RE = /^[a-z0-9._%+\-']+@([a-z0-9-]+\.)+[a-z]{2,}$/i;
+// The same pattern unanchored, for pulling several addresses out of one cell.
+// Files arrive with "a@x.ae, b@x.ae" and with "Email / Email 2 / Email 3"
+// columns, and the single-address version threw away the whole cell.
+const EMAIL_SCAN = /[a-z0-9._%+\-']+@(?:[a-z0-9-]+\.)+[a-z]{2,}/gi;
 const ROLE_LOCAL = /^(info|sales|admin|contact|support|hello|office|accounts|hr|marketing|noreply|no-reply|enquiry|enquiries|inquiry|help|mail)$/i;
 
 // Header words, in the languages the files come in.
@@ -46,6 +70,25 @@ export function normalizeEmail(raw: unknown): string | null {
   if (!EMAIL_RE.test(s)) return null;
   if (s.length > 254) return null;
   return s;
+}
+
+/**
+ * Every address in one cell.
+ *
+ * A directory export puts two or three in a field separated by commas, slashes
+ * or newlines, and the row-level validator rejected the lot — so a company
+ * with two addresses contributed neither, and the company itself was lost with
+ * them.
+ */
+export function emailsIn(raw: unknown): string[] {
+  const s = String(raw ?? "").replace(/mailto:/gi, " ");
+  const found = s.match(EMAIL_SCAN) ?? [];
+  const out: string[] = [];
+  for (const m of found) {
+    const e = normalizeEmail(m);
+    if (e && !out.includes(e)) out.push(e);
+  }
+  return out;
 }
 
 export function isRoleAddress(email: string): boolean {
@@ -97,28 +140,75 @@ export function detectColumns(rows: Array<Record<string, unknown>>): Record<keyo
   return out;
 }
 
-/** Clean the rows: valid emails, one per address, with what else the file said about them. */
+/**
+ * Clean the rows: every address found, each against the company it belongs to.
+ *
+ * Three things this does that the first version did not, each of which was
+ * losing records on a real file. It reads *every* column for addresses rather
+ * than the one detected as "the email column", because files come with "Email"
+ * and "Email 2". It splits a cell holding several addresses instead of
+ * rejecting it whole — a cell reading "contact@x.ae, ceo@x.ae" used to fail
+ * the row-level pattern, so that company contributed nothing at all. And a row
+ * with a phone and no address is handed back rather than counted as invalid,
+ * since it is still a company this business can reach.
+ *
+ * Measured on a five-row file carrying eight addresses, the first version kept
+ * three.
+ */
 export function cleanRows(rows: Array<Record<string, unknown>>, columns = detectColumns(rows)): ImportReport {
   const seen = new Set<string>();
   const kept: ImportRow[] = [];
-  let invalid = 0, duplicates = 0, roles = 0;
+  const phoneOnly: PhoneOnlyRow[] = [];
+  let invalid = 0, duplicates = 0, roles = 0, extraAddresses = 0;
   const str = (r: Record<string, unknown>, k: string | null) => (k ? String(r[k] ?? "").trim().slice(0, 200) || undefined : undefined);
 
+  // Columns that are definitely something else; everything left may hold an
+  // address, whatever its header says.
+  const notEmail = new Set([columns.phone, columns.city, columns.industry].filter(Boolean) as string[]);
+
   for (const r of rows) {
-    const email = columns.email ? normalizeEmail(r[columns.email]) : null;
-    if (!email) { invalid++; continue; }
-    if (seen.has(email)) { duplicates++; continue; }
-    seen.add(email);
-    if (isRoleAddress(email)) roles++;
-    const phone = str(r, columns.phone)?.replace(/[\s\-\+\(\)\.]/g, "").replace(/^00/, "");
-    kept.push({
-      email,
-      name: str(r, columns.name), company: str(r, columns.company),
-      phone: phone && /^\d{7,15}$/.test(phone) ? phone : undefined,
-      industry: str(r, columns.industry), city: str(r, columns.city),
+    const phoneRaw = str(r, columns.phone)?.replace(/[\s\-\+\(\)\.]/g, "").replace(/^00/, "");
+    const phone = phoneRaw && /^\d{7,15}$/.test(phoneRaw) ? phoneRaw : undefined;
+    const company = str(r, columns.company);
+    const name = str(r, columns.name);
+    const city = str(r, columns.city);
+    const industry = str(r, columns.industry);
+
+    // The detected column first, so its address is the one that keeps the
+    // contact's name when a row has several.
+    const found: string[] = [];
+    for (const e of emailsIn(columns.email ? r[columns.email] : "")) if (!found.includes(e)) found.push(e);
+    for (const [h, v] of Object.entries(r)) {
+      if (h === columns.email || notEmail.has(h)) continue;
+      for (const e of emailsIn(v)) if (!found.includes(e)) found.push(e);
+    }
+
+    if (!found.length) {
+      // Not junk — just not an e-mail record. The phone still is one.
+      if (phone) phoneOnly.push({ phone, company, name, city, industry });
+      else invalid++;
+      continue;
+    }
+
+    found.forEach((email, i) => {
+      if (seen.has(email)) { duplicates++; return; }
+      seen.add(email);
+      if (isRoleAddress(email)) roles++;
+      if (i > 0) extraAddresses++;
+      kept.push({
+        email,
+        // Only the first address carries the person's name: a second address
+        // on the same row belongs to the company, not to that person.
+        name: i === 0 ? name : undefined,
+        company, phone, industry, city,
+      });
     });
   }
-  return { rows: kept, total: rows.length, kept: kept.length, invalid, duplicates, roleAddresses: roles, columns, sample: kept.slice(0, 5) };
+  return {
+    rows: kept, total: rows.length, kept: kept.length, invalid, duplicates,
+    roleAddresses: roles, columns, sample: kept.slice(0, 5),
+    phoneOnly, extraAddresses,
+  };
 }
 
 /** Group by a field for auto-splitting into lists. Unlabelled rows go under "غير محدد". */

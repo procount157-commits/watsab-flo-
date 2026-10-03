@@ -194,6 +194,8 @@ export function countryOf(...values: unknown[]): CountryIso | null {
 }
 
 const EMAIL_RE = /[a-z0-9._%+\-']+@(?:[a-z0-9-]+\.)+[a-z]{2,}/i;
+/** The same, global, for pulling every address out of a row. */
+const EMAIL_SCAN = /[a-z0-9._%+\-']+@(?:[a-z0-9-]+\.)+[a-z]{2,}/gi;
 
 // ── Sheets ────────────────────────────────────────────────────────
 
@@ -323,7 +325,17 @@ export function mapColumns(t: SheetTable): ColumnMap {
 export interface ParsedRow {
   company: string | null;
   person: string | null;
+  /** The first address, kept for every caller that wants just one. */
   email: string | null;
+  /**
+   * Every address on the row.
+   *
+   * One was not enough. Directory exports carry "Email" and "Email 2", and put
+   * two in one cell separated by a comma — and reading only the first meant a
+   * company with three addresses contributed one. On a five-row sample
+   * carrying eight addresses this reader produced three.
+   */
+  emails: string[];
   city: string | null;
   industry: string | null;
   country: CountryIso;
@@ -374,10 +386,25 @@ export function parseTables(tables: SheetTable[], defaultCountry: CountryIso = "
       else if (phones.length) landOnly++;
       else none++;
 
-      const emailCell = m.email !== null ? String(r[m.email] ?? "") : "";
-      const email = EMAIL_RE.exec(emailCell)?.[0]?.toLowerCase() ?? null;
+      // Scan the detected column first so its address stays first, then every
+      // other column that is not a phone — an address can be anywhere, and
+      // header names like "Email 2" are not worth enumerating.
+      const emails: string[] = [];
+      const scanCell = (v: unknown) => {
+        for (const hit of String(v ?? "").replace(/mailto:/gi, " ").match(EMAIL_SCAN) ?? []) {
+          const e = hit.toLowerCase();
+          if (!emails.includes(e)) emails.push(e);
+        }
+      };
+      if (m.email !== null) scanCell(r[m.email]);
+      for (let c = 0; c < r.length; c++) {
+        if (c === m.email || m.phones.includes(c)) continue;
+        scanCell(r[c]);
+      }
+      const email = emails[0] ?? null;
 
       rows.push({
+        emails,
         company: m.company !== null ? clean(r[m.company]) : null,
         person: m.person !== null && m.person !== m.company ? clean(r[m.person]) : null,
         email, city,
