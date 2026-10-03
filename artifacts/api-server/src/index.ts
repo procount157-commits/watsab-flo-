@@ -9,6 +9,7 @@ import { startOpsAgent } from "./lib/ops-agent";
 import { startCollector } from "./lib/collector-agent";
 import { startBrowserReaper } from "./lib/browser-agent";
 import { startMeetings } from "./lib/meeting";
+import { startOutboxWorker } from "./lib/telegram";
 import { seedSkillsForEveryone } from "./lib/skills";
 import { sweepQuietOutcomes } from "./lib/agent-memory";
 import { startEmailWorkers } from "./lib/email/service";
@@ -128,6 +129,7 @@ function startListening() {
     startCollector();
     startBrowserReaper();
     startMeetings();
+    startOutboxWorker();
     startEmailWorkers();
     startInboundPolling();
     startMissionWorker();

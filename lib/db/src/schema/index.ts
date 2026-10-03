@@ -23,3 +23,4 @@ export * from "./meetings";
 export * from "./lead_cards";
 export * from "./email";
 export * from "./audit";
+export * from "./outbox";

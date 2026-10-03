@@ -10,10 +10,11 @@ import { Link, useRoute, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Mail, Upload, Users, Megaphone, ListOrdered, FileText, Inbox, Settings2, Loader2, Play, Pause,
-  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard,
+  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, Stethoscope,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
+import { EmailDiagnose } from "@/components/EmailDiagnose";
 import { AudienceTab, AgentTab, MissionsTab, type Filter } from "./EmailAgent";
 import { ListsTab, ListDetail } from "./EmailLists";
 import { Campaigns } from "./EmailCampaigns";
@@ -35,6 +36,7 @@ const pct = (n?: number | null) => (n === null || n === undefined ? "—" : `${n
 
 const TABS = [
   { key: "dashboard", label: "لوحة المتابعة", icon: LayoutDashboard },
+  { key: "diagnose",  label: "التشخيص",       icon: Stethoscope },
   { key: "overview",  label: "ما يحدث الآن",  icon: Mail },
   { key: "lists",     label: "القوائم",        icon: FolderOpen },
   { key: "contacts",  label: "الجمهور",        icon: Users },
@@ -94,6 +96,7 @@ export default function EmailMarketing() {
       </div>
 
       {tab === "dashboard" && <DashboardTab goMissions={() => navigate("/email/missions")} />}
+      {tab === "diagnose"  && <EmailDiagnose />}
       {tab === "overview"  && <Overview ov={ov} />}
       {tab === "import"    && <Import />}
       {tab === "lists"     && (listId ? <ListDetail id={listId} onCampaign={toCampaign} onWrite={toWrite} /> : <ListsTab onCampaign={toCampaign} />)}

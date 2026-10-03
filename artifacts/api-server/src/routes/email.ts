@@ -24,6 +24,7 @@ import { readWorkbook, parseTables, whatsappEntries } from "../lib/phone-import"
 import { saveToNewGroup, validateInBackground } from "../lib/contact-save";
 import { folderForSector, listSector } from "../lib/folders";
 import { deleteContacts, deleteList } from "../lib/email/delete";
+import { diagnose } from "../lib/email/diagnose";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { createWithCreator, SERVICES as CREATOR_SERVICES } from "../lib/email/creator";
 import { getAutopilot, saveAutopilot, runAutopilot } from "../lib/email/autopilot";
@@ -40,6 +41,18 @@ import { logger } from "../lib/logger";
 
 const router = Router();
 router.use(requireAuth);
+
+/**
+ * Why the email is not going out.
+ *
+ * One call that asks every question the owner was asking by hand — is the mail
+ * server reachable, is there anyone to send to, is a mission stuck, did the
+ * reports reach Telegram — and answers each with what was actually found.
+ * It probes SMTP live rather than trusting the stored settings, because a
+ * wrong password and a sleeping laptop fail identically from the outside.
+ */
+router.get("/diagnose", async (req, res) => res.json(await diagnose(req.session.userId!)));
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
 
 // ── Overview ──────────────────────────────────────────────────────

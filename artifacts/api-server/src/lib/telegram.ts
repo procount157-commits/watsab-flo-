@@ -7,8 +7,8 @@
 // to message it first, and only then does its chat id exist. So `link` polls
 // getUpdates for a recent message and takes the chat from it.
 
-import { and, eq, isNotNull } from "drizzle-orm";
-import { db, telegramSettingsTable, type TelegramSettings } from "@workspace/db";
+import { and, asc, eq, isNotNull, lte, sql } from "drizzle-orm";
+import { db, telegramSettingsTable, notifyOutboxTable, type TelegramSettings } from "@workspace/db";
 import { logger } from "./logger";
 
 const API = (token: string, method: string) => `https://api.telegram.org/bot${token}/${method}`;
@@ -82,25 +82,129 @@ export async function link(userId: number): Promise<{ linked: boolean; chatTitle
  * the report that was being delivered, and a failure here is a delivery
  * problem, not a reason to discard the work.
  */
-export async function notify(userId: number, text: string): Promise<boolean> {
+/** One attempt. The queue decides what a failure means. */
+async function deliver(s: TelegramSettings, text: string): Promise<void> {
+  await call(s.botToken, "sendMessage", {
+    chat_id: s.chatId,
+    text: text.slice(0, 4_000),
+    parse_mode: "HTML",
+    // A report is for reading, not for chasing a link preview.
+    disable_web_page_preview: true,
+  });
+}
+
+/**
+ * Send, and keep the message if it cannot go now.
+ *
+ * This used to catch a failure, log it, return false, and that was the end of
+ * the report. The owner's complaint that nothing ever reached Telegram was
+ * exactly right, and the cause was not here: the laptop sleeps after a minute
+ * on battery and the log holds 1,734 network failures. Treating each as final
+ * meant every report sent while it slept was lost.
+ *
+ * Writing it down first turns a dropped report into a late one. The return
+ * value still says whether it went immediately, for callers that care.
+ */
+export async function notify(userId: number, text: string, kind = "general"): Promise<boolean> {
   const s = await getSettings(userId);
+  // Not configured is not a failure to retry — there is nowhere to send it.
   if (!s?.chatId || !s.enabled) return false;
+
   try {
-    await call(s.botToken, "sendMessage", {
-      chat_id: s.chatId,
-      text: text.slice(0, 4_000),
-      parse_mode: "HTML",
-      // A report is for reading, not for chasing a link preview.
-      disable_web_page_preview: true,
-    });
+    await deliver(s, text);
     return true;
   } catch (err: any) {
     const msg = String(err?.message ?? err).slice(0, 300);
+    await db.insert(notifyOutboxTable).values({
+      userId, body: text.slice(0, 4_000), kind,
+      attempts: 1, lastError: msg,
+      nextTryAt: new Date(Date.now() + 60_000),
+    }).catch(() => {});
     await db.update(telegramSettingsTable).set({ lastError: msg })
       .where(eq(telegramSettingsTable.userId, userId)).catch(() => {});
-    logger.warn({ userId, err: msg }, "تعذّر الإرسال إلى تليجرام");
+    logger.warn({ userId, err: msg }, "تعذّر الإرسال إلى تليجرام — حُفظت للإعادة");
     return false;
   }
+}
+
+/** Minutes before the next attempt. Long enough that a sleeping laptop is given time to wake. */
+const BACKOFF_MIN = [1, 3, 10, 30, 60, 180];
+const MAX_ATTEMPTS = BACKOFF_MIN.length + 1;
+
+/**
+ * Retry what is waiting.
+ *
+ * Oldest first, so a report arrives in the order it happened — a campaign's
+ * "finished" landing before its "started" would be worse than either being
+ * late.
+ */
+export async function flushOutbox(limit = 20): Promise<{ sent: number; failed: number; dead: number }> {
+  const due = await db.select().from(notifyOutboxTable)
+    .where(and(eq(notifyOutboxTable.status, "pending"), lte(notifyOutboxTable.nextTryAt, new Date())))
+    .orderBy(asc(notifyOutboxTable.createdAt))
+    .limit(limit);
+
+  let sent = 0, failed = 0, dead = 0;
+  const settings = new Map<number, TelegramSettings | null>();
+
+  for (const row of due) {
+    if (!settings.has(row.userId)) settings.set(row.userId, await getSettings(row.userId));
+    const s = settings.get(row.userId);
+    if (!s?.chatId || !s.enabled) {
+      await db.update(notifyOutboxTable).set({ status: "dead", lastError: "تليجرام غير مربوط" })
+        .where(eq(notifyOutboxTable.id, row.id));
+      dead++;
+      continue;
+    }
+    try {
+      await deliver(s, row.body);
+      await db.update(notifyOutboxTable).set({ status: "sent", sentAt: new Date() })
+        .where(eq(notifyOutboxTable.id, row.id));
+      sent++;
+    } catch (err: any) {
+      const attempts = row.attempts + 1;
+      const wait = BACKOFF_MIN[Math.min(attempts - 1, BACKOFF_MIN.length - 1)]!;
+      // Given up on after three hours of trying, rather than retried for ever
+      // — a report about this morning is not worth sending tomorrow.
+      const status = attempts >= MAX_ATTEMPTS ? "dead" : "pending";
+      await db.update(notifyOutboxTable).set({
+        attempts, status,
+        lastError: String(err?.message ?? err).slice(0, 300),
+        nextTryAt: new Date(Date.now() + wait * 60_000),
+      }).where(eq(notifyOutboxTable.id, row.id));
+      if (status === "dead") dead++; else failed++;
+    }
+  }
+  if (sent || dead) logger.info({ sent, failed, dead }, "صندوق التقارير المؤجلة");
+  return { sent, failed, dead };
+}
+
+/** How many reports are waiting, for the diagnostics page. */
+export async function outboxState(userId: number) {
+  const [row] = await db.select({
+    pending: sql<number>`count(*) filter (where ${notifyOutboxTable.status} = 'pending')`,
+    dead:    sql<number>`count(*) filter (where ${notifyOutboxTable.status} = 'dead')`,
+    sent:    sql<number>`count(*) filter (where ${notifyOutboxTable.status} = 'sent')`,
+    oldest:  sql<Date | null>`min(${notifyOutboxTable.createdAt}) filter (where ${notifyOutboxTable.status} = 'pending')`,
+  }).from(notifyOutboxTable).where(eq(notifyOutboxTable.userId, userId));
+  return {
+    pending: Number(row?.pending ?? 0),
+    dead: Number(row?.dead ?? 0),
+    sent: Number(row?.sent ?? 0),
+    oldest: row?.oldest ?? null,
+  };
+}
+
+/**
+ * Drain the queue every minute.
+ *
+ * A minute rather than ten: the window between this laptop waking and sleeping
+ * again is short, and a queue that checks rarely will keep missing it.
+ */
+export function startOutboxWorker(): void {
+  setInterval(() => void flushOutbox().catch((err) =>
+    logger.error({ err: String(err?.message ?? err) }, "فشل تفريغ صندوق التقارير")), 60_000);
+  logger.info("عامل صندوق التقارير بدأ");
 }
 
 /** Accounts that can actually receive something. */
