@@ -19,7 +19,8 @@ import {
   db, meetingsTable, meetingTurnsTable, botEmployeesTable,
   autoReplyLogTable, contactSegmentsTable, followupDeliberationsTable,
   opsAlertsTable, leadSourcesTable, followUpJobsTable, agentMemoryTable,
-  meetingProposalsTable,
+  meetingProposalsTable, instagramAccountsTable, instagramCommentsTable,
+  emailMessagesTable,
   type Meeting,
 } from "@workspace/db";
 import { complete } from "./llm";
@@ -56,13 +57,26 @@ export function classifyDecision(rule: string): "behaviour" | "operational" {
   return OPERATIONAL.test(rule) ? "operational" : "behaviour";
 }
 
-/** Who attends, in speaking order, and what each is there to account for. */
+/**
+ * Who attends, in speaking order, and what each is there to account for.
+ *
+ * One voice per channel rather than all twenty-four: the team grew to cover
+ * WhatsApp, email and Instagram, and a meeting where everyone speaks is a
+ * meeting nobody reads. The briefs ask for a cause rather than a figure —
+ * "where is the biggest drop between two steps" produces an argument, while
+ * "how many" produces a number already on the agenda in front of everyone.
+ *
+ * A role an account has not hired is skipped silently, so an owner who never
+ * set up Instagram still gets a meeting about what they do run.
+ */
 const AGENDA_ROLES: Array<{ role: string; brief: string }> = [
-  { role: "collector", brief: "أرقام الوصول والقراءة والتصنيف: ماذا تغيّر عن أمس، وأين أكبر هبوط." },
-  { role: "sales",     brief: "محادثاتك: ما الذي أدّى لاهتمام وما الذي صرف العميل، وبأي كلمات." },
-  { role: "followup",  brief: "قراراتك في المتابعة: ماذا أرسلت وماذا أوقفت ولماذا." },
-  { role: "ops",       brief: "حالة الرقم: أي خطر حظر، وما الذي قيّدته." },
-  { role: "support",   brief: "الشكاوى: ما الذي تكرّر منها، وهل سببه في البيع أم في الخدمة." },
+  { role: "collector",  brief: "أرقام الوصول والقراءة والتصنيف: ماذا تغيّر عن أمس، وأين أكبر هبوط بين خطوتين متتاليتين." },
+  { role: "sales",      brief: "محادثاتك: ما الذي أدّى لاهتمام وما الذي صرف العميل، وبأي كلمات بالضبط." },
+  { role: "email",      brief: "البريد: أي عنوان فُتح وأي قطاع ردّ، وما الذي تعلّمتِه من آخر موجة." },
+  { role: "ig_manager", brief: "إنستجرام: كم محادثة خاصة بدأت من التعليقات، وأي منشور جلب أسئلة حقيقية لا إعجابات." },
+  { role: "followup",   brief: "قراراتك في المتابعة: ماذا أرسلت وماذا أوقفت ولماذا." },
+  { role: "ops",        brief: "حالة الرقم: أي خطر حظر، وما الذي قيّدته وعلى أي أساس." },
+  { role: "support",    brief: "الشكاوى: ما الذي تكرّر منها، وهل سببه في البيع أم في الخدمة." },
 ];
 
 // ── The numbers the meeting is called on ─────────────────────────
@@ -128,6 +142,51 @@ async function buildAgenda(userId: number): Promise<Agenda> {
     "أسئلة صمت عنها": gaps.filter((g) => g.q).map((g) => `${g.n}× ${g.q}`),
     "ردود نجحت":    wins.map((w) => `«${(w.incoming ?? "").slice(0, 60)}» → «${(w.reply ?? "").slice(0, 120)}»`),
     "ردود فشلت":    losses.map((w) => `«${(w.incoming ?? "").slice(0, 60)}» → «${(w.reply ?? "").slice(0, 120)}»`),
+    // Each channel's own figures. Without them the Instagram manager invented
+    // a restriction that had never happened and the room built a plan on it:
+    // a speaker given nothing about its own channel will fill the gap rather
+    // than say it has nothing.
+    ...(await channelFacts(userId)),
+  };
+}
+
+/**
+ * What each channel can actually say about itself today.
+ *
+ * Absent data is reported as absent rather than omitted — "Instagram: never
+ * signed in" stops a fabrication that an empty section invites.
+ */
+async function channelFacts(userId: number): Promise<Record<string, unknown>> {
+  const day = new Date(Date.now() - 24 * 60 * 60_000);
+  const [[ig], [igc], [mail]] = await Promise.all([
+    db.select().from(instagramAccountsTable).where(eq(instagramAccountsTable.userId, userId)).limit(1).catch(() => []),
+    db.select({
+      total:   sql<number>`count(*)`,
+      drafted: sql<number>`count(*) filter (where ${instagramCommentsTable.status} = 'drafted')`,
+      replied: sql<number>`count(*) filter (where ${instagramCommentsTable.status} = 'replied')`,
+      leads:   sql<number>`count(*) filter (where ${instagramCommentsTable.isLead})`,
+    }).from(instagramCommentsTable).where(eq(instagramCommentsTable.userId, userId)).catch(() => []),
+    db.select({
+      sent:   sql<number>`count(*) filter (where ${emailMessagesTable.sentAt} >= ${day})`,
+      opened: sql<number>`count(*) filter (where ${emailMessagesTable.openedAt} >= ${day})`,
+      failed: sql<number>`count(*) filter (where ${emailMessagesTable.status} = 'failed' and ${emailMessagesTable.createdAt} >= ${day})`,
+      queued: sql<number>`count(*) filter (where ${emailMessagesTable.status} = 'queued')`,
+    }).from(emailMessagesTable).where(eq(emailMessagesTable.userId, userId)).catch(() => []),
+  ]);
+
+  const IG_STATE: Record<string, string> = {
+    logged_in: "مسجّل دخول", logged_out: "خارج الجلسة",
+    checkpoint: "يطلب تأكيد الهوية", restricted: "مقيَّد", unknown: "لم يُسجَّل دخوله بعد",
+  };
+
+  return {
+    "إنستجرام": !ig
+      ? "لم يُضبط بعد — لا بيانات"
+      : `${IG_STATE[ig.state] ?? ig.state}${ig.dryRun ? " · وضع التجربة" : ""} · ` +
+        `${Number(igc?.total ?? 0)} تعليق، ${Number(igc?.drafted ?? 0)} رد ينتظر الاعتماد، ` +
+        `${Number(igc?.replied ?? 0)} أُرسل، ${Number(igc?.leads ?? 0)} فرصة`,
+    "البريد": `${Number(mail?.sent ?? 0)} أُرسلت اليوم، ${Number(mail?.opened ?? 0)} فُتحت، ` +
+      `${Number(mail?.failed ?? 0)} فشلت، ${Number(mail?.queued ?? 0)} في الطابور`,
   };
 }
 
@@ -202,6 +261,15 @@ async function speak(opts: {
       "إن اختلفت مع أحدهم فقل ذلك باسمه وبسبب. إن سبّب لك أحدهم مشكلة فقلها.",
       `${opts.maxLines} أسطر كحد أقصى. بلا ترقيم وبلا عناوين. تكلّم كما يتكلّم موظف في اجتماع.`,
       "لا تجامل ولا تختم بعبارات مثل «شكراً» أو «في الختام».",
+      "",
+      // In the first meeting with all three channels present, the Instagram
+      // manager announced that the account had been restricted after five
+      // warnings. None of it had happened — the account has never been signed
+      // in — and three colleagues then built a plan around it. A fabricated
+      // number is worse here than in a reply, because the room repeats it.
+      "لا تذكر رقماً ولا حالةً ولا حدثاً ليس في الأرقام المعطاة لك أعلاه.",
+      "إن لم تكن قناتك مذكورة في الأرقام فقل «لا بيانات عن قناتي اليوم» — ولا تفترض ما حدث فيها.",
+      "وإن ذكر زميلك رقماً لا تراه في الأرقام، فاسأله من أين جاء بدل أن تبني عليه.",
       "",
       opts.instruction,
     ].filter(Boolean).join("\n") },

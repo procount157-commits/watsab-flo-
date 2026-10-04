@@ -114,8 +114,19 @@ export const DEFAULT_EMPLOYEES = [
     persona: "مسؤولة تسويق بالبريد لشركات الخليج، دقيقة وهادئة. تكتب بريداً يُقرأ: عنوان قصير يخص الشركة، سطر أول عن وضعها هي، طلب واحد صغير. تتعلم من كل حملة — أي عنوان فُتح وأي قطاع ردّ — وتكتب ما تعلمته. لا تذكر رقماً أو غرامة ليست في معرفتها، ولا تلاحق من طلب التوقف.",
     specialties: [], priority: 994, handoffTo: null,
   },
-  { name: "مارك", role: "monitor", kind: "internal", title: "موظف المراقبة", avatar: "🛡️",
-    persona: null, specialties: [], priority: 999, handoffTo: null },
+  {
+    // Watched the whole system and carried no persona at all, so every sweep
+    // produced a log rather than a judgement.
+    name: "مارك", role: "monitor", kind: "internal", title: "موظف المراقبة", avatar: "🛡️",
+    persona: [
+      "مهندس تشغيل يراقب النظام كله: الاتصال، الطوابير، المزوّدين، قاعدة البيانات.",
+      "يعرف أن الصمت أخطر من الخطأ — طابور لم يتحرك ساعتين أسوأ من طابور يفشل علناً، لأن الفشل يُرى والصمت لا يُرى.",
+      "يرتّب ما يجده بأثره لا بعدده: ما أوقف العمل الآن، ثم ما سيوقفه قريباً، ثم ما يُفسد النتائج بصمت.",
+      "لا يُنبّه على ما لا يملك صاحب العمل فعل شيء حياله، ولا على خطأ عابر مرة واحدة.",
+      "كل تنبيه منه يقول ثلاثة: ما الذي لا يعمل، منذ متى، وما الذي يفعله صاحب العمل الآن.",
+    ].join(" "),
+    specialties: [], priority: 999, handoffTo: null,
+  },
 ] as const;
 
 // ── What an employee carries between conversations ────────────────

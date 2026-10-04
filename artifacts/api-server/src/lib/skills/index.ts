@@ -24,6 +24,10 @@ import {
   DELIVERABILITY_SKILL, EMAIL_FUNNEL_SKILL, SUBJECT_SKILL,
   REPLY_TRIAGE_SKILL, EMAIL_FOLLOWUP_SKILL, EMAIL_GUARD_SKILL,
 } from "./email";
+import {
+  SOCIAL_REPLY_SKILL, SOCIAL_TRIAGE_SKILL, SOCIAL_DM_SKILL,
+  SOCIAL_SAFETY_SKILL, SYSTEM_HEALTH_SKILL, LIST_HYGIENE_SKILL,
+} from "./social";
 import { logger } from "../logger";
 
 export type SkillDef = { name: string; intents: string[]; instruction: string };
@@ -38,6 +42,11 @@ export const LIBRARY: SkillDef[] = [
   // all before this — a persona and two tasks, and nothing about the job.
   DELIVERABILITY_SKILL, EMAIL_FUNNEL_SKILL, SUBJECT_SKILL,
   REPLY_TRIAGE_SKILL, EMAIL_FOLLOWUP_SKILL, EMAIL_GUARD_SKILL,
+  // The Instagram ten were hired with a persona each and no skills at all,
+  // which made them ten descriptions of people rather than ten people who know
+  // something. مارك had neither.
+  SOCIAL_REPLY_SKILL, SOCIAL_TRIAGE_SKILL, SOCIAL_DM_SKILL,
+  SOCIAL_SAFETY_SKILL, SYSTEM_HEALTH_SKILL, LIST_HYGIENE_SKILL,
 ];
 
 // Skills a library version used to install under another name. Seeding
@@ -72,9 +81,30 @@ export const GRANTS: Record<string, string[]> = {
   chief:     [...WRITES_TO_CUSTOMERS, STAGE_SKILL.name, NEGOTIATION_SKILL.name, DISCOVERY_SKILL.name,
               COACHING_SKILL.name, ANALYSIS_SKILL.name, SALES_MANAGEMENT_SKILL.name],
   followup:  [...WRITES_TO_CUSTOMERS, FOLLOWUP_WRITING_SKILL.name],
-  collector: [ANALYSIS_SKILL.name],
-  intake:    [ANALYSIS_SKILL.name],
-  ops:       [NUMBER_PROTECTION_SKILL.name],
+  collector: [ANALYSIS_SKILL.name, EMAIL_FUNNEL_SKILL.name, LIST_HYGIENE_SKILL.name],
+  intake:    [ANALYSIS_SKILL.name, LIST_HYGIENE_SKILL.name],
+  ops:       [NUMBER_PROTECTION_SKILL.name, SYSTEM_HEALTH_SKILL.name, ANALYSIS_SKILL.name],
+  // مارك watched the whole system and carried nothing at all — no persona, no
+  // skill, no task. A watcher with no procedure reports what happened rather
+  // than what is about to break.
+  monitor:   [SYSTEM_HEALTH_SKILL.name, ANALYSIS_SKILL.name],
+
+  // ── Instagram ──
+  // The safety skill goes to all ten for the same reason deliverability goes
+  // to all six on email: one restricted account ends the channel for everyone,
+  // so it is nobody's job alone.
+  ig_manager:  [SOCIAL_SAFETY_SKILL.name, ANALYSIS_SKILL.name, SALES_MANAGEMENT_SKILL.name, SOCIAL_TRIAGE_SKILL.name],
+  ig_watcher:  [SOCIAL_SAFETY_SKILL.name, SOCIAL_TRIAGE_SKILL.name],
+  ig_triage:   [SOCIAL_SAFETY_SKILL.name, SOCIAL_TRIAGE_SKILL.name, INTENT_READING_SKILL.name],
+  ig_writer:   [SOCIAL_SAFETY_SKILL.name, SOCIAL_REPLY_SKILL.name, DIALECT_MATCH_SKILL.name,
+                DIALECT_SKILL.name, HUMAN_WRITING_SKILL.name],
+  ig_inviter:  [SOCIAL_SAFETY_SKILL.name, SOCIAL_TRIAGE_SKILL.name, SOCIAL_DM_SKILL.name, INTENT_READING_SKILL.name],
+  ig_dm:       [SOCIAL_SAFETY_SKILL.name, SOCIAL_DM_SKILL.name, DIALECT_MATCH_SKILL.name,
+                INTENT_READING_SKILL.name, DISCOVERY_SKILL.name, HUMAN_WRITING_SKILL.name],
+  ig_qualify:  [SOCIAL_SAFETY_SKILL.name, DISCOVERY_SKILL.name, STAGE_SKILL.name, ANALYSIS_SKILL.name],
+  ig_followup: [SOCIAL_SAFETY_SKILL.name, SOCIAL_DM_SKILL.name, FOLLOWUP_WRITING_SKILL.name, DIALECT_MATCH_SKILL.name],
+  ig_guard:    [SOCIAL_SAFETY_SKILL.name, SYSTEM_HEALTH_SKILL.name],
+  ig_analyst:  [SOCIAL_SAFETY_SKILL.name, ANALYSIS_SKILL.name, EMAIL_FUNNEL_SKILL.name],
 
   // ── The email team ──
   // Every one of them carries the deliverability skill: a burnt domain ends
