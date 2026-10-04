@@ -10,6 +10,7 @@ import { startCollector } from "./lib/collector-agent";
 import { startBrowserReaper } from "./lib/browser-agent";
 import { startMeetings } from "./lib/meeting";
 import { startOutboxWorker } from "./lib/telegram";
+import { startInstagram } from "./lib/instagram/engine";
 import { seedSkillsForEveryone } from "./lib/skills";
 import { sweepQuietOutcomes } from "./lib/agent-memory";
 import { startEmailWorkers } from "./lib/email/service";
@@ -130,6 +131,7 @@ function startListening() {
     startBrowserReaper();
     startMeetings();
     startOutboxWorker();
+    startInstagram();
     startEmailWorkers();
     startInboundPolling();
     startMissionWorker();
