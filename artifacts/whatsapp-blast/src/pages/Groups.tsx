@@ -10,11 +10,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Brain, Check, CheckCircle2, Copy, Eye, EyeOff, FileText, FolderOpen, History, Image as ImageIcon, Loader2, MessageSquareText,
-  Mic, Pencil, RefreshCw, Search, Sparkles, Users, X, Paperclip, Gauge, GraduationCap,
+  Mic, Pencil, RefreshCw, Search, Sparkles, Users, X, Paperclip, Gauge, GraduationCap, ListTodo, CalendarClock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
 import { TrainingCenter } from "./GroupsTraining";
+import { TasksBoard, ObligationsCalendar } from "./GroupsTasks";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const card = "bg-card border border-card-border rounded-xl";
@@ -36,7 +37,7 @@ export default function Groups() {
   const [sel, setSel] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [only, setOnly] = useState<"all" | "watched" | "pending">("all");
-  const [page, setPage] = useState<"groups" | "training">("groups");
+  const [page, setPage] = useState<"groups" | "tasks" | "obligations" | "training">("groups");
   const inv = () => { for (const k of ["groups", "groups-stats", "group"]) qc.invalidateQueries({ queryKey: [k] }); };
   const sync = useMutation({ mutationFn: () => api("/api/groups/sync", { method: "POST" }), onSuccess: (d: any) => { inv(); toast.success(`تزامن ${n(d.groups)} قروب من واتساب`); }, onError: (e: Error) => toast.error(e.message) });
   const watchAll = useMutation({ mutationFn: (watch: boolean) => api("/api/groups/watch-all", { method: "POST", body: JSON.stringify({ watch }) }), onSuccess: (d: any) => { inv(); toast.success(`${n(d.updated)} قروب`); } });
@@ -70,12 +71,12 @@ export default function Groups() {
       </div>
 
       <div className="flex gap-1 border-b border-card-border">
-        {([["groups", "القروبات", Users], ["training", "تدريب سارة", GraduationCap]] as const).map(([k, l, Icon]) => (
+        {([["groups", "القروبات", Users], ["tasks", "الطلبات", ListTodo], ["obligations", "مواعيد العملاء", CalendarClock], ["training", "تدريب سارة", GraduationCap]] as const).map(([k, l, Icon]) => (
           <button key={k} onClick={() => setPage(k)} className={cn("flex items-center gap-1.5 px-4 py-2 text-sm border-b-2 -mb-px", page === k ? "border-primary text-foreground" : "border-transparent text-muted-foreground")}><Icon className="w-4 h-4" /> {l}</button>
         ))}
       </div>
 
-      {page === "training" ? <TrainingCenter groups={groups} /> : <>
+      {page === "training" ? <TrainingCenter groups={groups} /> : page === "tasks" ? <TasksBoard groups={groups} /> : page === "obligations" ? <ObligationsCalendar groups={groups} /> : <>
       {stats?.folder && <p className="text-[11px] text-muted-foreground flex items-center gap-1.5"><FolderOpen className="w-3.5 h-3.5" /> الملفات والأرشيف على هذا الجهاز في: <code dir="ltr" className="text-foreground/80">{stats.folder}</code></p>}
       {stats && !stats.connected && <div className={cn(card, "p-3 text-xs border-yellow-500/40 text-yellow-400")}>واتساب غير متصل — القروبات تُحفظ حين يكون الرقم متصلاً.</div>}
 

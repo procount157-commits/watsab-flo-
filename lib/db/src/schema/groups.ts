@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, integer, varchar, text, boolean, timestamp, real, index, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, varchar, text, boolean, timestamp, real, date, index, unique } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
 
 // ── WhatsApp customer groups ──────────────────────────────────────
@@ -84,3 +84,44 @@ export const waGroupKnowledgeTable = pgTable("wa_group_knowledge", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_wa_group_knowledge").on(t.userId, t.active, t.kind)]);
 export type WaGroupKnowledge = typeof waGroupKnowledgeTable.$inferSelect;
+
+// See migration 039: requests read from the groups, as tasks with a due time.
+export const waGroupTasksTable = pgTable("wa_group_tasks", {
+  id:          serial("id").primaryKey(),
+  userId:      integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  groupJid:    varchar("group_jid", { length: 80 }).notNull(),
+  text:        text("text").notNull(),
+  requestedBy: varchar("requested_by", { length: 120 }),
+  requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+  dueAt:       timestamp("due_at", { withTimezone: true }),
+  /** open | done | cancelled */
+  status:      varchar("status", { length: 12 }).notNull().default("open"),
+  doneAt:      timestamp("done_at", { withTimezone: true }),
+  doneNote:    text("done_note"),
+  /** learned | owner */
+  origin:      varchar("origin", { length: 10 }).notNull().default("learned"),
+  remindedAt:  timestamp("reminded_at", { withTimezone: true }),
+  createdAt:   timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("idx_wa_group_tasks").on(t.userId, t.status, t.dueAt)]);
+export type WaGroupTask = typeof waGroupTasksTable.$inferSelect;
+
+// And each client's deadlines, entered by the owner.
+export const clientObligationsTable = pgTable("client_obligations", {
+  id:              serial("id").primaryKey(),
+  userId:          integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  groupJid:        varchar("group_jid", { length: 80 }),
+  clientName:      varchar("client_name", { length: 200 }).notNull(),
+  /** vat | ct | license | aml | payroll | audit | other */
+  kind:            varchar("kind", { length: 12 }).notNull().default("other"),
+  title:           varchar("title", { length: 200 }).notNull(),
+  dueDate:         date("due_date").notNull(),
+  /** none | monthly | quarterly | yearly */
+  recurrence:      varchar("recurrence", { length: 10 }).notNull().default("none"),
+  remindDays:      integer("remind_days").notNull().default(7),
+  documents:       text("documents"),
+  notes:           text("notes"),
+  active:          boolean("active").notNull().default(true),
+  lastRemindedDue: date("last_reminded_due"),
+  createdAt:       timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("idx_client_obligations").on(t.userId, t.active, t.dueDate)]);
+export type ClientObligation = typeof clientObligationsTable.$inferSelect;

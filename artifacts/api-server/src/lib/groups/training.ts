@@ -19,6 +19,7 @@ import { db, waGroupsTable, waGroupMessagesTable, waGroupKnowledgeTable, type Wa
 import { complete } from "../llm";
 import { terms } from "../knowledge";
 import { extractText } from "../email/knowledge-docs";
+import { applyTasks, openTaskLines, openTasks, parseTasks } from "./tasks";
 import { logger } from "../logger";
 
 export const TAUGHT_KINDS = ["instruction", "qa", "text", "document"] as const;
@@ -170,7 +171,7 @@ export function noteMessage(userId: number, group: { jid: string; watch: boolean
   }, LEARN_QUIET_MS));
 }
 
-export type LearnResult = { read: number; lessons: string[]; profile: boolean } | null;
+export type LearnResult = { read: number; lessons: string[]; profile: boolean; tasks?: { added: number; closed: number } } | null;
 
 /**
  * Read what is new in a group since her last reading: update her file on it,
@@ -195,6 +196,7 @@ async function learnInner(userId: number, jid: string, opts: { force?: boolean }
   const [{ n }] = (await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM wa_groups WHERE user_id = ${userId} AND learned_at > now() - interval '1 day'`)).rows as any;
   if (!opts.force && Number(n) >= LEARN_DAILY_CAP) return null;
 
+  const open = await openTasks(userId, jid);
   const known = await db.select({ content: waGroupKnowledgeTable.content }).from(waGroupKnowledgeTable)
     .where(and(eq(waGroupKnowledgeTable.userId, userId), eq(waGroupKnowledgeTable.kind, "lesson"), eq(waGroupKnowledgeTable.active, true)))
     .orderBy(desc(waGroupKnowledgeTable.createdAt)).limit(40);
@@ -207,15 +209,20 @@ async function learnInner(userId: number, jid: string, opts: { force?: boolean }
       "أمامك ملفك الحالي عن هذا القروب، وما قيل فيه بعد آخر قراءة لك. «نحن» هو صاحب العمل وفريقه.",
       "١. حدّثي الملف: أضيفي الجديد، صحّحي ما تغيّر، احذفي الطلبات التي أُغلقت. نفس العناوين: العميل، الأشخاص، الخدمات، المواضيع المتكررة، طلبات مفتوحة (بالتاريخ)، أسلوب التواصل.",
       "٢. استخرجي دروساً عامة تنفع في كل القروبات — كيف يرد صاحب العمل على نوع من الطلبات، ما الذي يطلبه من العملاء عادة، كيف يعمل المكتب، كلمات يستخدمها أو يتجنبها. درس = جملة واحدة محددة قابلة للتطبيق. لا دروس عن هذا العميل بالذات (هذه مكانها الملف)، ولا تكرار لما هو معروف، ولا شيء لم يحدث فعلاً في المحادثة. إن لم يوجد درس جديد فاتركي القسم فارغاً.",
+      "٣. استخرجي كل طلب جديد طلبه العميل منا في الجديد — مستند، تقرير، إقرار، رد على سؤال، موعد — سطراً لكل طلب: «- <ما طلبه> | <التاريخ YYYY-MM-DD فقط إن ذكره العميل صراحة، وإلا بلا> | <من طلبه>». لا تكرري طلباً موجوداً في قائمة الطلبات المفتوحة.",
+      "٤. إن ظهر في الجديد أننا أنجزنا طلباً من الطلبات المفتوحة (أرسلنا الملف، أجبنا، أكّدنا) فاكتبي رقمه في قسم «أُنجز».",
       "لا تخترعي شيئاً ليس في المحادثة.",
       "",
       "اكتبي بهذا الشكل بالضبط:",
       "[الملف]", "<الملف المحدّث>", "[/الملف]",
       "[دروس]", "- <درس>", "[/دروس]",
+      "[طلبات]", "- <ما طلبه> | <YYYY-MM-DD أو بلا> | <من طلبه>", "[/طلبات]",
+      "[أُنجز]", "<أرقام الطلبات المفتوحة التي أُنجزت، أو فارغ>", "[/أُنجز]",
     ].join("\n") },
     { role: "user", content: [
       `القروب: «${group.subject ?? "قروب"}»${group.customerName ? ` — العميل: ${group.customerName}` : ""}`,
       `ملفك الحالي:\n${group.profile ?? "(لا ملف بعد)"}`,
+      open.length ? `الطلبات المفتوحة لهذا العميل:\n${openTaskLines(open)}` : "لا طلبات مفتوحة لهذا العميل.",
       known.length ? `دروس تعرفينها من قبل (لا تكرريها):\n${known.map((k) => `- ${k.content}`).join("\n")}` : "",
       `الجديد في القروب:\n${transcript}`,
     ].filter(Boolean).join("\n\n") },
@@ -231,7 +238,11 @@ async function learnInner(userId: number, jid: string, opts: { force?: boolean }
 
   const lessons = out?.text ? parseLessons(out.text) : [];
   const kept = await keepLessons(userId, lessons, known.map((k) => k.content ?? ""));
-  return { read: fresh.length, lessons: kept, profile: !!set["profile"] };
+  // Only requests from a live conversation become tasks: a backfill of last
+  // year's history would bury the board in requests long since answered.
+  const recent = Date.now() - upto.getTime() < 7 * 86_400_000;
+  const tasks = out?.text && recent ? await applyTasks(userId, jid, open, parseTasks(out.text), upto) : { added: 0, closed: 0 };
+  return { read: fresh.length, lessons: kept, profile: !!set["profile"], tasks };
 }
 
 export function parseLessons(text: string): string[] {

@@ -7,12 +7,14 @@ import path from "node:path";
 import { Router } from "express";
 import multer from "multer";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
-import { db, waGroupsTable, waGroupMessagesTable, waGroupSuggestionsTable, waGroupKnowledgeTable } from "@workspace/db";
+import { db, waGroupsTable, waGroupMessagesTable, waGroupSuggestionsTable, waGroupKnowledgeTable, waGroupTasksTable, clientObligationsTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getSocket, registerOnConnectHook } from "../lib/whatsapp";
 import { FILES_ROOT, backfill, folderFor, oldestMessage, syncGroups } from "../lib/groups/store";
 import { accuracy, buildProfile, ensureGroupsAgent, feedback, suggestFor } from "../lib/groups/assistant";
 import { TAUGHT_KINDS, knowledgeCounts, learnFromGroup, listKnowledge, teach, teachFile } from "../lib/groups/training";
+import { TASK_SLA_HOURS } from "../lib/groups/tasks";
+import { KIND_AR, listObligations, sweepObligations } from "../lib/groups/obligations";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -210,6 +212,72 @@ router.post("/:id/learn", async (req, res) => {
     const r = await learnFromGroup(userId, g.jid, { force: true });
     res.json(r ?? { read: 0, lessons: [], profile: false, none: true });
   } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+
+// ── Requests as tasks ────────────────────────────────────────────
+router.get("/tasks", async (req, res) => {
+  const userId = req.session.userId!, status = String(req.query["status"] ?? "open"), jid = req.query["group"] ? String(req.query["group"]) : null;
+  const rows = await db.execute<any>(sql`
+    SELECT t.*, g.id AS group_id, g.subject FROM wa_group_tasks t LEFT JOIN wa_groups g ON g.user_id = t.user_id AND g.jid = t.group_jid
+    WHERE t.user_id = ${userId} ${status === "all" ? sql`` : sql`AND t.status = ${status}`} ${jid ? sql`AND t.group_jid = ${jid}` : sql``}
+    ORDER BY (t.status = 'open') DESC, t.due_at ASC NULLS LAST, t.requested_at DESC LIMIT 300`);
+  const [c] = (await db.execute<any>(sql`SELECT
+    count(*) FILTER (WHERE status = 'open')::int AS open,
+    count(*) FILTER (WHERE status = 'open' AND due_at < now())::int AS overdue,
+    count(*) FILTER (WHERE status = 'open' AND due_at >= now() AND due_at < now() + interval '1 day')::int AS today,
+    count(*) FILTER (WHERE status = 'done' AND done_at > now() - interval '7 days')::int AS done7
+    FROM wa_group_tasks WHERE user_id = ${userId}`)).rows;
+  res.json({ rows: rows.rows, counts: c });
+});
+router.post("/tasks", async (req, res) => {
+  const b = req.body ?? {}, text = String(b.text ?? "").trim();
+  if (!b.groupJid || !text) return res.status(400).json({ error: "اختر القروب واكتب الطلب" });
+  const [row] = await db.insert(waGroupTasksTable).values({ userId: req.session.userId!, groupJid: String(b.groupJid), text: text.slice(0, 400), origin: "owner",
+    dueAt: b.dueAt ? new Date(b.dueAt) : new Date(Date.now() + TASK_SLA_HOURS * 3_600_000) }).returning();
+  res.json(row);
+});
+router.patch("/tasks/:id", async (req, res) => {
+  const b = req.body ?? {}, set: Record<string, unknown> = {};
+  if (["open", "done", "cancelled"].includes(b.status)) { set["status"] = b.status; set["doneAt"] = b.status === "open" ? null : new Date(); if (b.status === "open") set["remindedAt"] = null; }
+  if (b.dueAt !== undefined) { set["dueAt"] = b.dueAt ? new Date(b.dueAt) : null; set["remindedAt"] = null; }
+  if (typeof b.text === "string" && b.text.trim()) set["text"] = b.text.trim().slice(0, 400);
+  if (typeof b.note === "string") set["doneNote"] = b.note.slice(0, 500);
+  const [row] = await db.update(waGroupTasksTable).set(set).where(and(eq(waGroupTasksTable.id, Number(req.params["id"])), eq(waGroupTasksTable.userId, req.session.userId!))).returning();
+  res.json(row ?? null);
+});
+
+// ── Client deadlines ─────────────────────────────────────────────
+router.get("/obligations", async (req, res) => res.json({ rows: await listObligations(req.session.userId!), kinds: KIND_AR }));
+const obligationFrom = (b: any) => {
+  const out: Record<string, unknown> = {};
+  if (typeof b.clientName === "string") out["clientName"] = b.clientName.trim().slice(0, 200);
+  if (b.groupJid !== undefined) out["groupJid"] = b.groupJid || null;
+  if (b.kind && Object.keys(KIND_AR).includes(b.kind)) out["kind"] = b.kind;
+  if (typeof b.title === "string") out["title"] = b.title.trim().slice(0, 200);
+  if (typeof b.dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.dueDate)) out["dueDate"] = b.dueDate;
+  if (["none", "monthly", "quarterly", "yearly"].includes(b.recurrence)) out["recurrence"] = b.recurrence;
+  if (b.remindDays !== undefined) out["remindDays"] = Math.max(0, Math.min(60, Number(b.remindDays) || 0));
+  if (b.documents !== undefined) out["documents"] = b.documents ? String(b.documents).slice(0, 500) : null;
+  if (b.notes !== undefined) out["notes"] = b.notes ? String(b.notes).slice(0, 1000) : null;
+  if (typeof b.active === "boolean") out["active"] = b.active;
+  return out;
+};
+router.post("/obligations", async (req, res) => {
+  const v = obligationFrom(req.body ?? {});
+  if (!v["clientName"] || !v["title"] || !v["dueDate"]) return res.status(400).json({ error: "اكتب العميل والالتزام وتاريخه" });
+  const [row] = await db.insert(clientObligationsTable).values({ userId: req.session.userId!, ...(v as any) }).returning();
+  await sweepObligations(new Date(), req.session.userId!).catch(() => {});
+  res.json(row);
+});
+router.patch("/obligations/:id", async (req, res) => {
+  const v = obligationFrom(req.body ?? {});
+  if (v["dueDate"]) v["lastRemindedDue"] = null;
+  const [row] = await db.update(clientObligationsTable).set(v).where(and(eq(clientObligationsTable.id, Number(req.params["id"])), eq(clientObligationsTable.userId, req.session.userId!))).returning();
+  res.json(row ?? null);
+});
+router.delete("/obligations/:id", async (req, res) => {
+  await db.delete(clientObligationsTable).where(and(eq(clientObligationsTable.id, Number(req.params["id"])), eq(clientObligationsTable.userId, req.session.userId!)));
+  res.json({ ok: true });
 });
 
 /** A filed file, from inside the groups folder only. */

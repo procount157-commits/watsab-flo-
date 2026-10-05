@@ -11,6 +11,8 @@ import { startBrowserReaper } from "./lib/browser-agent";
 import { startMeetings } from "./lib/meeting";
 import { startOutboxWorker } from "./lib/telegram";
 import { startSocial } from "./lib/social/engine";
+import { startTaskReminders } from "./lib/groups/tasks";
+import { startObligationReminders } from "./lib/groups/obligations";
 import { seedSkillsForEveryone } from "./lib/skills";
 import { sweepQuietOutcomes } from "./lib/agent-memory";
 import { startEmailWorkers } from "./lib/email/service";
@@ -132,6 +134,8 @@ function startListening() {
     startMeetings();
     startOutboxWorker();
     startSocial();
+    startTaskReminders();
+    startObligationReminders();
     startEmailWorkers();
     startInboundPolling();
     startMissionWorker();
