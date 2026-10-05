@@ -21,6 +21,7 @@ import { newToken, renderEmail, firstName, companyName, personalize, unsubscribe
 import { brandOf } from "./layout";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
+import { byRisk, domainSignals, verifyDomains } from "./hygiene";
 
 const SITE_URL = () => (process.env["SITE_URL"] ?? "").replace(/\/+$/, "");
 const SECRET   = () => process.env["SESSION_SECRET"] ?? "wam";
@@ -112,20 +113,33 @@ export async function startCampaign(userId: number, campaignId: number): Promise
   const already = new Set((await db.select({ contactId: emailMessagesTable.contactId }).from(emailMessagesTable)
     .where(eq(emailMessagesTable.campaignId, c.id))).map((r) => r.contactId));
 
+  // Every domain is looked up before its first send, not only those imported
+  // after the check existed — then the riskiest addresses are held back and
+  // the rest go lowest-risk first (see hygiene.ts).
+  const unverified = members.map((m) => m.c).filter((x) => x.mxOk == null && !already.has(x.id)).map((x) => x.id);
+  if (unverified.length) {
+    await verifyDomains(userId, unverified, { maxDomains: 800 }).catch(() => null);
+    const fresh = new Map((await db.select({ id: emailContactsTable.id, mxOk: emailContactsTable.mxOk }).from(emailContactsTable).where(inArray(emailContactsTable.id, unverified))).map((r) => [r.id, r.mxOk]));
+    for (const m of members) if (fresh.has(m.c.id)) m.c.mxOk = fresh.get(m.c.id) ?? null;
+  }
   let queued = 0, skipped = 0;
   const batch: Array<typeof emailMessagesTable.$inferInsert> = [];
-  const eligible = members.map((m) => m.c).filter((contact) => {
+  const sendable = members.map((m) => m.c).filter((contact) => {
     const ok = contact.status === "active" && contact.mxOk !== false && !already.has(contact.id);
     if (!ok) skipped++;
     return ok;
   });
+  const { kept: eligible, held: risky } = byRisk(sendable, await domainSignals(userId), s!.skipRisky);
+  skipped += risky;
 
   // A subject test on a slice of the list, the rest held until it is decided.
   // Only on a fresh start: a resumed campaign has already made its choice.
   const testing = !!c.subjectB && c.abPct > 0 && !c.abWinner && already.size === 0;
   const split = testing ? splitAb(eligible.length, c.abPct) : { a: eligible.length, b: 0, held: 0 };
-  const order = testing ? [...eligible].sort(() => Math.random() - 0.5) : eligible;
-  order.forEach((contact, i) => {
+  // Variants are drawn at random, so risk does not bias the test; the queue itself keeps the low-risk-first order.
+  const variantOf = new Map((testing ? [...eligible].sort(() => Math.random() - 0.5) : eligible).map((x, i) => [x.id, i]));
+  eligible.forEach((contact) => {
+    const i = variantOf.get(contact.id)!;
     const variant = !testing ? null : i < split.a ? "A" : i < split.a + split.b ? "B" : null;
     const held = testing && variant === null;
     batch.push({
@@ -139,8 +153,8 @@ export async function startCampaign(userId: number, campaignId: number): Promise
 
   await db.update(emailCampaignsTable).set({ status: "sending", startedAt: c.startedAt ?? new Date(), pauseReason: null })
     .where(eq(emailCampaignsTable.id, c.id));
-  logger.info({ userId, campaignId: c.id, queued, skipped, ab: testing ? split : null }, "حملة بريد بدأت");
-  return { queued, skipped, ab: testing ? split : null } as { queued: number; skipped: number; ab?: typeof split | null };
+  logger.info({ userId, campaignId: c.id, queued, skipped, risky, ab: testing ? split : null }, "حملة بريد بدأت");
+  return { queued, skipped, risky, ab: testing ? split : null } as { queued: number; skipped: number; risky: number; ab?: typeof split | null };
 }
 
 export async function pauseCampaign(userId: number, campaignId: number, reason: string | null = null) {

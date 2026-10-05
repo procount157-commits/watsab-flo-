@@ -24,6 +24,8 @@ export const emailSettingsTable = pgTable("email_settings", {
   defaultLanguage: varchar("default_language", { length: 5 }).notNull().default("en"),
   /** How hard the follow-up path works: light (3 emails) | normal (4) | intense (6) */
   followIntensity: varchar("follow_intensity", { length: 10 }).notNull().default("intense"),
+  /** hold back personal mailboxes at a domain where another one bounced */
+  skipRisky:     boolean("skip_risky").notNull().default(true),
   /** branded (header, card, footer) | plain */
   layout:       varchar("layout", { length: 10 }).notNull().default("branded"),
   brandName:    varchar("brand_name", { length: 80 }),
@@ -68,6 +70,7 @@ export const emailContactsTable = pgTable("email_contacts", {
   status:        varchar("status", { length: 20 }).notNull().default("active"),
   tags:          jsonb("tags").notNull().default([]),
   mxOk:          boolean("mx_ok"),
+  mxCheckedAt:   timestamp("mx_checked_at", { withTimezone: true }),
   lastSentAt:    timestamp("last_sent_at", { withTimezone: true }),
   lastOpenedAt:  timestamp("last_opened_at", { withTimezone: true }),
   lastRepliedAt: timestamp("last_replied_at", { withTimezone: true }),

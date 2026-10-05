@@ -15,6 +15,8 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { assertCanSend, assertCanAddContacts, planErrorToResponse } from "../lib/plans";
+import { hygieneReport, verifyDomains, cleanList, warmupPlan } from "../lib/email/hygiene";
+import { warmupCap } from "../lib/email/health";
 import { getSettings, overview, startCampaign, pauseCampaign, enrolInSequence, cancelSequencesFor, recordEvent, verdictFor, signals, varsFor } from "../lib/email/service";
 import { verifySettings, sendEmail, isConfigured, messageIdFor } from "../lib/email/provider";
 import { checkDomain } from "../lib/email/dns";
@@ -106,6 +108,7 @@ router.put("/settings", async (req, res) => {
     layout: b.layout === "plain" ? "plain" : "branded",
     defaultLanguage: ["en", "ar", "both"].includes(b.defaultLanguage) ? b.defaultLanguage : cur?.defaultLanguage ?? "en",
     followIntensity: ["light", "normal", "intense"].includes(b.followIntensity) ? b.followIntensity : cur?.followIntensity ?? "intense",
+    skipRisky: typeof b.skipRisky === "boolean" ? b.skipRisky : cur?.skipRisky ?? true,
     brandName: b.brandName ?? cur?.brandName ?? null, brandTagline: b.brandTagline ?? cur?.brandTagline ?? null,
     brandColor: b.brandColor ?? cur?.brandColor ?? null, brandAccent: b.brandAccent ?? cur?.brandAccent ?? null,
     logoUrl: b.logoUrl ?? cur?.logoUrl ?? null, website: b.website ?? cur?.website ?? null, phone: b.phone ?? cur?.phone ?? null, address: b.address ?? cur?.address ?? null,
@@ -779,6 +782,26 @@ router.post("/preview", async (req, res) => {
     { base: "", token: "preview", secret: "x", pixel: false, links: false },
     { base: "", token: "preview", fromName: s?.fromName ?? "بروكاونت", fromEmail: s?.fromEmail ?? "hello@example.com" }, brandOf(s));
   res.json({ subject: personalize(String(req.body?.subject ?? ""), vars), html: r.html, text: r.text, to });
+});
+
+// ── List hygiene ─────────────────────────────────────────────────
+router.get("/hygiene", async (req, res) => res.json(await hygieneReport(req.session.userId!, Number(req.query["listId"]) || null)));
+router.post("/hygiene/verify", async (req, res) => {
+  const listId = Number(req.body?.listId) || null;
+  const ids = listId ? (await db.select({ id: emailListMembersTable.contactId }).from(emailListMembersTable).where(eq(emailListMembersTable.listId, listId))).map((r) => r.id) : undefined;
+  try { res.json(await verifyDomains(req.session.userId!, ids)); } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+router.post("/hygiene/clean", async (req, res) => {
+  const listId = Number(req.body?.listId);
+  const [l] = await db.select().from(emailListsTable).where(and(eq(emailListsTable.id, listId), eq(emailListsTable.userId, req.session.userId!))).limit(1);
+  if (!l) return res.status(404).json({ error: "القائمة غير موجودة" });
+  res.json(await cleanList(req.session.userId!, listId, { risky: !!req.body?.risky }));
+});
+router.get("/warmup", async (req, res) => {
+  const userId = req.session.userId!;
+  const s = await getSettings(userId);
+  const sig = await signals(userId);
+  res.json({ on: s?.warmup ?? true, ageDays: sig.senderAgeDays, dailyCap: s?.dailyCap ?? 300, today: warmupCap(s?.dailyCap ?? 300, sig.senderAgeDays, s?.warmup ?? true), plan: warmupPlan(s?.dailyCap ?? 300, sig.senderAgeDays, s?.warmup ?? true) });
 });
 
 // ── Campaigns ─────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
 import { FolderSidebar, MoveToFolder, inFolder, type FolderSel } from "@/components/Folders";
 import { ContactDrawer, type Filter } from "./EmailAgent";
+import { ListHygiene } from "@/components/EmailHygiene";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const card = "bg-card border border-card-border rounded-xl";
@@ -324,6 +325,7 @@ export function ListDetail({ id, onCampaign, onWrite }: { id: number; onCampaign
         ))}
       </div>
       <HealthBar l={l} />
+      <ListHygiene listId={l.id} />
 
       <div className="grid lg:grid-cols-[1fr_17rem] gap-4 items-start">
         <div className={card}>

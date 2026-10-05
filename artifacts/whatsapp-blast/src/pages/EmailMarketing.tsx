@@ -22,6 +22,7 @@ import { EmailEditor, EmailPreviewModal } from "@/components/EmailEditor";
 import { KnowledgeTab } from "./EmailKnowledge";
 import { DashboardTab } from "./EmailDashboard";
 import { RegisterTab } from "./EmailRegister";
+import { WarmupCard } from "@/components/EmailHygiene";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const card = "bg-card border border-card-border rounded-xl";
@@ -540,6 +541,7 @@ function SettingsTab() {
         <div><label className="text-xs font-semibold block mb-1.5">التوقيع (HTML)</label><textarea className={cn(input, "min-h-[5rem] text-xs")} value={f.signature ?? ""} onChange={(e) => setF({ ...f, signature: e.target.value })} placeholder="{{sender}}<br>بروكاونت للمحاسبة<br>+971 …" /></div>
         <p className="text-[11px] text-muted-foreground">ابدأ بحصة صغيرة (٤٠ في الساعة، ٣٠٠ في اليوم) لعنوان جديد وارفعها بعد أسبوعين من ارتداد منخفض. الإرسال داخل ساعات العمل فقط.</p>
       </div>
+      <WarmupCard skipRisky={f.skipRisky ?? true} onSkipRisky={(v) => setF({ ...f, skipRisky: v })} />
       <div className={cn(card, "p-4 space-y-3")}>
         <p className="text-sm font-semibold">اللغة والمتابعة</p>
         <div className="grid md:grid-cols-2 gap-3">
