@@ -10,6 +10,7 @@ import { PLATFORM, type SocialPlatform } from "./platforms";
 import { voiceFor, roleOf, type Job } from "./team";
 import { asAgent } from "../agent-context";
 import { lessonsFor } from "../feedback";
+import { offerLine } from "../deals/meetings";
 
 export const INTENTS = ["question", "interested", "praise", "complaint", "spam", "stop", "other"] as const;
 export type Intent = typeof INTENTS[number];
@@ -72,6 +73,7 @@ export async function draftDmReply(userId: number, p: SocialPlatform, who: strin
     `${PLATFORM[p].voice} سؤال تأهيل واحد كحد أقصى. لا تخترع سعراً — اطلب ما يحدد نطاق العمل.`,
     "إن طلب التوقف أو رفض بوضوح: اكتب «(لا رد)» فقط.",
     await facts(userId, last),
+    await offerLine(userId, p === "linkedin" ? "en" : "ar").catch(() => ""),
     "اكتب الرد وحده.",
   ], `المحادثة مع ${who} (الأقدم أولاً):\n${history.slice(-14).map((m) => `${m.fromMe ? "نحن" : who}: ${m.text}`).join("\n")}`);
   const r = clean(t, 1_000);

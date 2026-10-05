@@ -10,6 +10,8 @@
 
 import { recordFeedback, lessonsFor } from "../feedback";
 import { asAgent } from "../agent-context";
+import { dealFromHotLead } from "../deals/deals";
+import { offerLine } from "../deals/meetings";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -128,6 +130,7 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   // ليلى rates the reply — hot, warm, cold — on the contact, where the
   // dashboard's hot list and the follow-up lists read it.
   const temp = temperature(text, verdict.intent);
+  if (temp === "hot") dealFromHotLead(userId, { channel: "email", ref: from, email: from, phone: contact?.phone ?? null, company: contact?.company ?? null, contactName: mail.fromName ?? contact?.name ?? null, notes: `ردّ: ${text.slice(0, 200)}` });
   if (contact) {
     const tags = ((contact.tags as string[] | null) ?? []).filter((t) => !["hot", "warm", "cold"].includes(t));
     await db.update(emailContactsTable).set({ tags: temp ? [...tags, temp] : tags }).where(eq(emailContactsTable.id, contact.id));
@@ -194,6 +197,8 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
   ]);
 
   const lessons = await lessonsFor(userId, "email", `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 600)).catch(() => "");
+  // When the reply asks for a call: the owner's free times, not ones the model makes up.
+  const offer = await offerLine(userId, (s?.defaultLanguage ?? "en") === "ar" ? "ar" : "en").catch(() => "");
   const out = await asAgent(userId, nora ? "email" : "sales", () => complete([
     { role: "system", content: [
       noraVoice || (sales ? `اسمك ${sales.name}${sales.title ? `، ${sales.title}` : ""}.` : "أنت مندوب مبيعات."),
@@ -214,6 +219,7 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
       ]),
       memory,
       lessons,
+      offer,
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
       facts.length || docs.length ? `معلومات مفيدة:\n${[...facts.map((f) => `${f.entry.title}\n${f.entry.content}`), ...docs.map((d) => `${d.title}\n${d.text}`)].map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}` : "لا توجد معلومة محددة — اسأل عمّا تحتاجه لتُجيب بدقة.",
       "",

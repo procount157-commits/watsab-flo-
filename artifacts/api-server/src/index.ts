@@ -13,6 +13,8 @@ import { startOutboxWorker } from "./lib/telegram";
 import { startSocial } from "./lib/social/engine";
 import { startTaskReminders } from "./lib/groups/tasks";
 import { startObligationReminders } from "./lib/groups/obligations";
+import { startMeetingReminders } from "./lib/deals/meetings";
+import { startProposalFollowups } from "./lib/deals/proposals";
 import { seedSkillsForEveryone } from "./lib/skills";
 import { sweepQuietOutcomes } from "./lib/agent-memory";
 import { startEmailWorkers } from "./lib/email/service";
@@ -136,6 +138,8 @@ function startListening() {
     startSocial();
     startTaskReminders();
     startObligationReminders();
+    startMeetingReminders();
+    startProposalFollowups();
     startEmailWorkers();
     startInboundPolling();
     startMissionWorker();

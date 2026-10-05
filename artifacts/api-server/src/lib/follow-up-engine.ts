@@ -8,6 +8,7 @@
 // incoming message with referral data, which is what sourceFilter="ad" keys on.
 
 import { asAgent } from "./agent-context";
+import { dealFromHotLead } from "./deals/deals";
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import {
   db, leadSourcesTable, followUpSequencesTable, followUpJobsTable,
@@ -496,6 +497,8 @@ async function announceStage(userId: number, phone: string, reached: 5 | 7, text
   const c = (await cardPreamble(userId, phone).catch(() => "")).split("\n")[1] ?? "";
   const last = text.slice(0, 160) || await lastCustomerLine(userId, phone).catch(() => "");
   const head = reached === 7 ? "🤝 <b>عميل وافق</b>" : "🔥 <b>عميل مهتم</b>";
+  // From here on it is a deal, whatever the channel it continues on.
+  dealFromHotLead(userId, { channel: "whatsapp", ref: phone, phone, notes: last ? `قال: ${last}` : null });
   await notify(userId, [
     `${head} — <code>${esc(phone)}</code>`,
     c ? esc(c.replace(/^- /, "")) : "",

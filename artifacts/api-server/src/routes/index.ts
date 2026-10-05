@@ -21,6 +21,8 @@ import browserRouter from "./browser";
 import meetingsRouter from "./meetings";
 import socialRouter from "./social";
 import teamRouter from "./team";
+import dealsRouter from "./deals";
+import bookingRouter from "./booking";
 import couponsRouter from "./coupons";
 import plansRouter from "./plans";
 import leadsRouter from "./leads";
@@ -36,6 +38,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(publicRouter);       // public routes — no auth required
+router.use("/book", bookingRouter); // the customer booking page — no auth
 router.use("/auth", authRouter);
 router.use("/admin", adminRouter);
 router.use("/whatsapp", whatsappRouter);
@@ -56,6 +59,7 @@ router.use("/browser", browserRouter);
 router.use("/meetings", meetingsRouter);
 router.use("/social", socialRouter);
 router.use("/team", teamRouter);
+router.use("/deals", dealsRouter);
 router.use("/coupons", couponsRouter);
 router.use("/plans", plansRouter);
 router.use("/leads", leadsRouter);

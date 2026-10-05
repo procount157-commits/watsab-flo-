@@ -29,6 +29,7 @@ import { driverFor, DRIVEN } from "./drivers";
 import { human } from "./drivers/common";
 import { activity, onDuty, roleOf, type Job } from "./team";
 import * as agent from "./agent";
+import { dealFromHotLead } from "../deals/deals";
 
 // ── The account ──────────────────────────────────────────────────
 export async function account(userId: number, p: SocialPlatform): Promise<SocialAccount | null> {
@@ -264,6 +265,7 @@ export async function draftReplies(userId: number, p: SocialPlatform, max = 10) 
     }
     await db.update(socialThreadsTable).set({ intent: tri.intent, temperature: tri.temperature }).where(eq(socialThreadsTable.id, t.id));
     if (tri.temperature === "hot" && t.temperature !== "hot") {
+      dealFromHotLead(userId, { channel: p, ref: t.handle, contactName: t.displayName, notes: `${PLATFORM[p].labelAr}: ${lastTheirs.slice(0, 200)}` });
       await activity(userId, p, "qualify", "hot", `🔥 @${t.handle} عميل حار: ${tri.why}`);
       await notify(userId, `<b>🔥 عميل حار على ${esc(PLATFORM[p].labelAr)}</b>\n@${esc(t.handle)}: ${esc(lastTheirs.slice(0, 300))}`, p).catch(() => {});
     }
