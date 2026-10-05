@@ -116,7 +116,7 @@ export async function startCampaign(userId: number, campaignId: number): Promise
   // Every domain is looked up before its first send, not only those imported
   // after the check existed — then the riskiest addresses are held back and
   // the rest go lowest-risk first (see hygiene.ts).
-  const unverified = members.map((m) => m.c).filter((x) => x.mxOk == null && !already.has(x.id)).map((x) => x.id);
+  const unverified = members.map((m) => m.c).filter((x) => x.status === "active" && x.mxOk == null && !already.has(x.id)).map((x) => x.id);
   if (unverified.length) {
     await verifyDomains(userId, unverified, { maxDomains: 800 }).catch(() => null);
     const fresh = new Map((await db.select({ id: emailContactsTable.id, mxOk: emailContactsTable.mxOk }).from(emailContactsTable).where(inArray(emailContactsTable.id, unverified))).map((r) => [r.id, r.mxOk]));

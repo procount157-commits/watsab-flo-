@@ -32,7 +32,7 @@ await clean();
 await db.insert(emailSettingsTable).values({ userId: USER, provider: "smtp", smtpHost: "smtp.invalid", smtpUser: "u", smtpPass: "p", fromEmail: "test@procount.invalid", fromName: "بروكاونت" });
 
 const contacts = await db.insert(emailContactsTable).values(
-  Array.from({ length: 60 }, (_, i) => ({ userId: USER, email: `c${i}@firm${i}.ae`, company: `شركة ${i}`, status: i === 0 ? "unsubscribed" : "active", mxOk: i === 1 ? false : null })),
+  Array.from({ length: 60 }, (_, i) => ({ userId: USER, email: `c${i}@firm${i}.ae`, company: `شركة ${i}`, status: i === 0 ? "unsubscribed" : "active", mxOk: i === 1 ? false : true })),
 ).returning();
 const [list] = await db.insert(emailListsTable).values({ userId: USER, name: "اختبار" }).returning();
 await db.insert(emailListMembersTable).values(contacts.map((c) => ({ listId: list!.id, contactId: c.id })));
