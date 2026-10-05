@@ -765,6 +765,37 @@ Follow-ups no longer pile up while no sender is configured, never land within
 48 hours of another email to the same company, and wait while their sequence
 is switched off. Imports no longer enrol everyone in a sequence by default.
 
+**English by default, and an intensive path.**
+- Every campaign, follow-up and reply is written and sent in English unless the
+  owner changes it: `email_settings.default_language` (settings «اللغة
+  والمتابعة») for the account, `email_campaigns.language` for one campaign
+  (migration 034). `startCampaign` refuses content that is not in the
+  campaign's language. The plain layout follows the body's direction: an
+  English email gets `dir="ltr" lang="en"` and an English-only footer.
+- The follow-up path has three intensities (`lib/email/intensity.ts`). The
+  default is intense: day 0, a warm/cold split on day 2, then value on day 5,
+  a new angle on day 9, a short bump on day 14 and a breakup on day 21. The
+  path stops for anyone who replies, unsubscribes or bounces.
+- «سجل الإرسال» (`GET /api/email/register`, `lib/email/register.ts`) has one
+  row per company emailed. Each row shows how many emails were sent and the
+  last one, opens, clicks and replies, and the next step with its date (or
+  why the path ended).
+
+**The team as experts.** `EMAIL_DOCTRINE` now states the English rule and
+judges campaigns by replies rather than opens, because Apple Mail Privacy
+Protection inflates opens. Its old three-message cap is gone and the follow-up
+path governs instead. `ensureEmailTeam` rewrites sentences of a hired agent's
+brief that the path superseded, but only where they are still word for word.
+Five skills are added in `lib/skills/email.ts` and granted by role:
+- the anatomy of an English B2B email;
+- copy frameworks matched to path steps (PAS, BAB, give-first, bump, breakup);
+- UAE timing and segmentation;
+- measurement and A/B testing with sunset rules;
+- path design.
+
+The WhatsApp «الكتابة البشرية» skill (two lines, no lists) is withdrawn from
+the email writers through `WITHDRAWN`. It loaded last in the prompt, so it
+overruled their structure.
 
 ## WhatsApp customer groups
 
@@ -813,6 +844,33 @@ and never sends.**
 - Accuracy over 30 days is shown with a readiness rule: at least 50 decided
   and 80% right. Answering by herself is deliberately not built until the
   numbers support it.
+
+**Learning from every message, and the training center**
+(`lib/groups/training.ts`, migration 035, the «تدريب سارة» tab).
+- Every live message in a watched or customer group arms a timer. After ten
+  quiet minutes she reads what is new since her last reading
+  (`wa_groups.learned_upto`), if there are at least 5 new messages or her
+  last reading is 6 hours old. She then:
+  - updates her file on the group;
+  - writes down general lessons as `wa_group_knowledge` rows with
+    `source = 'learned'`. A lesson she already knows in other words (term
+    overlap ≥ 0.7) is skipped.
+- Readings run one at a time, at most 150 per account per day. A lesson
+  retires once it falls outside the 300 most used.
+- «تعلّمي من الجديد» triggers a reading at once.
+- The owner teaches her in four kinds, for all groups or one:
+  - instructions;
+  - question → answer examples;
+  - pasted text;
+  - files (PDF, Word, Excel, text).
+- When she suggests a reply, `briefFor` gives her:
+  - every instruction, marked binding;
+  - the closest examples (overlap ≥ 0.2);
+  - the closest passages of the texts and files;
+  - the group's own lessons, then the nearest general ones.
+- An edited suggestion is also saved as an example.
+- She carries the «الرد في قروبات العملاء» skill, plus the WhatsApp writing
+  skills.
 
 ## Hardening
 

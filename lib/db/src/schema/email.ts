@@ -20,6 +20,10 @@ export const emailSettingsTable = pgTable("email_settings", {
   fromEmail:    varchar("from_email", { length: 200 }),
   replyTo:      varchar("reply_to", { length: 200 }),
   signature:    text("signature"),
+  /** The language email goes out in unless the owner picks another for a campaign: en | ar | both */
+  defaultLanguage: varchar("default_language", { length: 5 }).notNull().default("en"),
+  /** How hard the follow-up path works: light (3 emails) | normal (4) | intense (6) */
+  followIntensity: varchar("follow_intensity", { length: 10 }).notNull().default("intense"),
   /** branded (header, card, footer) | plain */
   layout:       varchar("layout", { length: 10 }).notNull().default("branded"),
   brandName:    varchar("brand_name", { length: 80 }),
@@ -140,6 +144,8 @@ export const emailCampaignsTable = pgTable("email_campaigns", {
   abWaitHours: integer("ab_wait_hours").notNull().default(4),
   abWinner:    varchar("ab_winner", { length: 1 }),
   abDecidedAt: timestamp("ab_decided_at", { withTimezone: true }),
+  /** en | ar | both — the message is checked against it. */
+  language:     varchar("language", { length: 5 }).notNull().default("en"),
   /** How many times the subject was rewritten after almost nobody opened (the open-rate checkpoint). */
   abRound:      integer("ab_round").notNull().default(0),
   lowOpenAt:    timestamp("low_open_at", { withTimezone: true }),
@@ -260,6 +266,8 @@ export const emailMissionsTable = pgTable("email_missions", {
   warmSequenceId:   integer("warm_sequence_id"),
   coldSequenceId:   integer("cold_sequence_id"),
   followAfterHours: integer("follow_after_hours").notNull().default(48),
+  /** light | normal | intense; null means the account's setting. */
+  intensity:        varchar("intensity", { length: 10 }),
   /** Which email agent writes it (bot_employees.role); null is نورة. */
   agentRole:        varchar("agent_role", { length: 30 }),
   /** The list the autopilot started it for. */

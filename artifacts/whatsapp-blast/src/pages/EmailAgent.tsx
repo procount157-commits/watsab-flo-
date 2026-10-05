@@ -390,7 +390,7 @@ export function AgentTab({ initialFilter, onMissionCreated }: { initialFilter?: 
               <select className={cn(input, "text-xs mb-1.5")} value={GOALS.includes(goal) ? goal : ""} onChange={(e) => e.target.value && setGoal(e.target.value)}><option value="">— هدف مكتوب بيدك —</option>{GOALS.map((g) => <option key={g} value={g}>{g.slice(0, 80)}</option>)}</select>
               <textarea className={cn(input, "min-h-[4.5rem] text-xs")} value={goal} onChange={(e) => setGoal(e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-2">
-              <span className="text-[11px] text-muted-foreground self-center">🇬🇧 English</span>
+<select className={cn(input, "text-xs")} value={lang} onChange={(e) => setLang(e.target.value)} title="لغة الإيميل"><option value="en">🇬🇧 الإنجليزية (افتراضي)</option><option value="ar">العربية — بطلبك</option><option value="both">الاثنتان</option></select>
               <input className={cn(input, "text-xs")} value={tone} onChange={(e) => setTone(e.target.value)} placeholder="النبرة (اختياري): رسمية، ودّية…" />
             </div>
             <textarea className={cn(input, "min-h-[3rem] text-xs")} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="ملاحظات لها (اختياري): اذكري العرض الحالي، لا تذكري السعر…" />
@@ -465,7 +465,7 @@ export function MissionsTab() {
             <select className={cn(input, "text-xs")} value={GOALS.includes(nf.goal) ? nf.goal : ""} onChange={(e) => e.target.value && setNf({ ...nf, goal: e.target.value })}><option value="">— هدف مكتوب بيدك —</option>{GOALS.map((g) => <option key={g} value={g}>{g.slice(0, 80)}</option>)}</select>
             <textarea className={cn(input, "min-h-[5rem] text-xs")} value={nf.goal} onChange={(e) => setNf({ ...nf, goal: e.target.value })} />
             <div className="grid grid-cols-2 gap-2">
-              <span className="text-[11px] text-muted-foreground self-center">🇬🇧 الإيميلات بالإنجليزية</span>
+<select className={cn(input, "text-xs")} value={nf.language} onChange={(e) => setNf({ ...nf, language: e.target.value })} title="لغة الإيميل"><option value="en">🇬🇧 الإنجليزية (افتراضي)</option><option value="ar">العربية — بطلبك</option><option value="both">الاثنتان</option></select>
               <label className="text-xs flex items-center gap-2">المتابعة بعد <input type="number" className={cn(input, "w-16 text-xs")} value={nf.followAfterHours} onChange={(e) => setNf({ ...nf, followAfterHours: Number(e.target.value) })} /> ساعة</label>
             </div>
             <label className="text-xs flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={nf.requireApproval} onChange={(e) => setNf({ ...nf, requireApproval: e.target.checked })} /><span>انتظري موافقتي قبل الإرسال <span className="text-muted-foreground">(موصى به — بدونها ترسل ما تكتبه مباشرة)</span></span></label>
@@ -496,7 +496,7 @@ export function MissionsTab() {
               {STAGES.map((s, i) => <div key={s.k} className="flex-1"><div className={cn("h-1.5 rounded-full", i < si ? "bg-primary" : i === si ? (m.status === "active" ? "bg-primary animate-pulse" : "bg-yellow-400") : "bg-muted")} /><p className={cn("text-[10px] mt-1", i === si ? "text-foreground" : "text-muted-foreground")}>{s.l}</p></div>)}
             </div>
             {m.status !== "active" && <p className="text-[11px] text-yellow-400 mt-2"><AlertTriangle className="w-3 h-3 inline ml-1" />موقوفة{m.log?.[0]?.kind === "error" ? ` — ${m.log[0].text}` : ""}</p>}
-            {live?.byStage?.length > 0 && <div className="mt-3"><EmailFlow compact stages={live.byStage} tracking={!!ovTrack?.trackingBase} /></div>}
+            {live?.byStage?.length > 0 && <div className="mt-3"><EmailFlow compact stages={live.byStage} tracking={!!ovTrack?.trackingBase} steps={m.path?.steps} firstAfterHours={m.followAfterHours} /></div>}
             {live?.total && <p className="text-xs mt-2">أُرسل {live.total.sent} · فتح <b className="text-blue-400">{live.total.openRate}%</b> · نقر {live.total.clicked} · رد <b className="text-green-400">{live.total.replyRate}%</b> ({live.total.replied}) · ارتدّ {live.total.bounced}</p>}
 
             {m.stage === "awaiting_approval" && d && (

@@ -23,6 +23,8 @@ import { count, describe, resolve } from "./segments";
 import { passages } from "./knowledge-docs";
 import { getSettings } from "./service";
 import { teamVoice, onDuty, type EmailRole } from "./team";
+import { asLanguage, languageRule } from "./language";
+import { INTENSITY, FOLLOW_PROMPT, asIntensity } from "./intensity";
 
 export const EMAIL_ROLE = "email";
 const KNOWLEDGE = "knowledge";
@@ -159,7 +161,7 @@ export interface EmailDraft {
   subjects: string[];
   html: string;
   /** warm: opened, no reply · cold: did not open (resent, new subject) · value: a useful insight to all who have not replied · breakup: the last note */
-  followups: Array<{ audience: "warm" | "cold" | "value" | "breakup"; afterHours: number; subject: string; html: string }>;
+  followups: Array<{ audience: "warm" | "cold" | "value" | "angle" | "bump" | "breakup"; afterHours: number; subject: string; html: string }>;
   why: string;
 }
 
@@ -196,7 +198,7 @@ export function parseDraft(text: string): EmailDraft | null {
   for (const m of text.matchAll(/\[متابعة([^\]]*)\]\s*\n?([\s\S]*?)\[\/متابعة\]/g)) {
     const attrs = m[1] ?? "";
     const after = Number(/بعد\s*=\s*(\d+)/.exec(attrs)?.[1] ?? 72);
-    const audience: EmailDraft["followups"][number]["audience"] = /وداع|breakup/.test(attrs) ? "breakup" : /قيمة|value/.test(attrs) ? "value" : /بارد|cold/.test(attrs) ? "cold" : "warm";
+    const audience: EmailDraft["followups"][number]["audience"] = /وداع|breakup/.test(attrs) ? "breakup" : /قيمة|value/.test(attrs) ? "value" : /زاوية|angle/.test(attrs) ? "angle" : /تذكير|bump/.test(attrs) ? "bump" : /بارد|cold/.test(attrs) ? "cold" : "warm";
     const inner = m[2]!.trim();
     const subject = /^\s*عنوان\s*[:：]\s*(.+)$/m.exec(inner)?.[1]?.trim();
     const bodyText = inner.replace(/^\s*عنوان\s*[:：].*$/m, "").trim();
@@ -211,7 +213,7 @@ export function parseDraft(text: string): EmailDraft | null {
  * A campaign for a target: two or three subjects to test, the body, and a
  * follow-up for each audience the campaign will leave behind.
  */
-export async function writeCampaign(userId: number, input: { filter: SegmentFilter; goal: string; language?: string; tone?: string | null; notes?: string | null; role?: EmailRole }): Promise<{ draft: EmailDraft; audience: { description: string; count: number; sample: string[] }; provider: string } | null> {
+export async function writeCampaign(userId: number, input: { filter: SegmentFilter; goal: string; language?: string; tone?: string | null; notes?: string | null; role?: EmailRole; intensity?: string | null }): Promise<{ draft: EmailDraft; audience: { description: string; count: number; sample: string[] }; provider: string } | null> {
   // The writer's own voice — نورة, or يوسف for a follow-up wave — with the team's doctrine.
   const head = await teamVoice(userId, input.role ?? "email");
   const sectors = input.filter.sectors ?? [];
@@ -248,18 +250,12 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       "عنوان: <for those who did NOT open — a completely different, shorter subject; the body is the first email's core message, shortened>",
       "<body: the same offer, tighter>",
       "[/متابعة]",
-      "[متابعة بعد=168 جمهور=قيمة]",
-      "عنوان: <for everyone who has not replied by day 7 — one genuinely useful fact or tip from the knowledge base for their sector>",
-      "<body: the insight, why it matters to them, a soft call to action>",
-      "[/متابعة]",
-      "[متابعة بعد=336 جمهور=وداع]",
-      "عنوان: <day 14, the last note — polite, closes the loop, leaves the door open>",
-      "<body: two or three lines>",
-      "[/متابعة]",
+      // After the day-2/3 split, the follow-ups this campaign's intensity calls for, in order.
+      ...INTENSITY[asIntensity(input.intensity)].steps.flatMap((st) => FOLLOW_PROMPT[st.kind]),
       "[السبب] <سطر: لماذا هذه الزاوية لهذا الجمهور>",
       "",
       // The owner's rule: every email in English, whatever language the request came in.
-      "LANGUAGE: write every subject, body, follow-up and button in professional UAE B2B ENGLISH — never Arabic, even when the goal, notes or audience are written in Arabic. Only the [عنوان]/[الرسالة]/[متابعة] labels stay as they are.",
+      `${languageRule(asLanguage(input.language))} Only the [عنوان]/[الرسالة]/[متابعة] labels stay as they are.`,
       input.tone ? `النبرة: ${input.tone}.` : "",
       "حقول الشخصنة المتاحة فقط: {{first_name}} {{company}} {{city}} {{sender}} — مع بديل بالإنجليزية: {{company|your company}}.",
       "اسم شركة المستلم {{company|your company}} في أحد العنوانين على الأقل وفي السطر الأول، والتوقيع «The Pro Count team» في آخر الرسالة وكل متابعة.",

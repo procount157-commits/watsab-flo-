@@ -64,6 +64,9 @@ export function unsubscribeFooter(o: { base: string; token: string; fromName: st
   const url = o.base ? `${o.base}/t/e/${o.token}/u` : `mailto:${o.fromEmail}?subject=unsubscribe`;
   const ar = `<p style="margin:0 0 6px">هذه الرسالة من ${esc(o.fromName)} &lt;${esc(o.fromEmail)}&gt;. إن لم ترغب في رسائل أخرى: <a href="${url}" style="color:#6b7280">إلغاء الاشتراك</a>.</p>`;
   const en = `<p style="margin:0">Sent by ${esc(o.fromName)}. Don't want these? <a href="${url}" style="color:#6b7280">Unsubscribe</a>.</p>`;
+  // An English email carries an English footer only; Arabic keeps both, since
+  // the unsubscribe line is the one thing every reader must be able to read.
+  if (o.lang === "en") return `<div style="margin-top:28px;padding-top:12px;border-top:1px solid #e5e7eb;font:12px/1.6 Arial,sans-serif;color:#6b7280" dir="ltr">${en}</div>`;
   return `<div style="margin-top:28px;padding-top:12px;border-top:1px solid #e5e7eb;font:12px/1.6 Arial,sans-serif;color:#6b7280" dir="rtl">${ar}${en}</div>`;
 }
 
@@ -98,7 +101,8 @@ export function renderEmail(html: string, vars: Record<string, string | null | u
     const full = wrapBranded(styleBody(body, brand, dir), brand, lines, preheaderOf(personalize(html, vars)), dir).replace("</body>", `${pixelTag(track)}</body>`);
     return { html: full, text: htmlToText(personalize(html, vars)) + `\n\n—\n${brand.name}${brand.phone ? ` · ${brand.phone}` : ""}${brand.website ? ` · ${brand.website}` : ""}\n${unsubscribeUrl(footer.base, footer.token) ?? ""}`.trimEnd() };
   }
-  const full = `<!doctype html><html dir="rtl" lang="ar"><body style="margin:0;padding:0;background:#ffffff"><div style="max-width:640px;margin:0 auto;padding:24px 16px;font:15px/1.8 Arial,Helvetica,sans-serif;color:#111827">${body}${unsubscribeFooter(footer)}</div>${pixelTag(track)}</body></html>`;
+  const dir = directionOf(body), lang = dir === "rtl" ? "ar" : "en";
+  const full = `<!doctype html><html dir="${dir}" lang="${lang}"><body style="margin:0;padding:0;background:#ffffff"><div style="max-width:640px;margin:0 auto;padding:24px 16px;font:15px/1.8 Arial,Helvetica,sans-serif;color:#111827">${body}${unsubscribeFooter({ ...footer, lang })}</div>${pixelTag(track)}</body></html>`;
   return { html: full, text: htmlToText(personalize(html, vars)) + `\n\n—\n${footer.fromName}\n${unsubscribeUrl(footer.base, footer.token) ?? ""}`.trimEnd() };
 }
 

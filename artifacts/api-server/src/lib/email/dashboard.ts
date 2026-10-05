@@ -10,6 +10,7 @@ import { getAutopilot, targetLists, STAGES } from "./autopilot";
 import { recentActivity, teamStatus } from "./team";
 import { getSettings } from "./service";
 import { isConfigured } from "./provider";
+import { INTENSITY, asIntensity } from "./intensity";
 
 const rate = (a: number, b: number) => (b ? Math.round((a / b) * 1000) / 10 : 0);
 
@@ -97,6 +98,8 @@ export async function dashboard(userId: number, days = 14) {
     hot, campaigns: campaigns.map((c) => ({ ...c, openRate: rate(c.opened, c.sent), clickRate: rate(c.clicked, c.sent), replyRate: rate(c.replied, c.sent) })),
     approvals: approvals.map((a) => ({ id: a.id, name: a.name, agentRole: a.agentRole, subject: (a.pending as any)?.subjects?.[0] ?? null, createdAt: a.createdAt })),
     configured: isConfigured(settings), tracking: !!(process.env["SITE_URL"] ?? "") && !!settings?.tracking,
+    language: settings?.defaultLanguage ?? "en",
+    path: { intensity: asIntensity(settings?.followIntensity), steps: INTENSITY[asIntensity(settings?.followIntensity)].steps, firstAfterHours: INTENSITY[asIntensity(settings?.followIntensity)].firstAfterHours },
     stageNames: STAGES,
   };
 }

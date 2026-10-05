@@ -16,6 +16,9 @@ import { db, botEmployeesTable, agentTasksTable, businessProfileTable, waGroupsT
 import { complete } from "../llm";
 import { retrieve, terms } from "../knowledge";
 import { memoryPreamble, remember } from "../agent-memory";
+import { skillsFor, skillsPreamble } from "../agent-skills";
+import { seedSkills } from "../skills";
+import { briefFor, briefLines, noteMessage, teach } from "./training";
 import { logger } from "../logger";
 import type { ParsedGroupMessage } from "./store";
 
@@ -47,6 +50,7 @@ export async function ensureGroupsAgent(userId: number) {
   const [made] = await db.insert(botEmployeesTable).values({ userId, name: AGENT.name, role: GROUPS_ROLE, kind: "internal", title: AGENT.title, avatar: AGENT.avatar, persona: AGENT.persona, specialties: [], priority: 996, handoffTo: null } as any).returning();
   const has = await db.select({ id: agentTasksTable.id }).from(agentTasksTable).where(and(eq(agentTasksTable.userId, userId), eq(agentTasksTable.role, GROUPS_ROLE))).limit(1);
   if (!has.length) await db.insert(agentTasksTable).values(AGENT.tasks.map((task, i) => ({ userId, role: GROUPS_ROLE, task, sortOrder: (i + 1) * 10 })));
+  await seedSkills(userId).catch(() => {});
   logger.info({ userId }, "وُظّفت سارة (القروبات)");
   return made!;
 }
@@ -64,8 +68,10 @@ export function similarity(a: string, b: string): number {
 // ── Live: wait, then suggest; and learn from the owner's own reply ─
 const timers = new Map<string, NodeJS.Timeout>();
 
-export async function onGroupMessage(userId: number, group: { jid: string; watch: boolean }, p: ParsedGroupMessage) {
+export async function onGroupMessage(userId: number, group: { jid: string; watch: boolean; isCustomer: boolean }, p: ParsedGroupMessage) {
   const key = `${userId}:${group.jid}`;
+  // Every message — the customer's and ours — is something to learn from.
+  noteMessage(userId, group);
   if (p.fromMe) {
     clearTimeout(timers.get(key)); timers.delete(key);
     if (p.text) await recordOwnerReply(userId, group.jid, p.text);
@@ -118,6 +124,7 @@ async function voice(userId: number) {
     profile?.description ? `عن الشركة: ${profile.description}` : "",
     profile?.guardrails ? `ما لا يُقال أبداً: ${profile.guardrails}` : "",
     await memoryPreamble(userId, GROUPS_ROLE).catch(() => ""),
+    skillsPreamble(await skillsFor(userId, GROUPS_ROLE, "internal").catch(() => [])),
   ].filter(Boolean).join("\n");
 }
 
@@ -139,10 +146,11 @@ export async function suggestFor(userId: number, jid: string, opts: { force?: bo
   if (Number(n) >= DAILY_CAP) return null;
 
   const turnText = turn.map((m) => m.text).filter(Boolean).join("\n");
-  const [head, examples, facts] = await Promise.all([
+  const [head, examples, facts, brief] = await Promise.all([
     voice(userId),
     turnText ? similarExamples(userId, turnText) : Promise.resolve([]),
     turnText ? retrieve(userId, turnText, 4).catch(() => []) : Promise.resolve([]),
+    briefFor(userId, jid, turnText || line(trigger)).catch(() => ({ instructions: [], examples: [], passages: [], lessons: [] })),
   ]);
 
   const out = await complete([
@@ -151,6 +159,7 @@ export async function suggestFor(userId: number, jid: string, opts: { force?: bo
       `القروب: «${group.subject ?? "قروب"}»${group.customerName ? ` — العميل: ${group.customerName}` : ""}.`,
       group.profile ? `ما فهمتِه عن هذا القروب سابقاً:\n${group.profile}` : "",
       group.notes ? `ملاحظات صاحب العمل عن القروب: ${group.notes}` : "",
+      ...briefLines(brief),
       facts.length ? `من معرفة الشركة:\n${facts.map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 400)}`).join("\n")}` : "",
       examples.length ? `هكذا ردّ صاحب العمل على رسائل مشابهة من قبل — قلّدي أسلوبه وطوله ولغته:\n${examples.map((e) => `العميل: ${e.q.slice(0, 300)}\nصاحب العمل: ${e.a.slice(0, 400)}`).join("\n---\n")}` : "",
       "",
@@ -213,7 +222,11 @@ export async function feedback(userId: number, id: number, input: { verdict: "co
   }).where(eq(waGroupSuggestionsTable.id, id));
   // What she should remember.
   const q = (s.triggerText ?? "").replace(/\s+/g, " ").slice(0, 160);
-  if (input.verdict === "edited" && ownerReply) await remember(userId, GROUPS_ROLE, "win", `حين كتب العميل «${q}» كان الرد الصحيح: «${ownerReply.slice(0, 260)}»`);
+  if (input.verdict === "edited" && ownerReply) {
+    await remember(userId, GROUPS_ROLE, "win", `حين كتب العميل «${q}» كان الرد الصحيح: «${ownerReply.slice(0, 260)}»`);
+    // His correction is the strongest training there is: it becomes an example she is shown next time.
+    if (s.triggerText) await teach(userId, { kind: "qa", title: "تصحيح من صاحب العمل", question: s.triggerText, answer: ownerReply }).catch(() => {});
+  }
   if (input.verdict === "correct") await remember(userId, GROUPS_ROLE, "win", `رد صحيح على «${q}»: «${s.suggestion.slice(0, 260)}»`);
   if (input.verdict === "wrong") await remember(userId, GROUPS_ROLE, input.note ? "instruction" : "loss", input.note ? input.note : `رد خاطئ على «${q}»: «${s.suggestion.slice(0, 200)}» — لا تكرريه`);
 }

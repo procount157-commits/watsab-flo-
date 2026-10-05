@@ -19,7 +19,7 @@ import { notify, esc } from "../telegram";
 import { sendEmail, SendError, isConfigured, messageIdFor } from "./provider";
 import { newToken, renderEmail, firstName, personalize, unsubscribeUrl } from "./tracking";
 import { brandOf } from "./layout";
-import { isEnglish, NOT_ENGLISH } from "./language";
+import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
 
 const SITE_URL = () => (process.env["SITE_URL"] ?? "").replace(/\/+$/, "");
@@ -85,7 +85,7 @@ export async function startCampaign(userId: number, campaignId: number): Promise
     .where(and(eq(emailCampaignsTable.id, campaignId), eq(emailCampaignsTable.userId, userId))).limit(1);
   if (!c) throw new Error("الحملة غير موجودة");
   // The owner's rule, before anything else: email goes out in English.
-  if (![c.html, c.subject, c.subjectB ?? ""].every(isEnglish)) throw new Error(NOT_ENGLISH);
+  if (![c.html, c.subject, c.subjectB ?? ""].every((t) => matchesLanguage(t, asLanguage(c.language)))) throw new Error(wrongLanguage(asLanguage(c.language)));
   if (!c.listId && !c.segmentId) throw new Error("الحملة بلا قائمة ولا جمهور");
   // The owner resuming a campaign the checkpoint held: his decision — the rest goes with the current subject.
   if (c.lowOpenAt || c.abRound > 0) {

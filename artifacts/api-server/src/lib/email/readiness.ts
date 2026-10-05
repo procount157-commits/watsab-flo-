@@ -16,7 +16,7 @@ import {
   emailListMembersTable, emailListsTable, emailSegmentsTable, emailMessagesTable,
 } from "@workspace/db";
 import { resolve as resolveSegment, describe as describeSegment } from "./segments";
-import { isEnglish } from "./language";
+import { asLanguage, matchesLanguage, wrongLanguage, LANGUAGE_AR } from "./language";
 import type { SegmentFilter } from "@workspace/db";
 
 export type ReadyCheck = {
@@ -74,10 +74,11 @@ export async function campaignReadiness(userId: number, campaignId: number): Pro
   );
 
   // The owner's rule: email goes out in English.
-  const english = [c.html ?? "", c.subject ?? "", c.subjectB ?? ""].every(isEnglish);
-  checks.push(english
-    ? ok("language", "اللغة", "إنجليزية")
-    : blocked("language", "اللغة", "الرسالة بالعربية — الإيميلات بالإنجليزية فقط", "اكتبها بالإنجليزية، أو دع نورة تعيد كتابتها."));
+  const lang = asLanguage((c as any).language);
+  const matches = [c.html ?? "", c.subject ?? "", c.subjectB ?? ""].every((t) => matchesLanguage(t, lang));
+  checks.push(matches
+    ? ok("language", "اللغة", `${LANGUAGE_AR[lang]}${lang === "en" ? " (الافتراضية)" : " — بطلبك"}`)
+    : blocked("language", "اللغة", wrongLanguage(lang), lang === "en" ? "اكتبها بالإنجليزية، أو غيّر لغة الحملة." : "اكتبها بلغة الحملة."));
 
   // Personalisation is in the doctrine: a message that fits everyone is a
   // message nobody answers.
@@ -85,7 +86,7 @@ export async function campaignReadiness(userId: number, campaignId: number): Pro
   checks.push(hasVars
     ? ok("personal", "الشخصنة", "الرسالة تذكر اسم الشركة أو المستلم")
     : warn("personal", "الشخصنة", "لا متغيّرات — الرسالة نفسها تصل للجميع",
-        "أضف {{company|شركتكم}} في العنوان أو السطر الأول."));
+        "أضف {{company|your company}} في العنوان أو السطر الأول."));
 
   // ── Who receives it ──
   let audience: Array<{ id: number; status: string; mxOk: boolean | null }> = [];

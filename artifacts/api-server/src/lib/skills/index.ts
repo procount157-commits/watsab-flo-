@@ -23,11 +23,14 @@ import { HUMAN_WRITING_SKILL, DIALECT_MATCH_SKILL } from "./writing";
 import {
   DELIVERABILITY_SKILL, EMAIL_FUNNEL_SKILL, SUBJECT_SKILL,
   REPLY_TRIAGE_SKILL, EMAIL_FOLLOWUP_SKILL, EMAIL_GUARD_SKILL,
+  COLD_EMAIL_ANATOMY_SKILL, COPY_FRAMEWORKS_SKILL, UAE_TIMING_SKILL,
+  EMAIL_METRICS_SKILL, SEQUENCE_DESIGN_SKILL,
 } from "./email";
 import {
   SOCIAL_REPLY_SKILL, SOCIAL_TRIAGE_SKILL, SOCIAL_DM_SKILL,
   SOCIAL_SAFETY_SKILL, SYSTEM_HEALTH_SKILL, LIST_HYGIENE_SKILL,
 } from "./social";
+import { GROUP_REPLY_SKILL } from "./groups";
 import { logger } from "../logger";
 
 export type SkillDef = { name: string; intents: string[]; instruction: string };
@@ -42,11 +45,16 @@ export const LIBRARY: SkillDef[] = [
   // all before this — a persona and two tasks, and nothing about the job.
   DELIVERABILITY_SKILL, EMAIL_FUNNEL_SKILL, SUBJECT_SKILL,
   REPLY_TRIAGE_SKILL, EMAIL_FOLLOWUP_SKILL, EMAIL_GUARD_SKILL,
+  // The owner asked for experts. The six above keep the channel safe; these
+  // are the craft of writing and judging email a finance director answers.
+  COLD_EMAIL_ANATOMY_SKILL, COPY_FRAMEWORKS_SKILL, UAE_TIMING_SKILL,
+  EMAIL_METRICS_SKILL, SEQUENCE_DESIGN_SKILL,
   // The Instagram ten were hired with a persona each and no skills at all,
   // which made them ten descriptions of people rather than ten people who know
   // something. مارك had neither.
   SOCIAL_REPLY_SKILL, SOCIAL_TRIAGE_SKILL, SOCIAL_DM_SKILL,
   SOCIAL_SAFETY_SKILL, SYSTEM_HEALTH_SKILL, LIST_HYGIENE_SKILL,
+  GROUP_REPLY_SKILL,
 ];
 
 // Skills a library version used to install under another name. Seeding
@@ -106,18 +114,38 @@ export const GRANTS: Record<string, string[]> = {
   ig_guard:    [SOCIAL_SAFETY_SKILL.name, SYSTEM_HEALTH_SKILL.name],
   ig_analyst:  [SOCIAL_SAFETY_SKILL.name, ANALYSIS_SKILL.name, EMAIL_FUNNEL_SKILL.name],
 
+  // ── WhatsApp customer groups ──
+  // سارة writes WhatsApp, so the WhatsApp writing skills are hers too.
+  groups: [GROUP_REPLY_SKILL.name, HUMAN_WRITING_SKILL.name, DIALECT_MATCH_SKILL.name, INTENT_READING_SKILL.name, COMPLAINT_SKILL.name],
+
   // ── The email team ──
   // Every one of them carries the deliverability skill: a burnt domain ends
   // the channel for all six, so it is not one person's job to know.
-  email:            [DELIVERABILITY_SKILL.name, SUBJECT_SKILL.name, EMAIL_FOLLOWUP_SKILL.name,
-                     EMAIL_WRITING_SKILL.name, DISCOVERY_SKILL.name, NEGOTIATION_SKILL.name, HUMAN_WRITING_SKILL.name],
-  email_strategist: [DELIVERABILITY_SKILL.name, EMAIL_FUNNEL_SKILL.name, ANALYSIS_SKILL.name, SUBJECT_SKILL.name],
-  email_followup:   [DELIVERABILITY_SKILL.name, EMAIL_FOLLOWUP_SKILL.name, SUBJECT_SKILL.name, EMAIL_FUNNEL_SKILL.name],
-  email_replies:    [DELIVERABILITY_SKILL.name, REPLY_TRIAGE_SKILL.name, NEGOTIATION_SKILL.name,
-                     DISCOVERY_SKILL.name, HUMAN_WRITING_SKILL.name],
-  email_guard:      [EMAIL_GUARD_SKILL.name, DELIVERABILITY_SKILL.name],
-  email_creator:    [DELIVERABILITY_SKILL.name, SUBJECT_SKILL.name, EMAIL_FUNNEL_SKILL.name,
-                     EMAIL_WRITING_SKILL.name, DISCOVERY_SKILL.name, HUMAN_WRITING_SKILL.name],
+  email:            [DELIVERABILITY_SKILL.name, COLD_EMAIL_ANATOMY_SKILL.name, COPY_FRAMEWORKS_SKILL.name, SUBJECT_SKILL.name,
+                     SEQUENCE_DESIGN_SKILL.name, EMAIL_FOLLOWUP_SKILL.name, EMAIL_WRITING_SKILL.name, DISCOVERY_SKILL.name,
+                     NEGOTIATION_SKILL.name],
+  email_strategist: [DELIVERABILITY_SKILL.name, UAE_TIMING_SKILL.name, EMAIL_METRICS_SKILL.name, EMAIL_FUNNEL_SKILL.name,
+                     SEQUENCE_DESIGN_SKILL.name, ANALYSIS_SKILL.name, SUBJECT_SKILL.name, LIST_HYGIENE_SKILL.name],
+  email_followup:   [DELIVERABILITY_SKILL.name, SEQUENCE_DESIGN_SKILL.name, EMAIL_FOLLOWUP_SKILL.name, COPY_FRAMEWORKS_SKILL.name,
+                     COLD_EMAIL_ANATOMY_SKILL.name, SUBJECT_SKILL.name, EMAIL_FUNNEL_SKILL.name, UAE_TIMING_SKILL.name],
+  email_replies:    [DELIVERABILITY_SKILL.name, REPLY_TRIAGE_SKILL.name, COLD_EMAIL_ANATOMY_SKILL.name, NEGOTIATION_SKILL.name,
+                     DISCOVERY_SKILL.name],
+  email_guard:      [EMAIL_GUARD_SKILL.name, DELIVERABILITY_SKILL.name, EMAIL_METRICS_SKILL.name, COLD_EMAIL_ANATOMY_SKILL.name],
+  email_creator:    [DELIVERABILITY_SKILL.name, COLD_EMAIL_ANATOMY_SKILL.name, COPY_FRAMEWORKS_SKILL.name, SEQUENCE_DESIGN_SKILL.name,
+                     SUBJECT_SKILL.name, UAE_TIMING_SKILL.name, EMAIL_FUNNEL_SKILL.name, EMAIL_WRITING_SKILL.name,
+                     DISCOVERY_SKILL.name],
+};
+
+/**
+ * Grants a library version gave and that turned out wrong for the role.
+ * «الكتابة البشرية» is WhatsApp's — two lines, no lists — and it loads last in
+ * the prompt, where it overruled the email team's own structure. Seeding
+ * removes these, the one case where a grant is taken back rather than added.
+ */
+export const WITHDRAWN: Record<string, string[]> = {
+  email:         [HUMAN_WRITING_SKILL.name],
+  email_replies: [HUMAN_WRITING_SKILL.name],
+  email_creator: [HUMAN_WRITING_SKILL.name],
 };
 
 export type SeedResult = { created: number; updated: number; untouched: number; granted: number };
@@ -178,6 +206,13 @@ export async function seedSkills(userId: number): Promise<SeedResult> {
       await db.insert(agentSkillGrantsTable)
         .values({ userId, role, skillId: skill.id }).onConflictDoNothing();
       r.granted++;
+    }
+  }
+
+  for (const [role, names] of Object.entries(WITHDRAWN)) {
+    for (const name of names) {
+      const skill = byName.get(name);
+      if (skill) await db.delete(agentSkillGrantsTable).where(and(eq(agentSkillGrantsTable.userId, userId), eq(agentSkillGrantsTable.role, role), eq(agentSkillGrantsTable.skillId, skill.id)));
     }
   }
 

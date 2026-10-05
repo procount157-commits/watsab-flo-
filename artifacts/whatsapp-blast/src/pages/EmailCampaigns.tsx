@@ -42,8 +42,10 @@ type Target = { kind: "list" | "folder" | "segment"; id: number } | null;
 type Form = {
   id?: number; name: string; target: Target; subject: string; subjectB: string; abPct: number; abWaitHours: number;
   html: string; when: "draft" | "now" | "later"; at: string;
+  /** en (the default) | ar | both — the message is checked against it. */
+  language: string;
 };
-const blank = (target: Target = null): Form => ({ name: "", target, subject: "", subjectB: "", abPct: 20, abWaitHours: 4, html: "", when: "now", at: "" });
+const blank = (target: Target = null): Form => ({ name: "", target, subject: "", subjectB: "", abPct: 20, abWaitHours: 4, html: "", when: "now", at: "", language: "en" });
 
 export function Campaigns({ initialListId, onUsedInitial }: { initialListId?: number | null; onUsedInitial?: () => void }) {
   const qc = useQueryClient();
@@ -122,7 +124,7 @@ export function Campaigns({ initialListId, onUsedInitial }: { initialListId?: nu
                   <div className="flex gap-1.5 flex-wrap">
                     {editable && <button onClick={() => start.mutate(c.id)} disabled={start.isPending} className={primary}><Play className="w-3 h-3" /> {c.status === "paused" ? "استأنف" : "ابدأ"}</button>}
                     {c.status === "sending" && <button onClick={() => pause.mutate(c.id)} className={ghost}><Pause className="w-3 h-3" /> أوقف</button>}
-                    {editable && <button onClick={() => setForm({ ...blank(), id: c.id, name: c.name, subject: c.subject, subjectB: c.subjectB ?? "", abPct: c.abPct || 20, abWaitHours: c.abWaitHours ?? 4, html: c.html, target: c.listId ? { kind: "list", id: c.listId } : c.segmentId ? { kind: "segment", id: c.segmentId } : null, when: "draft" })} className={ghost} title="تعديل"><Pencil className="w-3 h-3" /></button>}
+                    {editable && <button onClick={() => setForm({ ...blank(), id: c.id, name: c.name, subject: c.subject, subjectB: c.subjectB ?? "", abPct: c.abPct || 20, abWaitHours: c.abWaitHours ?? 4, html: c.html, target: c.listId ? { kind: "list", id: c.listId } : c.segmentId ? { kind: "segment", id: c.segmentId } : null, when: "draft", language: c.language ?? "en" })} className={ghost} title="تعديل"><Pencil className="w-3 h-3" /></button>}
                     <button onClick={() => test.mutate(c.id)} disabled={test.isPending} className={ghost} title="أرسل نسخة تجربة لبريدي"><Send className="w-3 h-3" /></button>
                     <button onClick={() => dup.mutate(c.id)} className={ghost} title="نسخ كمسودة"><Copy className="w-3 h-3" /></button>
                     <button onClick={() => confirm(`حذف حملة «${c.name}»؟`) && del.mutate(c.id)} className={cn(ghost, "hover:text-red-400")} title="حذف"><Trash2 className="w-3 h-3" /></button>
@@ -195,7 +197,7 @@ function Builder({ form, setForm, onDone }: { form: Form; setForm: (f: Form | nu
     if (!form.subject.trim() || !form.html.trim()) throw new Error("العنوان والرسالة مطلوبان");
     // A name from the subject, without its merge fields: "{{company}} — …" reads as "— …" otherwise.
     const name = form.name.trim() || form.subject.replace(/\{\{[^}]*\}\}/g, "").replace(/^[\s—–\-:،,]+/, "").trim().slice(0, 80) || "حملة";
-    const common = { name, subject: form.subject, html: form.html, subjectB: form.subjectB.trim() || null, abPct: form.subjectB.trim() ? form.abPct : 0, abWaitHours: form.abWaitHours };
+    const common = { name, subject: form.subject, html: form.html, subjectB: form.subjectB.trim() || null, abPct: form.subjectB.trim() ? form.abPct : 0, abWaitHours: form.abWaitHours, language: form.language };
     if (form.id) {
       await api(`/api/email/campaigns/${form.id}`, { method: "PATCH", body: JSON.stringify({ ...common, ...(form.target.kind === "list" ? { listId: form.target.id } : {}) }) });
       return form.id;
@@ -307,6 +309,9 @@ function Builder({ form, setForm, onDone }: { form: Form; setForm: (f: Form | nu
           </div>
         )}
         <div className="space-y-2">
+          <div className="flex items-center gap-2"><span className="text-[11px] text-muted-foreground">لغة الحملة:</span>
+            <select className={cn(input, "w-56 text-xs")} value={form.language} onChange={(e) => set({ language: e.target.value })}><option value="en">🇬🇧 الإنجليزية (افتراضي)</option><option value="ar">العربية — بطلبك</option><option value="both">الاثنتان</option></select>
+            {form.language !== "en" && <span className="text-[10px] text-yellow-400">غيّرت اللغة عن الافتراضية</span>}</div>
           <div><label className="text-[11px] font-semibold block mb-1">العنوان / Subject</label><input className={input} value={form.subject} onChange={(e) => set({ subject: e.target.value })} placeholder="{{company|Your company}} — is your AML framework inspection-ready?" /></div>
           <EmailEditor value={form.html} subject={form.subject} onChange={(html) => set({ html })} minHeight={340} />
           <p className="text-[10px] text-muted-foreground">التوقيع ورابط إلغاء الاشتراك وتصميم الشركة تُضاف تلقائياً. الزر يفتح واتساب برسالة جاهزة.</p>
@@ -436,7 +441,7 @@ function CreatorPanel() {
       <div className="flex items-center gap-2"><span className="text-xl">🧩</span><p className="font-semibold text-sm">طارق ينشئ حملة</p><button onClick={() => setOpen(false)} className="mr-auto text-muted-foreground"><X className="w-4 h-4" /></button></div>
       <div className="grid md:grid-cols-3 gap-3">
         <label className="text-[11px] text-muted-foreground">الخدمة<select className={cn(input, "mt-1")} value={f.service} onChange={(e) => setF({ ...f, service: e.target.value })}><option value="">اختر…</option>{services.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></label>
-<span className="text-[11px] text-muted-foreground flex items-center gap-1.5 self-end pb-2">🇬🇧 الإيميلات بالإنجليزية دائماً</span>
+<label className="text-[11px] text-muted-foreground">اللغة<select className={cn(input, "mt-1")} value={f.language} onChange={(e) => setF({ ...f, language: e.target.value })}><option value="en">🇬🇧 الإنجليزية (افتراضي)</option><option value="ar">العربية — بطلبك</option><option value="both">الاثنتان</option></select></label>
         <label className="text-[11px] text-muted-foreground">حجم الموجة<input type="number" className={cn(input, "mt-1")} value={f.take} onChange={(e) => setF({ ...f, take: Math.max(10, Number(e.target.value) || 10) })} /></label>
       </div>
       <div>

@@ -10,7 +10,7 @@ import { Link, useRoute, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Mail, Upload, Users, Megaphone, ListOrdered, FileText, Inbox, Settings2, Loader2, Play, Pause,
-  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, Stethoscope,
+  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, ListChecks, Stethoscope,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
@@ -21,6 +21,7 @@ import { Campaigns } from "./EmailCampaigns";
 import { EmailEditor, EmailPreviewModal } from "@/components/EmailEditor";
 import { KnowledgeTab } from "./EmailKnowledge";
 import { DashboardTab } from "./EmailDashboard";
+import { RegisterTab } from "./EmailRegister";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const card = "bg-card border border-card-border rounded-xl";
@@ -41,6 +42,7 @@ const TABS = [
   { key: "lists",     label: "القوائم",        icon: FolderOpen },
   { key: "contacts",  label: "الجمهور",        icon: Users },
   { key: "campaigns", label: "الحملات",         icon: Megaphone },
+  { key: "register",  label: "سجل الإرسال",    icon: ListChecks },
   { key: "import",    label: "رفع Excel",      icon: Upload },
   { key: "agent",     label: "نورة",           icon: Sparkles },
   { key: "knowledge", label: "المعرفة",        icon: BookOpen },
@@ -104,6 +106,7 @@ export default function EmailMarketing() {
       {tab === "agent"     && <AgentTab initialFilter={writeFor} onMissionCreated={() => navigate("/email/missions")} />}
       {tab === "knowledge" && <KnowledgeTab />}
       {tab === "missions"  && <MissionsTab />}
+      {tab === "register"  && <RegisterTab />}
       {tab === "campaigns" && <Campaigns initialListId={campaignFor} onUsedInitial={() => setCampaignFor(null)} />}
       {tab === "sequences" && <Sequences />}
       {tab === "templates" && <Templates />}
@@ -536,6 +539,23 @@ function SettingsTab() {
           <label className="text-xs flex items-center gap-2 pt-6"><input type="checkbox" checked={!!f.tracking} onChange={(e) => setF({ ...f, tracking: e.target.checked })} /> تتبّع الفتح والنقر</label></div>
         <div><label className="text-xs font-semibold block mb-1.5">التوقيع (HTML)</label><textarea className={cn(input, "min-h-[5rem] text-xs")} value={f.signature ?? ""} onChange={(e) => setF({ ...f, signature: e.target.value })} placeholder="{{sender}}<br>بروكاونت للمحاسبة<br>+971 …" /></div>
         <p className="text-[11px] text-muted-foreground">ابدأ بحصة صغيرة (٤٠ في الساعة، ٣٠٠ في اليوم) لعنوان جديد وارفعها بعد أسبوعين من ارتداد منخفض. الإرسال داخل ساعات العمل فقط.</p>
+      </div>
+      <div className={cn(card, "p-4 space-y-3")}>
+        <p className="text-sm font-semibold">اللغة والمتابعة</p>
+        <div className="grid md:grid-cols-2 gap-3">
+          <label className="text-xs">لغة الإيميلات الافتراضية
+            <select className={cn(input, "mt-1")} value={f.defaultLanguage ?? "en"} onChange={(e) => setF({ ...f, defaultLanguage: e.target.value })}>
+              <option value="en">🇬🇧 الإنجليزية (الأساس)</option><option value="ar">العربية</option><option value="both">العربية والإنجليزية</option>
+            </select>
+            <span className="block text-[10px] text-muted-foreground mt-1">كل حملة ومتابعة ورد تُكتب بها، ولا تتغير إلا إذا اخترت لغة أخرى لحملة بعينها.</span></label>
+          <label className="text-xs">شدة المتابعة
+            <select className={cn(input, "mt-1")} value={f.followIntensity ?? "intense"} onChange={(e) => setF({ ...f, followIntensity: e.target.value })}>
+              <option value="intense">مكثّفة — ٦ رسائل: يوم ٠، ٢، ٥، ٩، ١٤، ٢١</option>
+              <option value="normal">عادية — ٤ رسائل: يوم ٠، ٣، ٧، ١٤</option>
+              <option value="light">خفيفة — ٣ رسائل: يوم ٠، ٣، ١٠</option>
+            </select>
+            <span className="block text-[10px] text-muted-foreground mt-1">تتوقف لأي شخص فور أن يرد أو يلغي أو يرتد بريده. المكثّفة تحتاج قائمة نظيفة: ارتداد عالٍ يوقف الإرسال تلقائياً.</span></label>
+        </div>
       </div>
       <div className={cn(card, "p-4 space-y-3")}>
         <div className="flex items-center gap-2">

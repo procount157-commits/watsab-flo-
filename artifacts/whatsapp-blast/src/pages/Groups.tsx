@@ -10,10 +10,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Brain, Check, CheckCircle2, Copy, Eye, EyeOff, FileText, FolderOpen, History, Image as ImageIcon, Loader2, MessageSquareText,
-  Mic, Pencil, RefreshCw, Search, Sparkles, Users, X, Paperclip, Gauge,
+  Mic, Pencil, RefreshCw, Search, Sparkles, Users, X, Paperclip, Gauge, GraduationCap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
+import { TrainingCenter } from "./GroupsTraining";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const card = "bg-card border border-card-border rounded-xl";
@@ -35,6 +36,7 @@ export default function Groups() {
   const [sel, setSel] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [only, setOnly] = useState<"all" | "watched" | "pending">("all");
+  const [page, setPage] = useState<"groups" | "training">("groups");
   const inv = () => { for (const k of ["groups", "groups-stats", "group"]) qc.invalidateQueries({ queryKey: [k] }); };
   const sync = useMutation({ mutationFn: () => api("/api/groups/sync", { method: "POST" }), onSuccess: (d: any) => { inv(); toast.success(`تزامن ${n(d.groups)} قروب من واتساب`); }, onError: (e: Error) => toast.error(e.message) });
   const watchAll = useMutation({ mutationFn: (watch: boolean) => api("/api/groups/watch-all", { method: "POST", body: JSON.stringify({ watch }) }), onSuccess: (d: any) => { inv(); toast.success(`${n(d.updated)} قروب`); } });
@@ -50,7 +52,7 @@ export default function Groups() {
       <div className="flex items-start gap-3 flex-wrap">
         <div className="flex-1 min-w-[16rem]">
           <h1 className="text-2xl font-bold flex items-center gap-2"><Users className="w-6 h-6 text-primary" /> قروبات العملاء</h1>
-          <p className="text-sm text-muted-foreground mt-1">👥 سارة تقرأ قروباتك، تفهم كل عميل، وتقترح الرد — <b className="text-foreground">ولا ترسل شيئاً</b>. كل رسالة تُحفظ، وكل ملف يرسله العميل يُحفظ على جهازك في مجلد القروب.</p>
+          <p className="text-sm text-muted-foreground mt-1">👥 سارة تقرأ قروباتك وتتعلم من كل رسالة، تفهم كل عميل، وتقترح الرد — <b className="text-foreground">ولا ترسل شيئاً</b>. علّمها من «تدريب سارة». كل رسالة تُحفظ، وكل ملف يرسله العميل يُحفظ على جهازك في مجلد القروب.</p>
         </div>
         <button onClick={() => sync.mutate()} disabled={sync.isPending || !stats?.connected} className={ghost} title={stats?.connected ? "" : "واتساب غير متصل"}>{sync.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} زامن القروبات</button>
         <button onClick={() => watchAll.mutate(true)} className={primary}><Eye className="w-3.5 h-3.5" /> راقب كل قروبات العملاء</button>
@@ -67,6 +69,13 @@ export default function Groups() {
         </div>
       </div>
 
+      <div className="flex gap-1 border-b border-card-border">
+        {([["groups", "القروبات", Users], ["training", "تدريب سارة", GraduationCap]] as const).map(([k, l, Icon]) => (
+          <button key={k} onClick={() => setPage(k)} className={cn("flex items-center gap-1.5 px-4 py-2 text-sm border-b-2 -mb-px", page === k ? "border-primary text-foreground" : "border-transparent text-muted-foreground")}><Icon className="w-4 h-4" /> {l}</button>
+        ))}
+      </div>
+
+      {page === "training" ? <TrainingCenter groups={groups} /> : <>
       {stats?.folder && <p className="text-[11px] text-muted-foreground flex items-center gap-1.5"><FolderOpen className="w-3.5 h-3.5" /> الملفات والأرشيف على هذا الجهاز في: <code dir="ltr" className="text-foreground/80">{stats.folder}</code></p>}
       {stats && !stats.connected && <div className={cn(card, "p-3 text-xs border-yellow-500/40 text-yellow-400")}>واتساب غير متصل — القروبات تُحفظ حين يكون الرقم متصلاً.</div>}
 
@@ -102,6 +111,7 @@ export default function Groups() {
 
         {sel ? <GroupView id={sel} onChanged={inv} /> : <div className={cn(card, "p-10 text-center text-sm text-muted-foreground")}>اختر قروباً.</div>}
       </div>
+      </>}
     </div>
   );
 }
@@ -116,6 +126,7 @@ function GroupView({ id, onChanged }: { id: number; onChanged: () => void }) {
   const patch = useMutation({ mutationFn: (b: any) => api(`/api/groups/${id}`, { method: "PATCH", body: JSON.stringify(b) }), onSuccess: inv, onError: (e: Error) => toast.error(e.message) });
   const profile = useMutation({ mutationFn: () => api(`/api/groups/${id}/profile`, { method: "POST" }), onSuccess: () => { inv(); toast.success("فهمت سارة القروب — الملف في «عن القروب»"); setTab("about"); }, onError: (e: Error) => toast.error(e.message) });
   const suggest = useMutation({ mutationFn: () => api(`/api/groups/${id}/suggest`, { method: "POST" }), onSuccess: (d: any) => { inv(); d.none ? toast.info(d.why) : toast.success(d.status === "skip" ? "سارة: آخر رسالة لا تحتاج رداً" : "كتبت سارة اقتراحاً"); }, onError: (e: Error) => toast.error(e.message) });
+  const learn = useMutation({ mutationFn: () => api(`/api/groups/${id}/learn`, { method: "POST" }), onSuccess: (d: any) => { inv(); d.none ? toast.info("لا جديد تتعلمه — قرأت كل الرسائل") : toast.success(`قرأت ${n(d.read)} رسالة${d.lessons?.length ? ` وتعلّمت ${n(d.lessons.length)} درس` : ""}${d.profile ? " وحدّثت ملف القروب" : ""}`); }, onError: (e: Error) => toast.error(e.message) });
   const history = useMutation({ mutationFn: () => api(`/api/groups/${id}/history`, { method: "POST" }), onSuccess: () => { toast.success("طُلب سجل أقدم من واتساب — يصل خلال ثوانٍ"); setTimeout(inv, 8000); }, onError: (e: Error) => toast.error(e.message) });
   useEffect(() => { if (tab === "chat") bottom.current?.scrollIntoView({ block: "end" }); }, [data?.messages?.length, tab]);
 
@@ -132,13 +143,14 @@ function GroupView({ id, onChanged }: { id: number; onChanged: () => void }) {
         <div className="flex items-start gap-3 flex-wrap">
           <div className="flex-1 min-w-0">
             <p className="font-bold text-lg truncate">{g.subject ?? "قروب"}</p>
-            <p className="text-[11px] text-muted-foreground">{n(g.participants)} عضو · {n(g.messages)} رسالة محفوظة · آخر نشاط {ago(g.lastMessageAt)}{g.profileAt ? ` · فُهم قبل ${ago(g.profileAt)}` : ""}</p>
+            <p className="text-[11px] text-muted-foreground">{n(g.participants)} عضو · {n(g.messages)} رسالة محفوظة · آخر نشاط {ago(g.lastMessageAt)}{g.profileAt ? ` · فُهم قبل ${ago(g.profileAt)}` : ""}{g.learnedAt ? ` · تعلّمت منه قبل ${ago(g.learnedAt)}` : ""}</p>
           </div>
           <button onClick={() => patch.mutate({ watch: !g.watch })} className={g.watch ? cn(ghost, "border-primary/50 text-primary") : primary}>{g.watch ? <><Eye className="w-3.5 h-3.5" /> تحت المراقبة</> : <><EyeOff className="w-3.5 h-3.5" /> ابدأ المراقبة والاقتراح</>}</button>
         </div>
         <div className="flex gap-1.5 flex-wrap">
           <button onClick={() => profile.mutate()} disabled={profile.isPending} className={ghost}>{profile.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Brain className="w-3.5 h-3.5" />} افهمي القروب</button>
           <button onClick={() => suggest.mutate()} disabled={suggest.isPending} className={ghost}>{suggest.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />} اقترحي رداً الآن</button>
+          <button onClick={() => learn.mutate()} disabled={learn.isPending} className={ghost} title="تقرأ ما وصل منذ آخر قراءة الآن، بدل انتظار هدوء القروب">{learn.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GraduationCap className="w-3.5 h-3.5" />} تعلّمي من الجديد</button>
           <button onClick={() => history.mutate()} disabled={history.isPending} className={ghost}><History className="w-3.5 h-3.5" /> حمّل سجلاً أقدم</button>
           <label className="text-xs flex items-center gap-1.5 mr-auto text-muted-foreground"><input type="checkbox" checked={g.isCustomer} onChange={(e) => patch.mutate({ isCustomer: e.target.checked })} /> قروب عميل (تُحفظ ملفاته)</label>
         </div>

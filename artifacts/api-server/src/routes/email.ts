@@ -27,6 +27,7 @@ import { deleteContacts, deleteList } from "../lib/email/delete";
 import { diagnose } from "../lib/email/diagnose";
 import { campaignReadiness } from "../lib/email/readiness";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
+import { register as emailRegister } from "../lib/email/register";
 import { createWithCreator, SERVICES as CREATOR_SERVICES } from "../lib/email/creator";
 import { getAutopilot, saveAutopilot, runAutopilot } from "../lib/email/autopilot";
 import { teamStatus, activity as teamActivity } from "../lib/email/team";
@@ -103,6 +104,8 @@ router.put("/settings", async (req, res) => {
     apiKey: keep(b.apiKey, cur?.apiKey),
     fromName: b.fromName ?? null, fromEmail: b.fromEmail ?? null, replyTo: b.replyTo ?? null, signature: b.signature ?? null,
     layout: b.layout === "plain" ? "plain" : "branded",
+    defaultLanguage: ["en", "ar", "both"].includes(b.defaultLanguage) ? b.defaultLanguage : cur?.defaultLanguage ?? "en",
+    followIntensity: ["light", "normal", "intense"].includes(b.followIntensity) ? b.followIntensity : cur?.followIntensity ?? "intense",
     brandName: b.brandName ?? cur?.brandName ?? null, brandTagline: b.brandTagline ?? cur?.brandTagline ?? null,
     brandColor: b.brandColor ?? cur?.brandColor ?? null, brandAccent: b.brandAccent ?? cur?.brandAccent ?? null,
     logoUrl: b.logoUrl ?? cur?.logoUrl ?? null, website: b.website ?? cur?.website ?? null, phone: b.phone ?? cur?.phone ?? null, address: b.address ?? cur?.address ?? null,
@@ -801,6 +804,8 @@ router.post("/campaigns", async (req, res) => {
   const [c] = await db.insert(emailCampaignsTable).values({
     userId: req.session.userId!, name: String(name).slice(0, 160), listId: Number(listId) || null, segmentId, subject: String(subject).slice(0, 300), html: String(html),
     status: scheduledAt ? "scheduled" : "draft", scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+    // English unless the owner picked another for this campaign.
+    language: ["en", "ar", "both"].includes(req.body?.language) ? req.body.language : ((await getSettings(req.session.userId!))?.defaultLanguage ?? "en"),
     subjectB: subjectB ? String(subjectB).slice(0, 300) : null,
     abPct: subjectB ? Math.min(50, Math.max(0, Number(abPct) || 20)) : 0,
     abWaitHours: Math.min(48, Math.max(1, Number(abWaitHours) || 4)),
@@ -810,6 +815,7 @@ router.post("/campaigns", async (req, res) => {
 router.patch("/campaigns/:id", async (req, res) => {
   const set: Record<string, unknown> = {};
   for (const k of ["name", "subject", "html", "subjectB"] as const) if (req.body?.[k] !== undefined) set[k] = req.body[k];
+  if (["en", "ar", "both"].includes(req.body?.language)) set["language"] = req.body.language;
   if (req.body?.abPct !== undefined) set["abPct"] = Math.min(50, Math.max(0, Number(req.body.abPct) || 0));
   if (req.body?.abWaitHours !== undefined) set["abWaitHours"] = Math.min(48, Math.max(1, Number(req.body.abWaitHours) || 4));
   if (req.body?.listId !== undefined) set["listId"] = Number(req.body.listId) || null;
@@ -1060,6 +1066,15 @@ router.post("/knowledge/ask", async (req, res) => {
   res.json(await askKnowledge(req.session.userId!, q.slice(0, 500), req.body?.sector ? String(req.body.sector) : null));
 });
 
+// ── The register: who was written to and where each one stands ──
+router.get("/register", async (req, res) => {
+  const st = String(req.query["status"] ?? "all");
+  res.json(await emailRegister(req.session.userId!, {
+    status: (["all", "in_path", "replied", "finished", "stopped"].includes(st) ? st : "all") as any,
+    q: req.query["q"] ? String(req.query["q"]) : undefined, listId: Number(req.query["listId"]) || null, page: Number(req.query["page"]) || 0,
+  }));
+});
+
 // ── The follow-up dashboard and the team on its own ───────────────
 router.get("/dashboard", async (req, res) => res.json(await emailDashboard(req.session.userId!, Number(req.query["days"]) || 14)));
 router.get("/autopilot", async (req, res) => {
@@ -1079,7 +1094,7 @@ router.post("/creator", async (req, res) => {
   const b = req.body ?? {};
   const ids = (v: unknown) => (Array.isArray(v) ? v.map(Number).filter((n) => n > 0) : []);
   try {
-    res.json(await createWithCreator(req.session.userId!, { service: String(b.service ?? ""), language: ["ar", "en", "both"].includes(b.language) ? b.language : "ar",
+    res.json(await createWithCreator(req.session.userId!, { service: String(b.service ?? ""), language: ["ar", "en", "both"].includes(b.language) ? b.language : undefined,
       listIds: ids(b.listIds), folderIds: ids(b.folderIds), sectors: Array.isArray(b.sectors) ? b.sectors.map(String).slice(0, 10) : [], take: Number(b.take) || undefined, notes: typeof b.notes === "string" ? b.notes.slice(0, 2000) : "" }));
   } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
 });

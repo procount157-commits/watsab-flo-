@@ -181,9 +181,11 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
   const [ours] = inb.messageId ? await db.select({ subject: emailMessagesTable.subject }).from(emailMessagesTable).where(eq(emailMessagesTable.id, inb.messageId)).limit(1) : [null];
   const s = await getSettings(userId);
 
-  const [facts, skills, memory, docs] = await Promise.all([
+  const [facts, skills, replySkills, memory, docs] = await Promise.all([
     retrieve(userId, `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 500), 4).catch(() => []),
     skillsFor(userId, "sales", inb.intent as any || "question").catch(() => []),
+    // ليلى's craft — reading the reply and writing English B2B — whoever answers.
+    skillsFor(userId, "email_replies", "internal").catch(() => []),
     memoryPreamble(userId, "sales").catch(() => ""),
     // What the owner uploaded about the company and the field, the passages that bear on this message.
     passages(userId, `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 500), { sectors: contact?.sector ? [contact.sector] : [], limit: 3 }).catch(() => []),
@@ -198,11 +200,15 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
       "",
       "تكتب ردّ بريد إلكتروني على شركة راسلتها. البريد ليس واتساب: فقرتان إلى ثلاث، تحية باسم الشخص أو الشركة، توقيع باسمك، بلا رموز تعبيرية.",
       // The owner's rule: every email in English.
-      "اللغة: الإنجليزية دائماً — رد مهني واضح بالإنجليزية حتى لو كتب العميل بالعربية.",
+      // English by default — the owner's rule — unless he set the account's email language to another.
+      s?.defaultLanguage === "ar" ? "اللغة: العربية المهنية الواضحة." : s?.defaultLanguage === "both" ? "اللغة: لغة رسالته — عربية إن كتب عربياً، إنجليزية إن كتب إنجليزياً." : "اللغة: الإنجليزية — رد مهني واضح بالإنجليزية حتى لو كتب العميل بالعربية (الإنجليزية هي لغة البريد ما لم يغيّرها صاحب العمل).",
       "هدف الرد واحد: أن يتقدّم خطوة — سؤال تأهيل واحد، أو موعد مكالمة، أو ما يحتاجه ليقرر. لا تُعد شرح كل شيء.",
       "لا رقماً أو نسبة أو مهلة أو سعراً ليس في المعلومات أدناه. إن سُئلت عن سعر غير موجود فاطلب ما يحدّده.",
       "لا تذكر أنك ذكاء اصطناعي.",
-      skillsPreamble(skills.filter((x) => /التفاوض|تشخيص|احتواء|قراءة نية/.test(x.name))),
+      skillsPreamble([
+        ...replySkills.filter((x) => /تصنيف الردود|تشريح رسالة/.test(x.name)),
+        ...skills.filter((x) => /التفاوض|تشخيص|احتواء|قراءة نية/.test(x.name)),
+      ]),
       memory,
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
       facts.length || docs.length ? `معلومات مفيدة:\n${[...facts.map((f) => `${f.entry.title}\n${f.entry.content}`), ...docs.map((d) => `${d.title}\n${d.text}`)].map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}` : "لا توجد معلومة محددة — اسأل عمّا تحتاجه لتُجيب بدقة.",

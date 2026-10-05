@@ -5,12 +5,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Router } from "express";
+import multer from "multer";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
-import { db, waGroupsTable, waGroupMessagesTable, waGroupSuggestionsTable } from "@workspace/db";
+import { db, waGroupsTable, waGroupMessagesTable, waGroupSuggestionsTable, waGroupKnowledgeTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getSocket, registerOnConnectHook } from "../lib/whatsapp";
 import { FILES_ROOT, backfill, folderFor, oldestMessage, syncGroups } from "../lib/groups/store";
 import { accuracy, buildProfile, ensureGroupsAgent, feedback, suggestFor } from "../lib/groups/assistant";
+import { TAUGHT_KINDS, knowledgeCounts, learnFromGroup, listKnowledge, teach, teachFile } from "../lib/groups/training";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -147,6 +149,67 @@ router.post("/suggestions/:id/feedback", async (req, res) => {
   if (b.verdict === "edited" && !String(b.text ?? "").trim()) return res.status(400).json({ error: "اكتب الرد الصحيح" });
   try { await feedback(req.session.userId!, Number(req.params.id), { verdict: b.verdict, text: b.text, note: b.note }); res.json({ ok: true }); }
   catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+
+// ── Training: what the owner teaches her, and what she learned ────
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
+
+router.get("/training", async (req, res) => {
+  const userId = req.session.userId!;
+  const source = req.query["source"] === "learned" ? "learned" : req.query["source"] === "owner" ? "owner" : undefined;
+  const [items, counts] = await Promise.all([
+    listKnowledge(userId, { source, groupJid: req.query["group"] ? String(req.query["group"]) : null }),
+    knowledgeCounts(userId),
+  ]);
+  res.json({ items, counts });
+});
+
+router.post("/training", async (req, res) => {
+  const b = req.body ?? {};
+  if (!TAUGHT_KINDS.includes(b.kind)) return res.status(400).json({ error: "نوع التدريب غير معروف" });
+  try { res.json(await teach(req.session.userId!, { kind: b.kind, title: b.title, content: b.content, question: b.question, answer: b.answer, groupJid: b.groupJid || null })); }
+  catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+
+router.post("/training/upload", upload.array("files", 10), async (req, res) => {
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  if (!files.length) return res.status(400).json({ error: "اختر ملفاً" });
+  const done: Array<{ file: string; id?: number; chars?: number; error?: string }> = [];
+  for (const f of files) {
+    // Multer reads the name as latin1; Arabic file names arrive as UTF-8 bytes.
+    const re = Buffer.from(f.originalname, "latin1").toString("utf8");
+    const name = /[\u0080-\u00ff]/.test(f.originalname) && !re.includes("\ufffd") ? re : f.originalname;
+    try { const r = await teachFile(req.session.userId!, f.buffer, name, req.body?.groupJid || null); done.push({ file: name, id: r.id, chars: r.content?.length ?? 0 }); }
+    catch (err: any) { done.push({ file: name, error: String(err?.message ?? err) }); }
+  }
+  res.json({ files: done });
+});
+
+router.patch("/training/:id", async (req, res) => {
+  const b = req.body ?? {}, set: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof b.active === "boolean") set["active"] = b.active;
+  for (const k of ["title", "content", "question", "answer"] as const) if (typeof b[k] === "string") set[k] = b[k].slice(0, k === "title" ? 200 : 200_000);
+  const [row] = await db.update(waGroupKnowledgeTable).set(set)
+    .where(and(eq(waGroupKnowledgeTable.id, Number(req.params.id)), eq(waGroupKnowledgeTable.userId, req.session.userId!))).returning();
+  if (!row) return res.status(404).json({ error: "غير موجود" });
+  res.json(row);
+});
+
+router.delete("/training/:id", async (req, res) => {
+  const r = await db.delete(waGroupKnowledgeTable)
+    .where(and(eq(waGroupKnowledgeTable.id, Number(req.params.id)), eq(waGroupKnowledgeTable.userId, req.session.userId!))).returning({ id: waGroupKnowledgeTable.id });
+  res.json({ deleted: r.length });
+});
+
+/** Read what is new in this group now, rather than when it goes quiet. */
+router.post("/:id/learn", async (req, res) => {
+  const userId = req.session.userId!;
+  const g = await own(userId, Number(req.params.id));
+  if (!g) return res.status(404).json({ error: "القروب غير موجود" });
+  try {
+    const r = await learnFromGroup(userId, g.jid, { force: true });
+    res.json(r ?? { read: 0, lessons: [], profile: false, none: true });
+  } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
 });
 
 /** A filed file, from inside the groups folder only. */

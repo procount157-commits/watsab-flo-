@@ -26,8 +26,9 @@ import { notify, esc } from "../telegram";
 import { startCampaign, enrolInSequence } from "./service";
 import { writeCampaign, rememberLesson, learnFrom, type EmailDraft } from "./agent";
 import { count, describe } from "./segments";
-import { EMAIL_LANGUAGE, isEnglish, NOT_ENGLISH } from "./language";
-import { trackingActive, retestHeld } from "./service";
+import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
+import { INTENSITY, asIntensity } from "./intensity";
+import { trackingActive, retestHeld, getSettings } from "./service";
 import { activity, guardCheck, onDuty, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
 
@@ -40,14 +41,17 @@ async function set(id: number, patch: Partial<typeof emailMissionsTable.$inferIn
 
 export async function createMission(userId: number, input: {
   name: string; goal: string; filter: SegmentFilter; language?: string; tone?: string | null; requireApproval?: boolean; followAfterHours?: number;
-  agentRole?: EmailRole; sourceListId?: number | null;
+  agentRole?: EmailRole; sourceListId?: number | null; intensity?: string | null;
 }) {
+  // The account's default language (English) unless this mission asked for another.
+  const accountLang = asLanguage((await getSettings(userId))?.defaultLanguage);
   const [m] = await db.insert(emailMissionsTable).values({
     userId, name: input.name.slice(0, 160), goal: input.goal.slice(0, 2000), filter: input.filter,
-    language: EMAIL_LANGUAGE, tone: input.tone ?? null,
+    // English unless the owner asked for another for this mission.
+    language: asLanguage(input.language, accountLang), tone: input.tone ?? null, intensity: input.intensity ?? null,
     requireApproval: input.requireApproval !== false,
-    // Day 3: the first follow-up, by default.
-    followAfterHours: Math.min(24 * 14, Math.max(24, Number(input.followAfterHours) || 72)),
+    // The first follow-up's day comes from the intensity (day 2 when intensive) unless given.
+    followAfterHours: Math.min(24 * 14, Math.max(24, Number(input.followAfterHours) || INTENSITY[asIntensity(input.intensity, asIntensity((await getSettings(userId))?.followIntensity))].firstAfterHours)),
     agentRole: input.agentRole ?? null, sourceListId: input.sourceListId ?? null,
   }).returning();
   await log(m!.id, `أُنشئت المهمة: ${describe(input.filter)} — ${input.goal.slice(0, 200)}`, "start");
@@ -62,7 +66,7 @@ async function launch(m: EmailMission, d: EmailDraft) {
 
   const [seg] = await db.insert(emailSegmentsTable).values({ userId: m.userId, name: `مهمة: ${m.name}`.slice(0, 160), filter }).returning();
   const [camp] = await db.insert(emailCampaignsTable).values({
-    userId: m.userId, name: m.name, segmentId: seg!.id, missionId: m.id, createdBy: "agent",
+    userId: m.userId, name: m.name, segmentId: seg!.id, missionId: m.id, createdBy: "agent", language: asLanguage(m.language),
     // With opens measured, the test slice is read after a day — enough time for a B2B inbox to be opened.
     subject: d.subjects[0]!, subjectB: d.subjects[1] ?? null, abPct: d.subjects[1] && n >= 40 ? 20 : 0, abWaitHours: (await trackingActive(m.userId)) ? 24 : 4,
     html: d.html, status: "draft",
@@ -70,10 +74,10 @@ async function launch(m: EmailMission, d: EmailDraft) {
   // The sequence after the first email: day 3 the touch for what they did (opened → a new angle and a
   // question; did not open → the same offer, shorter, under a new subject), day 7 something useful,
   // day 14 the last note. Each stops the moment they reply, unsubscribe or bounce.
-  const tail = [
-    ...d.followups.filter((f) => f.audience === "value").slice(0, 1).map((f) => ({ afterHours: 96, subject: f.subject, html: f.html })),
-    ...d.followups.filter((f) => f.audience === "breakup").slice(0, 1).map((f) => ({ afterHours: 264, subject: f.subject, html: f.html })),
-  ];
+  // The steps this mission's intensity calls for after the first follow-up, each with the
+  // follow-up the writer wrote for it (missing ones are skipped rather than invented).
+  const plan = INTENSITY[asIntensity(m.intensity, asIntensity((await getSettings(m.userId))?.followIntensity))];
+  const tail = plan.steps.flatMap((st) => d.followups.filter((f) => f.audience === st.kind).slice(0, 1).map((f) => ({ afterHours: st.afterHours, subject: f.subject, html: f.html, kind: st.kind })));
   const seqFor = async (audience: "warm" | "cold") => {
     const first = d.followups.filter((f) => f.audience === audience).slice(0, 1).map((f) => ({ afterHours: 0, subject: f.subject, html: f.html }));
     const steps = [...first, ...tail];
@@ -95,7 +99,8 @@ export async function approve(userId: number, id: number, edited?: Partial<Email
   const [m] = await db.select().from(emailMissionsTable).where(and(eq(emailMissionsTable.id, id), eq(emailMissionsTable.userId, userId))).limit(1);
   if (!m || m.stage !== "awaiting_approval" || !m.pending) throw new Error("لا شيء ينتظر الموافقة");
   const d = { ...(m.pending as EmailDraft), ...(edited ?? {}) } as EmailDraft;
-  if (![d.html, ...d.subjects].every(isEnglish)) throw new Error(NOT_ENGLISH);
+  const lang = asLanguage(m.language);
+  if (![d.html, ...d.subjects].every((t) => matchesLanguage(t, lang))) throw new Error(wrongLanguage(lang));
   // Nobody to send to is said now, and the mission keeps waiting — approving
   // it into a pause, with nothing said, read as "approval does not work".
   const n = await count(userId, m.filter as SegmentFilter, true);
@@ -121,14 +126,14 @@ export async function runMission(m: EmailMission): Promise<void> {
 
   if (m.stage === "draft") {
     const role = (m.agentRole as EmailRole | null) ?? "email";
-    const w = await writeCampaign(m.userId, { filter, goal: m.goal, language: m.language, tone: m.tone, role });
+    const w = await writeCampaign(m.userId, { filter, goal: m.goal, language: m.language, tone: m.tone, role, intensity: m.intensity ?? (await getSettings(m.userId))?.followIntensity });
     if (!w) { await log(m.id, "تعذّرت الكتابة — النموذج لم يستجب. أحاول في الجولة القادمة.", "error"); await set(m.id, {}); return; }
     await log(m.id, `كتبت الحملة (${w.provider}): «${w.draft.subjects.join("» / «")}» — ${w.draft.why}`, "write");
     await activity(m.userId, role, "write", `كتب حملة «${m.name}» لـ ${w.audience.count} شركة: «${w.draft.subjects[0]}»`, { missionId: m.id });
     // ماجد reads it before anything goes out on its own; what he finds sends it to the owner instead.
-    if (!m.requireApproval && ![w.draft.html, ...w.draft.subjects].every(isEnglish)) {
+    if (!m.requireApproval && ![w.draft.html, ...w.draft.subjects].every((t) => matchesLanguage(t, asLanguage(m.language)))) {
       await set(m.id, { stage: "awaiting_approval", pending: w.draft as any });
-      await log(m.id, NOT_ENGLISH, "error");
+      await log(m.id, wrongLanguage(asLanguage(m.language)), "error");
       return;
     }
     if (!m.requireApproval && (await onDuty(m.userId, "email_guard"))) {
@@ -229,7 +234,7 @@ export async function missionReport(m: EmailMission) {
     db.select({ k: emailContactsTable.sector, ...agg }).from(emailMessagesTable).innerJoin(emailContactsTable, eq(emailContactsTable.id, emailMessagesTable.contactId)).where(base).groupBy(emailContactsTable.sector).orderBy(sql`2 desc`).limit(12),
     // By step of the path: the first email, day 3 (opened / not opened), day 7, day 14.
     db.select({ k: sql<string>`case when ${emailMessagesTable.campaignId} = ${m.campaignId} then 'first'
-        when ${emailSequenceJobsTable.stepIndex} = 1 then 'value' when ${emailSequenceJobsTable.stepIndex} >= 2 then 'breakup'
+        when ${emailSequenceJobsTable.stepIndex} >= 1 then 'step' || ${emailSequenceJobsTable.stepIndex}::text
         when ${emailSequenceJobsTable.sequenceId} = ${m.warmSequenceId ?? -1} then 'warm' else 'cold' end`, ...agg })
       .from(emailMessagesTable).leftJoin(emailSequenceJobsTable, eq(emailSequenceJobsTable.id, emailMessagesTable.sequenceJobId)).where(base).groupBy(sql`1`),
   ]);
@@ -277,8 +282,11 @@ export function startMissionWorker(): void {
 
 export async function missionsFor(userId: number) {
   const rows = await db.select().from(emailMissionsTable).where(eq(emailMissionsTable.userId, userId)).orderBy(desc(emailMissionsTable.createdAt));
+  const accountIntensity = asIntensity((await getSettings(userId))?.followIntensity);
   return Promise.all(rows.map(async (m) => ({
     ...m,
+    // Which path its follow-ups take, so the page can name step 1, 2, 3… by what they are.
+    path: { intensity: asIntensity(m.intensity, accountIntensity), steps: INTENSITY[asIntensity(m.intensity, accountIntensity)].steps },
     audience: describe(m.filter as SegmentFilter),
     audienceCount: await count(userId, m.filter as SegmentFilter, true),
     log: await db.select().from(emailMissionLogTable).where(eq(emailMissionLogTable.missionId, m.id)).orderBy(desc(emailMissionLogTable.createdAt)).limit(30),
@@ -305,10 +313,10 @@ async function rescueSubjects(m: EmailMission, c: typeof emailCampaignsTable.$in
   }
   const filter = m.filter as SegmentFilter;
   const w = await writeCampaign(m.userId, {
-    filter, role: (m.agentRole as EmailRole | null) ?? "email",
+    filter, role: (m.agentRole as EmailRole | null) ?? "email", language: m.language,
     goal: `${m.goal}\n\nThe first subjects were opened by almost nobody: «${c.subject}» and «${c.subjectB ?? ""}». Write two NEW subjects with completely different angles (a question about their business; a specific fact from the knowledge base) — short, no hype, the company name in at least one. Keep the email body as it is.`,
   });
-  const subjects = w?.draft.subjects.filter((x) => isEnglish(x)).slice(0, 2) ?? [];
+  const subjects = w?.draft.subjects.filter((x) => matchesLanguage(x, asLanguage(m.language))).slice(0, 2) ?? [];
   if (subjects.length < 2) { await log(m.id, "تعذّرت كتابة عنوانين جديدين — أحاول في الجولة القادمة.", "error"); return; }
   const r = await retestHeld(c.id, subjects[0]!, subjects[1]!);
   await log(m.id, `نسبة الفتح كانت منخفضة — جُرّب عنوانان جديدان على ${r.slice} من ${r.held} المنتظرين: «${subjects[0]}» / «${subjects[1]}».`, "ab");

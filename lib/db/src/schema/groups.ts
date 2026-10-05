@@ -19,6 +19,9 @@ export const waGroupsTable = pgTable("wa_groups", {
   profileAt:     timestamp("profile_at", { withTimezone: true }),
   messages:      integer("messages").notNull().default(0),
   lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+  /** her reading of the group has reached here; later messages are new to her */
+  learnedUpto:   timestamp("learned_upto", { withTimezone: true }),
+  learnedAt:     timestamp("learned_at", { withTimezone: true }),
   createdAt:     timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt:     timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [unique().on(t.userId, t.jid)]);
@@ -60,3 +63,24 @@ export const waGroupSuggestionsTable = pgTable("wa_group_suggestions", {
   decidedAt:        timestamp("decided_at", { withTimezone: true }),
 }, (t) => [index("idx_wa_group_suggestions").on(t.userId, t.groupJid, t.createdAt)]);
 export type WaGroupSuggestion = typeof waGroupSuggestionsTable.$inferSelect;
+
+// See migration 035: what the owner taught the groups agent, and what she learned herself.
+export const waGroupKnowledgeTable = pgTable("wa_group_knowledge", {
+  id:        serial("id").primaryKey(),
+  userId:    integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  /** null: every group */
+  groupJid:  varchar("group_jid", { length: 80 }),
+  /** instruction | qa | text | document | lesson */
+  kind:      varchar("kind", { length: 20 }).notNull(),
+  /** owner | learned */
+  source:    varchar("source", { length: 10 }).notNull().default("owner"),
+  title:     varchar("title", { length: 200 }),
+  content:   text("content"),
+  question:  text("question"),
+  answer:    text("answer"),
+  active:    boolean("active").notNull().default(true),
+  used:      integer("used").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("idx_wa_group_knowledge").on(t.userId, t.active, t.kind)]);
+export type WaGroupKnowledge = typeof waGroupKnowledgeTable.$inferSelect;

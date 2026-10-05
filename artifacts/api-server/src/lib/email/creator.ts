@@ -55,7 +55,7 @@ export async function createWithCreator(userId: number, input: {
   ].filter(Boolean).join("\n\n");
   const m = await createMission(userId, {
     name: `${svc.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
-    goal: `${svc.goal}\n\n${notes}`, filter, language: "en", requireApproval: true, agentRole: "email_creator",
+    goal: `${svc.goal}\n\n${notes}`, filter, language: input.language, requireApproval: true, agentRole: "email_creator",
   });
   await activity(userId, "email_creator", "create", `بدأ بناء حملة «${svc.label}» لـ ${n} شركة (${describe(filter)}) — تنتظر موافقتك حين تُكتب.`, { missionId: m.id });
   // He writes now rather than at the next round, so the owner can read it in a minute.

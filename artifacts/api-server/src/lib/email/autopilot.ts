@@ -59,8 +59,8 @@ export async function saveAutopilot(userId: number, b: any): Promise<EmailAutopi
     followAfterHours: clamp(b.followAfterHours, 24, 24 * 14, cur.followAfterHours),
     maxTouches: clamp(b.maxTouches, 1, 6, cur.maxTouches),
     quietDays: clamp(b.quietDays, 2, 30, cur.quietDays),
-    // Every email in English — the owner's rule; the column stays for the record.
-    language: "en",
+    // English unless the owner chose another.
+    language: ["en", "ar", "both"].includes(b.language) ? b.language : cur.language,
     updatedAt: new Date(),
   };
   const [row] = await db.insert(emailAutopilotTable).values(values).onConflictDoUpdate({ target: emailAutopilotTable.userId, set: values }).returning();
