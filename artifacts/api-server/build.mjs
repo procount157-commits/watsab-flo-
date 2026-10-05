@@ -32,6 +32,8 @@ async function buildAll() {
       // Lazily requires chromium-bidi by a path esbuild cannot follow, and
       // there is nothing to gain from bundling a browser driver anyway.
       "playwright-core",
+      // Finds its binary beside its own file; bundled, that file is dist/index.mjs and the binary is not there.
+      "ffmpeg-static",
       "sharp",
       "jimp",
       "@jimp/*",

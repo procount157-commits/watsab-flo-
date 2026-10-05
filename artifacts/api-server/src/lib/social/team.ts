@@ -14,6 +14,7 @@ import { db, botEmployeesTable, agentTasksTable, businessProfileTable, socialAct
 import { memoryPreamble } from "../agent-memory";
 import { skillsFor, skillsPreamble } from "../agent-skills";
 import { logger } from "../logger";
+import { corePrompt } from "../prompt-core";
 import { PLATFORM, type SocialPlatform } from "./platforms";
 
 export const JOBS = ["manager", "watcher", "triage", "writer", "inviter", "dm", "prospector", "qualify", "followup", "creator", "guard", "analyst"] as const;
@@ -137,15 +138,14 @@ export async function voiceFor(userId: number, platform: SocialPlatform, job: Jo
   const me = team.find((e) => e.role === role);
   const def = teamDefs(platform).find((d) => d.role === role)!;
   const [profile] = await db.select({ guardrails: businessProfileTable.guardrails }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
-  return [
-    `اسمك ${me?.name ?? def.name}، ${me?.title ?? def.title} في فريق ${PLATFORM[platform].labelAr}.`,
-    me?.persona ?? def.persona,
-    profile?.guardrails ? `ما لا يُقال أبداً بأمر صاحب العمل: ${profile.guardrails}` : "",
-    "",
-    doc,
-    memory ? `\n${memory}` : "",
-    skillsPreamble(skills),
-  ].filter(Boolean).join("\n");
+  return corePrompt({
+    channel: "social",
+    identity: `اسمك ${me?.name ?? def.name}، ${me?.title ?? def.title} في فريق ${PLATFORM[platform].labelAr}.`,
+    persona: me?.persona ?? def.persona,
+    rules: [doc, profile?.guardrails ? `ما لا يُقال أبداً بأمر صاحب العمل: ${profile.guardrails}` : ""],
+    context: [memory, skillsPreamble(skills)],
+    check: [`□ ${PLATFORM[platform].voice}`],
+  });
 }
 
 // ── What the team did ────────────────────────────────────────────

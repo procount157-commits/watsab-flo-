@@ -20,6 +20,7 @@ import { db, botEmployeesTable, agentTasksTable, businessProfileTable, emailAgen
 import { memoryPreamble } from "../agent-memory";
 import { skillsFor, skillsPreamble } from "../agent-skills";
 import { logger } from "../logger";
+import { corePrompt } from "../prompt-core";
 
 export const EMAIL_TEAM = ["email", "email_strategist", "email_followup", "email_replies", "email_guard", "email_creator"] as const;
 export type EmailRole = typeof EMAIL_TEAM[number];
@@ -200,15 +201,13 @@ export async function teamVoice(userId: number, role: EmailRole): Promise<string
   ]);
   const me = team.find((e) => e.role === role);
   const def = EMAIL_TEAM_DEFS.find((d) => d.role === role)!;
-  return [
-    `اسمك ${me?.name ?? def.name}، ${me?.title ?? def.title} في فريق التسويق بالبريد لدى بروكاونت للمحاسبة.`,
-    me?.persona ?? def.persona,
-    profile?.guardrails ? `ما لا يُقال أبداً بأمر صاحب العمل: ${profile.guardrails}` : "",
-    "",
-    EMAIL_DOCTRINE,
-    memory ? `\n${memory}` : "",
-    skillsPreamble(skills),
-  ].filter(Boolean).join("\n");
+  return corePrompt({
+    channel: "email",
+    identity: `اسمك ${me?.name ?? def.name}، ${me?.title ?? def.title} في فريق التسويق بالبريد لدى بروكاونت للمحاسبة.`,
+    persona: me?.persona ?? def.persona,
+    rules: [EMAIL_DOCTRINE, profile?.guardrails ? `ما لا يُقال أبداً بأمر صاحب العمل: ${profile.guardrails}` : ""],
+    context: [memory, skillsPreamble(skills)],
+  });
 }
 
 /** What an agent did, for the dashboard's feed. */

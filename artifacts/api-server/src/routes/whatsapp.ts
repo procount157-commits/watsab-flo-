@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, desc, sql, and, asc } from "drizzle-orm";
 import { db, waSessionEventsTable, contactGroupsTable, contactsTable, incomingMessagesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable } from "@workspace/db";
-import { getStatus, getQr, getHealth, getSyncStats, logout, initWhatsApp, forceResync, extractPhones, extractContacts, sendMessage, resetSession, autoHeal, requestPairingCode } from "../lib/whatsapp";
+import { getStatus, getQr, getHealth, getSyncStats, logout, initWhatsApp, forceResync, extractPhones, extractContacts, sendMessage, sendVoiceNote, resetSession, autoHeal, requestPairingCode } from "../lib/whatsapp";
 import { requireAuth } from "../lib/auth";
 import { takeover } from "../lib/lead-card";
 
@@ -569,6 +569,20 @@ router.get("/inbox/:phone", async (req, res) => {
     fromMe:    r.fromMe,
     createdAt: Math.floor(new Date(r.createdAt).getTime() / 1000),
   })));
+});
+
+// POST /api/whatsapp/inbox/:phone/voice — the words, spoken, as a voice note
+router.post("/inbox/:phone/voice", async (req, res) => {
+  const userId = req.session.userId!;
+  const { phone } = req.params;
+  const text = String((req.body as any)?.text ?? "").trim();
+  if (!text) return res.status(400).json({ error: "اكتب ما يُقال" });
+  try {
+    await sendVoiceNote(userId, phone, text);
+    await takeover(userId, phone, "app").catch(() => {});
+    const [saved] = await db.insert(waThreadMessagesTable).values({ userId, phone, text, fromMe: true, msgType: "voice" }).returning();
+    res.json({ id: saved.id, text, fromMe: true, voice: true, createdAt: Math.floor(Date.now() / 1000) });
+  } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err).slice(0, 200) }); }
 });
 
 // POST /api/whatsapp/inbox/:phone/send

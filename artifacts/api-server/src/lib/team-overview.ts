@@ -12,6 +12,7 @@ import { asAgent } from "./agent-context";
 import { teamVoice, EMAIL_TEAM, type EmailRole } from "./email/team";
 import { voiceFor, jobOf } from "./social/team";
 import { PLATFORM, type SocialPlatform } from "./social/platforms";
+import { corePrompt } from "./prompt-core";
 
 export const DEPARTMENTS: Array<{ key: string; label: string; match: (role: string) => boolean }> = [
   { key: "core", label: "واتساب والإدارة", match: (r) => ["chief", "sales", "support", "followup", "intake", "collector", "ops", "monitor"].includes(r) },
@@ -70,7 +71,7 @@ export async function tryEmployee(userId: number, role: string, message: string)
   const job = jobOf(role);
   const voice = platform && job ? await voiceFor(userId, platform, job)
     : (EMAIL_TEAM as readonly string[]).includes(role) ? await teamVoice(userId, role as EmailRole)
-    : [`اسمك ${e.name}، ${e.title ?? ""}.`, e.persona ?? ""].filter(Boolean).join("\n");
+    : corePrompt({ channel: "whatsapp", identity: `اسمك ${e.name}، ${e.title ?? ""}.`, persona: e.persona });
   const out = await asAgent(userId, role, () => complete([
     { role: "system", content: `${voice}\n\nهذه تجربة من صاحب العمل ولن تُرسل لأحد. تصرّف بالضبط كما تتصرف في عملك الحقيقي: إن كانت رسالة عميل فاكتب ردك عليها، وإن كانت مهمة فأنجزها، وإن كانت سؤالاً عن طريقة عملك فاشرحها باختصار.` },
     { role: "user", content: message.slice(0, 3_000) },

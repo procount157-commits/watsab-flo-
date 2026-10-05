@@ -21,7 +21,8 @@ import { newToken, renderEmail, firstName, companyName, personalize, unsubscribe
 import { brandOf } from "./layout";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
-import { byRisk, domainSignals, verifyDomains } from "./hygiene";
+import { byRisk, domainSignals, verifyDomains, holdRiskyQueued } from "./hygiene";
+import { activity } from "./team";
 
 const SITE_URL = () => (process.env["SITE_URL"] ?? "").replace(/\/+$/, "");
 const SECRET   = () => process.env["SESSION_SECRET"] ?? "wam";
@@ -151,14 +152,14 @@ export async function startCampaign(userId: number, campaignId: number): Promise
   });
   for (let i = 0; i < batch.length; i += 200) await db.insert(emailMessagesTable).values(batch.slice(i, i + 200));
 
-  await db.update(emailCampaignsTable).set({ status: "sending", startedAt: c.startedAt ?? new Date(), pauseReason: null })
+  await db.update(emailCampaignsTable).set({ status: "sending", startedAt: c.startedAt ?? new Date(), pauseReason: null, pausedBy: null })
     .where(eq(emailCampaignsTable.id, c.id));
   logger.info({ userId, campaignId: c.id, queued, skipped, risky, ab: testing ? split : null }, "حملة بريد بدأت");
   return { queued, skipped, risky, ab: testing ? split : null } as { queued: number; skipped: number; risky: number; ab?: typeof split | null };
 }
 
 export async function pauseCampaign(userId: number, campaignId: number, reason: string | null = null) {
-  await db.update(emailCampaignsTable).set({ status: "paused", pauseReason: reason })
+  await db.update(emailCampaignsTable).set({ status: "paused", pauseReason: reason, pausedBy: "owner" })
     .where(and(eq(emailCampaignsTable.id, campaignId), eq(emailCampaignsTable.userId, userId)));
 }
 
@@ -262,9 +263,29 @@ export function varsFor(c: EmailContact | null, s?: EmailSettings | null): Recor
 
 const lastSentAt = new Map<number, number>();
 const heldUntil  = new Map<number, number>();
+/** Accounts whose queue was already swept for risky addresses this process. */
+const acted = new Set<number>();
+
+/** The hold is over: what the guard paused goes back to sending. What the owner paused stays. */
+export async function liftHold(userId: number) {
+  heldUntil.delete(userId);
+  acted.delete(userId);
+  await db.update(emailSettingsTable).set({ guardHoldUntil: null }).where(eq(emailSettingsTable.userId, userId));
+  const r = await db.update(emailCampaignsTable).set({ status: "sending", pauseReason: null, pausedBy: null })
+    .where(and(eq(emailCampaignsTable.userId, userId), eq(emailCampaignsTable.status, "paused"), eq(emailCampaignsTable.pausedBy, "guard"))).returning({ id: emailCampaignsTable.id });
+  if (r.length) {
+    await activity(userId, "email_guard", "resume", `انتهت مهلة الإيقاف — استُؤنفت ${r.length} حملة`).catch(() => {});
+    await notify(userId, `<b>📧 استُؤنف إرسال البريد</b>\nانتهت مهلة الحارس واستُؤنفت ${r.length} حملة.`).catch(() => {});
+  }
+  return r.length;
+}
 
 export async function signals(userId: number) {
-  const day = new Date(Date.now() - 24 * 3_600_000);
+  // A hold is lifted by time, not re-armed by what caused it: once the guard
+  // has held, only what happened after that counts toward the next verdict.
+  const [st] = await db.select({ heldAt: emailSettingsTable.guardHeldAt }).from(emailSettingsTable).where(eq(emailSettingsTable.userId, userId)).limit(1);
+  const dayAgo = new Date(Date.now() - 24 * 3_600_000);
+  const day = st?.heldAt && st.heldAt > dayAgo ? st.heldAt : dayAgo;
   const [[row], [first]] = await Promise.all([
     db.select({
       sent:  sql<number>`count(*) filter (where ${emailEventsTable.type} = 'sent')`,
@@ -307,14 +328,28 @@ async function drainOne(userId: number) {
 
   const now = Date.now();
   if ((heldUntil.get(userId) ?? 0) > now) return;
+  // A hold written to the account outlives a restart; when it ends, what it paused resumes.
+  if (s!.guardHoldUntil) {
+    if (s!.guardHoldUntil.getTime() > now) { heldUntil.set(userId, s!.guardHoldUntil.getTime()); return; }
+    await liftHold(userId);
+  }
 
   const sig = await signals(userId);
   const v = assessEmail(sig);
+  // Bounces: the cause is acted on — the riskiest queued addresses are
+  // dropped — whether the verdict is a hold or only a slowdown.
+  if (sig.bounced24h >= 3 && !acted.has(userId)) {
+    acted.add(userId);
+    const r = await holdRiskyQueued(userId).catch(() => ({ held: 0, of: 0 }));
+    if (r.held) await activity(userId, "email_guard", "hold", `حجز ${r.held} عنواناً عالي الخطر من ${r.of} في الطابور بعد ${sig.bounced24h} ارتدادات — الباقي يُرسل`).catch(() => {});
+  }
   if (v.holdMinutes > 0) {
-    heldUntil.set(userId, now + v.holdMinutes * 60_000);
-    await db.update(emailCampaignsTable).set({ status: "paused", pauseReason: v.reasons.join(" ") })
+    const until = new Date(now + v.holdMinutes * 60_000);
+    heldUntil.set(userId, until.getTime());
+    await db.update(emailSettingsTable).set({ guardHeldAt: new Date(now), guardHoldUntil: until }).where(eq(emailSettingsTable.userId, userId));
+    await db.update(emailCampaignsTable).set({ status: "paused", pauseReason: v.reasons.join(" "), pausedBy: "guard" })
       .where(and(eq(emailCampaignsTable.userId, userId), eq(emailCampaignsTable.status, "sending")));
-    await notify(userId, `<b>📧 أوقفنا إرسال البريد ${v.holdMinutes} دقيقة</b>\n${esc(v.reasons.join("\n"))}`).catch(() => {});
+    await notify(userId, `<b>📧 أوقفنا إرسال البريد ${v.holdMinutes} دقيقة</b>\n${esc(v.reasons.join("\n"))}\nيستأنف وحده حين تنتهي المهلة.`).catch(() => {});
     logger.warn({ userId, reasons: v.reasons }, "email sending held");
     return;
   }

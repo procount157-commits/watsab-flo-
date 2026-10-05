@@ -90,13 +90,14 @@ router.get("/profile", async (req, res) => {
 
 router.put("/profile", async (req, res) => {
   const userId = req.session.userId!;
-  const { name, industry, description, tone, guardrails, autoReply } = req.body ?? {};
+  const { name, industry, description, tone, guardrails, autoReply, voiceReplies } = req.body ?? {};
   const values = {
     userId,
     name: name ?? null, industry: industry ?? null, description: description ?? null,
     tone: ["friendly", "professional", "casual"].includes(tone) ? tone : "friendly",
     guardrails: guardrails ?? null,
     autoReply: !!autoReply,
+    voiceReplies: voiceReplies === "off" ? "off" : "mirror",
     updatedAt: new Date(),
   };
   const [row] = await db.insert(businessProfileTable).values(values)

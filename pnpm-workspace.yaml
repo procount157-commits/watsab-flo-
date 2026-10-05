@@ -68,4 +68,6 @@ onlyBuiltDependencies:
 allowBuilds:
   '@whiskeysockets/baileys': true
   esbuild: true
+  ffmpeg-static: true
+  msedge-tts: false
   protobufjs: true

@@ -23,6 +23,7 @@ import { skillsFor, skillsPreamble } from "../agent-skills";
 import { seedSkills } from "../skills";
 import { briefFor, briefLines, noteMessage, teach } from "./training";
 import { logger } from "../logger";
+import { corePrompt } from "../prompt-core";
 import type { ParsedGroupMessage } from "./store";
 
 export const GROUPS_ROLE = "groups";
@@ -120,15 +121,14 @@ export async function similarExamples(userId: number, text: string, limit = 5) {
 async function voice(userId: number) {
   const agent = await ensureGroupsAgent(userId);
   const [profile] = await db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
-  return [
-    `اسمك ${agent.name}، ${agent.title ?? AGENT.title}.`,
-    agent.persona ?? AGENT.persona,
-    profile?.name ? `تعملين لدى ${profile.name}${profile.industry ? ` — ${profile.industry}` : ""}.` : "",
-    profile?.description ? `عن الشركة: ${profile.description}` : "",
-    profile?.guardrails ? `ما لا يُقال أبداً: ${profile.guardrails}` : "",
-    await memoryPreamble(userId, GROUPS_ROLE).catch(() => ""),
-    skillsPreamble(await skillsFor(userId, GROUPS_ROLE, "internal").catch(() => [])),
-  ].filter(Boolean).join("\n");
+  return corePrompt({
+    channel: "groups",
+    identity: `اسمك ${agent.name}، ${agent.title ?? AGENT.title}.`,
+    persona: agent.persona ?? AGENT.persona,
+    firm: profile?.name ? `${profile.name}${profile.industry ? ` — ${profile.industry}` : ""}${profile.description ? `. ${profile.description}` : ""}` : null,
+    rules: [profile?.guardrails ? `ما لا يُقال أبداً: ${profile.guardrails}` : ""],
+    context: [await memoryPreamble(userId, GROUPS_ROLE).catch(() => ""), skillsPreamble(await skillsFor(userId, GROUPS_ROLE, "internal").catch(() => []))],
+  });
 }
 
 const who = (m: { fromMe: boolean; senderName: string | null; senderPhone: string | null }) => (m.fromMe ? "نحن" : m.senderName || (m.senderPhone ? `+${m.senderPhone}` : "عضو"));

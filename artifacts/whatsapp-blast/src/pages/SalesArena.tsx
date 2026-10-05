@@ -10,9 +10,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Target, Loader2, Send, RotateCcw, ThumbsUp, ThumbsDown, Sparkles, CheckCircle2, AlertTriangle, ListChecks } from "lucide-react";
+import { Target, Loader2, Send, RotateCcw, ThumbsUp, ThumbsDown, Sparkles, CheckCircle2, AlertTriangle, ListChecks, Mic, Square, Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 const card = "bg-card border border-card-border rounded-xl";
 const ghost = "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-card-border hover:border-primary/50 transition-colors disabled:opacity-40";
@@ -33,7 +35,7 @@ const SCENARIOS: Array<{ label: string; msgs: string[] }> = [
   { label: "إنجليزي", msgs: ["Hi, do you handle VAT registration for free zone companies?"] },
 ];
 
-type Turn = { role: "user" | "assistant"; content: string; meta?: any };
+type Turn = { role: "user" | "assistant"; content: string; meta?: any ; spoke?: boolean; audio?: string; waAs?: string};
 
 export default function SalesArena() {
   const [tab, setTab] = useState<"arena" | "review">("arena");
@@ -106,18 +108,83 @@ function Arena() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  // Voice: replies read aloud — always, or (as on WhatsApp) only when the customer spoke.
+  const [voiceMode, setVoiceMode] = useState<"mirror" | "always" | "off">("mirror");
+  const [gender, setGender] = useState<"male" | "female">("male");
+  const [recording, setRecording] = useState(false);
+  const [hearing, setHearing] = useState(false);
+  const [speaking, setSpeaking] = useState<number | null>(null);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const player = useRef<HTMLAudioElement | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [turns.length, busy]);
 
-  const ask = async (history: Turn[]) => {
+  /** The reply, spoken: fetched once, kept on the turn, played. */
+  const speak = async (i: number, text: string, list: Turn[]) => {
+    setSpeaking(i);
+    try {
+      const r = await fetch(`${BASE}/api/agents/arena/speak`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, gender }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "تعذّر الصوت");
+      const url = URL.createObjectURL(await r.blob());
+      const wa = decodeURIComponent(r.headers.get("X-Whatsapp-As") ?? "voice");
+      const next = list.map((t, j) => (j === i ? { ...t, audio: url, waAs: wa } : t));
+      setTurns(next);
+      play(url, i);
+      return next;
+    } catch (e: any) { toast.error(e.message); setSpeaking(null); return list; }
+  };
+  const play = (url: string, i: number) => {
+    player.current?.pause();
+    const a = new Audio(url);
+    player.current = a;
+    setSpeaking(i);
+    a.onended = () => setSpeaking(null);
+    a.onerror = () => setSpeaking(null);
+    void a.play().catch(() => { setSpeaking(null); toast.info("اضغط زر السماعة لتسمع الرد"); });
+  };
+
+  const ask = async (history: Turn[], spoke = false) => {
     setBusy(true);
     try {
       const d = await api("/api/agents/arena/simulate", { method: "POST", body: JSON.stringify({ role, turns: history.map(({ role, content }) => ({ role, content })) }) });
-      setTurns([...history, { role: "assistant", content: d.reply ?? `— لم يرد: ${d.reason ?? "تعذّر النموذج"}`, meta: d }]);
+      const next: Turn[] = [...history, { role: "assistant", content: d.reply ?? `— لم يرد: ${d.reason ?? "تعذّر النموذج"}`, meta: d }];
+      setTurns(next);
+      if (d.reply && (voiceMode === "always" || (voiceMode === "mirror" && spoke))) await speak(next.length - 1, d.reply, next);
     } catch (e: any) { toast.error(e.message); setTurns(history); }
     finally { setBusy(false); }
   };
-  const send = () => { const t = msg.trim(); if (!t || busy) return; setMsg(""); const h = [...turns, { role: "user" as const, content: t }]; setTurns(h); void ask(h); };
+  const sendText = (t: string, spoke = false) => { if (!t || busy) return; const h = [...turns, { role: "user" as const, content: t, spoke }]; setTurns(h); void ask(h, spoke); };
+  const send = () => { const t = msg.trim(); setMsg(""); sendText(t); };
+
+  /** Press to record, press again to send — as a customer's voice note. */
+  const toggleRecord = async () => {
+    if (recording) { recRef.current?.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+      const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      const chunks: BlobPart[] = [];
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+        if (blob.size < 2_000) { toast.info("التسجيل قصير جداً"); return; }
+        setHearing(true);
+        try {
+          const fd = new FormData();
+          fd.append("audio", blob, rec.mimeType.includes("mp4") ? "voice.m4a" : "voice.webm");
+          const r = await fetch(`${BASE}/api/agents/arena/transcribe`, { method: "POST", body: fd, credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.error ?? "تعذّر التفريغ");
+          sendText(d.text, true);
+        } catch (e: any) { toast.error(e.message); } finally { setHearing(false); }
+      };
+      recRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch { toast.error("لم يُسمح بالميكروفون — اسمح للمتصفح باستخدامه ثم حاول"); }
+  };
   const scenario = async (msgs: string[]) => {
     // Plays the scenario's messages in order, letting the employee answer each.
     let h: Turn[] = [];
@@ -154,19 +221,43 @@ function Arena() {
             <div className={cn("max-w-[85%]", t.role === "user" ? "" : "w-full md:w-[85%]")}>
               <div className={cn("px-3.5 py-2 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap", t.role === "user" ? "bg-card border border-card-border" : "bg-primary text-primary-foreground")} dir="auto">
                 {t.role === "assistant" && t.meta?.employee && <p className="text-[10px] opacity-80 mb-0.5">{t.meta.employee.avatar} {t.meta.employee.name}</p>}
+                {t.role === "user" && t.spoke && <p className="text-[10px] text-muted-foreground mb-0.5 flex items-center gap-1"><Mic className="w-3 h-3" /> رسالة صوتية — فُرّغت هكذا:</p>}
                 {t.content}
               </div>
+              {t.role === "assistant" && t.meta?.reply && (
+                <div className="flex items-center gap-2 mt-1">
+                  <button onClick={() => (t.audio ? play(t.audio, i) : void speak(i, t.content, turns))} disabled={speaking === i && !t.audio} className={cn(ghost, "py-1", speaking === i && "border-primary text-primary")}>
+                    {speaking === i && !t.audio ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />} {speaking === i ? "يتكلم…" : "اسمع الرد"}
+                  </button>
+                  {t.waAs && <span className="text-[10px] text-muted-foreground">{t.waAs === "voice" ? "على واتساب: يُرسل صوتاً" : `على واتساب: يبقى نصاً (${t.waAs.replace("text:", "")})`}</span>}
+                </div>
+              )}
               {t.role === "assistant" && t.meta && <><Diagnosis m={t.meta} />{t.meta.reply && <RateBox role={role} customer={lastUser(i)} reply={t.content} />}</>}
             </div>
           </div>
         ))}
+        {hearing && <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" /> يسمع تسجيلك…</div>}
         {busy && <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" /> يكتب…</div>}
         <div ref={endRef} />
       </div>
 
       <div className="flex gap-2">
-        <input className={cn(input, "flex-1")} value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="رسالة العميل…" dir="auto" />
+        <button onClick={() => void toggleRecord()} disabled={busy || hearing} title={recording ? "اضغط لإرسال التسجيل" : "سجّل رسالة صوتية كعميل"}
+          className={cn("px-4 rounded-lg border flex items-center gap-1.5 text-xs disabled:opacity-40", recording ? "bg-red-500 text-white border-red-500 animate-pulse" : "border-card-border hover:border-primary/50")}>
+          {recording ? <><Square className="w-3.5 h-3.5" /> أرسل</> : <Mic className="w-4 h-4" />}
+        </button>
+        <input className={cn(input, "flex-1")} value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder={recording ? "يسجّل… اضغط «أرسل» حين تنتهي" : "رسالة العميل… أو اضغط الميكروفون وتكلّم"} dir="auto" />
         <button onClick={send} disabled={busy || !msg.trim()} className="px-4 rounded-lg bg-primary text-primary-foreground disabled:opacity-40"><Send className="w-4 h-4" /></button>
+      </div>
+      <div className="flex gap-2 items-center flex-wrap text-[11px]">
+        <Volume2 className="w-3.5 h-3.5 text-muted-foreground" /><span className="text-muted-foreground">الرد بالصوت:</span>
+        {([["mirror", "حين أتكلم أنا (كما في واتساب)"], ["always", "دائماً"], ["off", "لا"]] as const).map(([k, l]) => (
+          <button key={k} onClick={() => setVoiceMode(k)} className={cn("px-2.5 py-1 rounded-full border", voiceMode === k ? "border-primary bg-primary/15 text-primary" : "border-card-border text-muted-foreground")}>{l}</button>
+        ))}
+        <span className="text-muted-foreground mr-2">الصوت:</span>
+        {([["male", "رجل (حمدان)"], ["female", "امرأة (فاطمة)"]] as const).map(([k, l]) => (
+          <button key={k} onClick={() => setGender(k)} className={cn("px-2.5 py-1 rounded-full border", gender === k ? "border-primary bg-primary/15 text-primary" : "border-card-border text-muted-foreground")}>{l}</button>
+        ))}
       </div>
       <p className="text-[11px] text-muted-foreground">لا يُرسل شيء لأي أحد هنا. الموظف يعمل بنفس شخصيته ومهاراته وذاكرته ومعرفة الشركة، ومراجع الجودة يفحص ردّه قبل أن تراه — كما يحدث مع العملاء الحقيقيين.</p>
     </div>

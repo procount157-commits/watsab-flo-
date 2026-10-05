@@ -9,6 +9,13 @@
 
 import { asAgent } from "./agent-context";
 import { dealFromHotLead } from "./deals/deals";
+import { sayable } from "./tts";
+import { businessProfileTable } from "@workspace/db";
+
+async function voiceRepliesOn(userId: number) {
+  const [p] = await db.select({ v: businessProfileTable.voiceReplies }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
+  return (p?.v ?? "mirror") !== "off";
+}
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import {
   db, leadSourcesTable, followUpSequencesTable, followUpJobsTable,
@@ -27,7 +34,7 @@ import { memoryPreamble, learnFromOutcome } from "./agent-memory";
 import { skillsFor, skillsPreamble, finalCheckPreamble } from "./agent-skills";
 import { inboxPreamble } from "./agent-comms";
 import { thinkTime } from "./reply-timing";
-import { sendMessage, getStatus, registerInboundHook, registerOnConnectHook, registerHumanReplyHook, markRead } from "./whatsapp";
+import { sendMessage, sendVoiceNote, getStatus, registerInboundHook, registerOnConnectHook, registerHumanReplyHook, markRead } from "./whatsapp";
 import { updateCard, cardPreamble, isHumanHeld, takeover, lastCustomerLine, getCard } from "./lead-card";
 import { notify, esc } from "./telegram";
 import { say } from "./agent-comms";
@@ -323,6 +330,8 @@ async function autoReplyIfAppropriate(
   /** The inbound message's key, for the read receipt. */
   key?: { remoteJid?: string | null; id?: string | null; fromMe?: boolean | null; participant?: string | null },
   attempt = 1,
+  /** The customer spoke rather than typed; with voice replies on, the answer is spoken back. */
+  theyspoke = false,
 ) {
   // Other companies answer campaigns with their own bots. Replying to those
   // spends the daily allowance on nobody, produces bot-to-bot threads that
@@ -426,7 +435,7 @@ async function autoReplyIfAppropriate(
       const delay = REPLY_RETRY_MS * attempt;
       logger.warn({ userId, phone, attempt, delayMs: delay }, "النموذج تعذّر — سيُعاد الرد على العميل بعد قليل");
       setTimeout(() => {
-        autoReplyIfAppropriate(userId, phone, text, intent, key, attempt + 1)
+        autoReplyIfAppropriate(userId, phone, text, intent, key, attempt + 1, theyspoke)
           .catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err) }, "فشلت إعادة محاولة الرد"));
       }, delay).unref();
       return;
@@ -478,7 +487,11 @@ async function autoReplyIfAppropriate(
     if (key) await markRead(userId, key).catch(() => {});
     await new Promise((r) => setTimeout(r, wait.ms - noticeMs));
 
-    await sendMessage(userId, phone, answer.reply);
+    // A voice note is answered in kind when the account allows it and the
+    // reply reads well aloud — prices, links and lists stay as text.
+    const asVoice = theyspoke && (await voiceRepliesOn(userId)) && sayable(answer.reply).ok;
+    if (asVoice) await sendVoiceNote(userId, phone, answer.reply);
+    else await sendMessage(userId, phone, answer.reply);
     await logAutoReply({ userId, phone, incoming: text, reply: answer.reply, provider: answer.provider, kbIds: answer.kbIds, intent, agentRole: routing?.agent.role, quality: answer.quality });
     logger.info({ userId, phone, provider: answer.provider, kb: answer.kbIds }, "auto-reply sent");
   } catch (err: any) {
@@ -571,7 +584,7 @@ export async function handleInbound(ev: { userId: number; phone: string; text: s
 
   if (cardUpdate?.reached) void announceStage(userId, phone, cardUpdate.reached, text);
 
-  await autoReplyIfAppropriate(userId, phone, text, verdict.intent, (ev.message as any)?.key);
+  await autoReplyIfAppropriate(userId, phone, text, verdict.intent, (ev.message as any)?.key, 1, !!(ev.message as any)?.message?.audioMessage);
 
   if (first) {
     // Someone whose opening line is a refusal or a complaint should not be

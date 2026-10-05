@@ -20,6 +20,7 @@ import { sendEmail, isConfigured, messageIdFor } from "../email/provider";
 import { brandOf } from "../email/layout";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
+import { corePrompt } from "../prompt-core";
 import { advance, dealBrief, setStage } from "./deals";
 
 export const ROLE = "proposals";
@@ -50,7 +51,8 @@ export async function writeProposal(userId: number, dealId: number, input: { ser
   const [brief, kb, lessons] = await Promise.all([dealBrief(userId, deal, 18), knowledgeFor(userId, `${service} ${deal.notes ?? ""} عرض سعر أسعار رسوم`), lessonsFor(userId, ROLE, `${service} ${deal.company ?? ""}`).catch(() => "")]);
   const out = await asAgent(userId, ROLE, () => complete([
     { role: "system", content: [
-      `اسمك ${me.name}، ${me.title}.`, me.persona ?? "", "", EMAIL_DOCTRINE, lessons,
+      corePrompt({ channel: "proposal", identity: `اسمك ${me.name}، ${me.title}.`, persona: me.persona, rules: [EMAIL_DOCTRINE], context: [lessons], noExamples: false }),
+      "",
       kb.text ? `معرفة الشركة عن خدماتها وأسعارها (المصدر الوحيد لأي رقم):\n${kb.text.slice(0, 7_000)}` : "لا توجد معرفة مسجّلة عن الأسعار — اترك كل سعر خانة [[السعر]].",
       "",
       `اكتب عرض سعر رسمياً موجّهاً لهذا العميل ${lang === "ar" ? "بالعربية المهنية الواضحة" : "in clear professional English"}، بصيغة HTML بسيطة (h3, p, ul/li, و table للرسوم فقط).`,

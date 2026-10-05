@@ -14,6 +14,9 @@ import { remember, forget } from "../lib/agent-memory";
 import { runRoutine, ROUTINE_TEMPLATES } from "../lib/agent-routines";
 import { seedSkills, resetSkill, LIBRARY } from "../lib/skills";
 import { simulate, rate, recentForReview } from "../lib/arena";
+import multer from "multer";
+import { transcribe } from "../lib/voice";
+import { speakMp3, sayable } from "../lib/tts";
 
 const router = Router();
 router.use(requireAuth);
@@ -24,6 +27,33 @@ router.post("/arena/simulate", async (req, res) => {
   const turns = Array.isArray(req.body?.turns) ? req.body.turns.map((t: any) => ({ role: t?.role === "assistant" ? "assistant" : "user", content: String(t?.content ?? "").slice(0, 2_000) })) : [];
   try { res.json(await simulate(req.session.userId!, role, turns)); }
   catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+
+// ── Voice in the arena: the owner speaks, the employee answers aloud ──
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
+/** A recording from the browser, as text — the same Whisper the WhatsApp voice notes go through. */
+router.post("/arena/transcribe", audioUpload.single("audio"), async (req, res) => {
+  if (!req.file?.buffer?.length) return res.status(400).json({ error: "لم يصل تسجيل" });
+  if (!process.env["GROQ_API_KEY"]) return res.status(400).json({ error: "مفتاح Groq غير مضبوط — لا يمكن تفريغ الصوت" });
+  const t = await transcribe(req.file.buffer, req.file.mimetype || "audio/webm");
+  if (!t?.text) return res.status(422).json({ error: "لم أفهم كلاماً في التسجيل — جرّب مرة أخرى بصوت أوضح" });
+  res.json({ text: t.text, model: t.model, ms: t.ms });
+});
+
+/** The reply, spoken — and whether on WhatsApp it would have gone as voice or stayed text. */
+router.post("/arena/speak", async (req, res) => {
+  const text = String(req.body?.text ?? "").trim();
+  if (!text) return res.status(400).json({ error: "لا نص" });
+  const gender = req.body?.gender === "female" ? "female" : "male";
+  const v = await speakMp3(text, { gender });
+  if (!v) return res.status(502).json({ error: "تعذّر توليد الصوت — حاول بعد قليل" });
+  const s = sayable(text);
+  res.setHeader("Content-Type", "audio/mpeg");
+  res.setHeader("X-Voice", v.voice);
+  res.setHeader("X-Whatsapp-As", s.ok ? "voice" : encodeURIComponent(`text:${s.why}`));
+  res.setHeader("Cache-Control", "no-store");
+  res.send(v.audio);
 });
 
 router.post("/arena/rate", async (req, res) => {

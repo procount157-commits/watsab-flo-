@@ -13,6 +13,7 @@ import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
 import { useDatabaseAuthState, migrateSessionFilesToDb } from "./wa-auth-state";
 import { transcribe } from "./voice";
+import { speak } from "./tts";
 import { assessSession, isRejection, isHandshakeRejection, STABLE_AFTER_MS, FLAP_WINDOW_MS, COOLDOWN_MS } from "./session-breaker";
 import path from "path";
 import fs from "fs";
@@ -2598,7 +2599,13 @@ class WhatsAppInstance {
     try {
       let result: Awaited<ReturnType<typeof this.state.socket.sendMessage>> | undefined;
 
-      if (messageType === "text") {
+      if (messageType === "voice") {
+        // The text is what is said. If the voice cannot be made, the words go as text.
+        const note = await speak(message);
+        result = note
+          ? await withTimeout(this.state.socket.sendMessage(jid, { audio: note.audio, ptt: note.ptt, mimetype: note.mimetype, seconds: note.seconds }), "voice")
+          : await withTimeout(this.state.socket.sendMessage(jid, { text: uniqueText }), "voice-fallback-text");
+      } else if (messageType === "text") {
         result = await withTimeout(this.state.socket.sendMessage(jid, { text: uniqueText }), "text");
 
       } else if (messageType === "image" && mediaUrl) {
@@ -3014,6 +3021,11 @@ export async function sendMessage(
   buttons?: string | null, carousel?: string | null,
 ): Promise<string | undefined> {
   return waManager.get(userId).sendMessage(phone, message, messageType, mediaUrl, buttons, carousel);
+}
+
+/** The words as a voice note — spoken by the account's voice, with the text as the fallback. */
+export async function sendVoiceNote(userId: number, phone: string, text: string): Promise<string | undefined> {
+  return waManager.get(userId).sendMessage(phone, text, "voice");
 }
 
 // ── User-connected hook ───────────────────────────────────────────

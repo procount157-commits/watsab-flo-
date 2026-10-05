@@ -31,11 +31,11 @@ export default function Knowledge() {
   const { data: profile } = useQuery<any>({ queryKey: ["kb-profile"], queryFn: () => api("/api/knowledge/profile") });
   const { data: entries = [] } = useQuery<any[]>({ queryKey: ["kb-entries"], queryFn: () => api("/api/knowledge/entries") });
 
-  const [form, setForm] = useState({ name: "", industry: "", description: "", tone: "friendly", guardrails: "", autoReply: false });
+  const [form, setForm] = useState({ name: "", industry: "", description: "", tone: "friendly", guardrails: "", autoReply: false, voiceReplies: "mirror" });
   const loaded = profile && form.name === "" && profile.name;
   if (loaded) setForm({
     name: profile.name ?? "", industry: profile.industry ?? "", description: profile.description ?? "",
-    tone: profile.tone ?? "friendly", guardrails: profile.guardrails ?? "", autoReply: !!profile.autoReply,
+    tone: profile.tone ?? "friendly", guardrails: profile.guardrails ?? "", autoReply: !!profile.autoReply, voiceReplies: profile.voiceReplies ?? "mirror",
   });
 
   const saveProfile = useMutation({
@@ -153,6 +153,8 @@ export default function Knowledge() {
             </select></div>
           <div><label className={labelCls}>ممنوعات (بكلماتك)</label>
             <input className={inputCls} value={form.guardrails} onChange={(e) => setForm({ ...form, guardrails: e.target.value })} placeholder="مثال: لا تعد بخصومات" /></div>
+          <label className="flex items-start gap-2 text-xs md:col-span-2"><input type="checkbox" className="mt-0.5" checked={form.voiceReplies !== "off"} onChange={(e) => setForm({ ...form, voiceReplies: e.target.checked ? "mirror" : "off" })} />
+            <span>الرد على الرسالة الصوتية برسالة صوتية<span className="block text-[10px] text-muted-foreground">الموظفون يفهمون التسجيلات الصوتية دائماً. مع هذا الخيار يردّون على من سجّل صوتاً بصوت الحساب — إلا إذا كان الرد فيه سعر أو رابط أو قائمة، فيبقى نصاً.</span></span></label>
         </div>
         <label className="flex items-start gap-2.5 cursor-pointer">
           <input type="checkbox" className="accent-primary mt-0.5" checked={form.autoReply}

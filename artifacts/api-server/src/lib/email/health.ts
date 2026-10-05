@@ -30,7 +30,20 @@ export interface EmailVerdict {
 export const BOUNCE_WARN = 0.03, BOUNCE_STOP = 0.06;
 export const COMPLAINT_WARN = 0.001, COMPLAINT_STOP = 0.003;
 export const MIN_SAMPLE = 30;
+/** A full stop needs this many sent, and this many bounces, before a rate means anything. */
+export const STOP_SAMPLE = 50, STOP_BOUNCES = 5;
 
+/**
+ * The verdict on a sender's last day.
+ *
+ * What it used to do: five bounces out of thirty — one bad hour — read as
+ * 17%, held everything for four hours, and then held again, because the same
+ * five bounces were still inside the day. The account's two new campaigns sat
+ * paused on the strength of an older one's list. Now a stop needs a real
+ * sample (50 sent, 5 bounces); a bad rate on a small sample slows the sender
+ * to a third instead; and the caller counts only what happened after the
+ * last hold, so a hold is lifted by time, not re-armed by the past.
+ */
 export function assessEmail(s: EmailSignals): EmailVerdict {
   const reasons: string[] = [];
   let level: EmailVerdict["level"] = "ok";
@@ -39,8 +52,13 @@ export function assessEmail(s: EmailSignals): EmailVerdict {
 
   if (s.sent24h >= MIN_SAMPLE) {
     const b = s.bounced24h / s.sent24h;
-    if (b >= BOUNCE_STOP) { worse("critical"); hold = Math.max(hold, 240); reasons.push(`${Math.round(b * 100)}% من رسائل اليوم ارتدّت — القائمة تحتاج تنظيفاً قبل أي إرسال.`); }
-    else if (b >= BOUNCE_WARN) { worse("warning"); throttle = Math.max(throttle, 2); reasons.push(`${Math.round(b * 100)}% ارتداد — أبطأنا الإرسال.`); }
+    if (b >= BOUNCE_STOP && s.sent24h >= STOP_SAMPLE && s.bounced24h >= STOP_BOUNCES) {
+      worse("critical"); hold = Math.max(hold, 60);
+      reasons.push(`${Math.round(b * 100)}% من رسائل اليوم ارتدّت (${s.bounced24h} من ${s.sent24h}) — حُجزت العناوين عالية الخطر وأُوقف الإرسال ساعة.`);
+    } else if (b >= BOUNCE_STOP) {
+      worse("warning"); throttle = Math.max(throttle, 3);
+      reasons.push(`${s.bounced24h} ارتدادات من ${s.sent24h} رسالة — العيّنة صغيرة، فأبطأنا الإرسال إلى الثلث وحجزنا العناوين عالية الخطر.`);
+    } else if (b >= BOUNCE_WARN) { worse("warning"); throttle = Math.max(throttle, 2); reasons.push(`${Math.round(b * 100)}% ارتداد — أبطأنا الإرسال.`); }
 
     const c = s.complaints24h / s.sent24h;
     if (c >= COMPLAINT_STOP) { worse("critical"); hold = Math.max(hold, 720); reasons.push(`بلاغات إزعاج ${(c * 100).toFixed(2)}% — أوقفنا الإرسال ١٢ ساعة.`); }

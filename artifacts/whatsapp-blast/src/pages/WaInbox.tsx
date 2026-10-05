@@ -4,8 +4,7 @@ import {
   Search, Send, CheckSquare, Square, Users, Download,
   Import, RefreshCw, MessageSquare, Wifi, WifiOff,
   CheckCheck, ChevronLeft, X, Hash, Layers, FileSpreadsheet,
-  MessagesSquare, Clock, Database, RotateCcw, CheckCircle2, Loader2,
-} from "lucide-react";
+  MessagesSquare, Clock, Database, RotateCcw, CheckCircle2, Loader2, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
@@ -209,6 +208,22 @@ export default function WaInbox() {
     } catch(e:any) {
       toast.error(e.message ?? "فشل الإرسال");
     } finally { setSending(false); }
+  };
+
+  // The same words, spoken: the account's voice reads them as a voice note.
+  const handleSendVoice = async () => {
+    if (!selected || !draftText.trim() || sending) return;
+    setSending(true);
+    try {
+      const res = await fetch(`${BASE}/api/whatsapp/inbox/${selected}/voice`, {
+        method:"POST", credentials:"include", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ text: draftText.trim() }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "فشل الإرسال");
+      setDraftText("");
+      qc.invalidateQueries({ queryKey: ["wa-inbox-thread", selected] });
+      qc.invalidateQueries({ queryKey: ["wa-inbox"] });
+      toast.success("أُرسلت كرسالة صوتية");
+    } catch(e:any) { toast.error(e.message ?? "فشل الإرسال"); } finally { setSending(false); }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -598,6 +613,10 @@ export default function WaInbox() {
                 className="flex-1 bg-input border border-border rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-1 focus:ring-primary resize-none disabled:opacity-50 min-h-[42px] max-h-[140px]"
                 style={{height:"42px"}}
               />
+              <button onClick={handleSendVoice} disabled={!connected||!draftText.trim()||sending} title="أرسل النص كرسالة صوتية بصوت الحساب"
+                className="w-10 h-10 flex-shrink-0 rounded-full border border-border text-muted-foreground flex items-center justify-center hover:text-foreground hover:border-primary/50 transition-colors disabled:opacity-40">
+                <Mic className="w-4 h-4"/>
+              </button>
               <button onClick={handleSend} disabled={!connected||!draftText.trim()||sending}
                 className="w-10 h-10 flex-shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                 {sending ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4"/>}

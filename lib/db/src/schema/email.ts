@@ -26,6 +26,9 @@ export const emailSettingsTable = pgTable("email_settings", {
   followIntensity: varchar("follow_intensity", { length: 10 }).notNull().default("intense"),
   /** hold back personal mailboxes at a domain where another one bounced */
   skipRisky:     boolean("skip_risky").notNull().default(true),
+  /** the guard's current hold: when it began and when it lifts */
+  guardHeldAt:   timestamp("guard_held_at", { withTimezone: true }),
+  guardHoldUntil: timestamp("guard_hold_until", { withTimezone: true }),
   /** branded (header, card, footer) | plain */
   layout:       varchar("layout", { length: 10 }).notNull().default("branded"),
   brandName:    varchar("brand_name", { length: 80 }),
@@ -140,6 +143,8 @@ export const emailCampaignsTable = pgTable("email_campaigns", {
   bounceCount: integer("bounce_count").notNull().default(0),
   unsubCount:  integer("unsub_count").notNull().default(0),
   pauseReason: text("pause_reason"),
+  /** guard | owner — only the guard's pauses lift by themselves */
+  pausedBy:    varchar("paused_by", { length: 10 }),
   /** A second subject to test against the first. */
   subjectB:    varchar("subject_b", { length: 300 }),
   /** Share of the list that receives the test; 0 means no test. */

@@ -110,3 +110,22 @@ export function byRisk<T extends Pick<EmailContact, "email" | "mxOk" | "status">
 export function warmupPlan(dailyCap: number, ageDays: number, on: boolean, days = 14) {
   return Array.from({ length: days }, (_, i) => ({ day: ageDays + i, cap: warmupCap(dailyCap, ageDays + i, on) }));
 }
+
+/**
+ * Pull the riskiest addresses out of what is already queued — the guard's
+ * answer to a bounce, instead of freezing everything. Queued messages to a
+ * dead domain, a bounced contact or a high-risk mailbox are cancelled; the
+ * campaigns keep going with the rest.
+ */
+export async function holdRiskyQueued(userId: number) {
+  const rows = await db.execute<{ id: number; email: string; mx_ok: boolean | null; status: string }>(sql`
+    SELECT m.id, c.email, c.mx_ok, c.status FROM email_messages m JOIN email_contacts c ON c.id = m.contact_id
+    WHERE m.user_id = ${userId} AND m.status IN ('queued', 'ab_hold')`);
+  if (!rows.rows.length) return { held: 0, of: 0 };
+  const signals = await domainSignals(userId);
+  const out = rows.rows.filter((r) => riskOf({ email: r.email, mxOk: r.mx_ok, status: r.status }, signals) === "high").map((r) => r.id);
+  for (let i = 0; i < out.length; i += 500) {
+    await db.execute(sql`UPDATE email_messages SET status = 'cancelled', error = 'حُجز: عنوان عالي الخطر' WHERE id IN (${sql.join(out.slice(i, i + 500).map((id) => sql`${id}`), sql`, `)})`);
+  }
+  return { held: out.length, of: rows.rows.length };
+}

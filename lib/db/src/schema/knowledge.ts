@@ -29,6 +29,8 @@ export const businessProfileTable = pgTable("business_profile", {
   tone:        varchar("tone", { length: 30 }).default("friendly"),
   // Things the bot must never do, in the owner's own words.
   guardrails:  text("guardrails"),
+  /** off | mirror — answer a voice note with a voice note */
+  voiceReplies: varchar("voice_replies", { length: 10 }).notNull().default("mirror"),
   autoReply:   boolean("auto_reply").notNull().default(false),
   updatedAt:   timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
