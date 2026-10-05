@@ -12,8 +12,7 @@ import { db, dealsTable, proposalsTable, botEmployeesTable, emailMessagesTable, 
 import { complete } from "../llm";
 import { asAgent } from "../agent-context";
 import { lessonsFor, recordFeedback } from "../feedback";
-import { retrieve } from "../knowledge";
-import { passages } from "../email/knowledge-docs";
+import { companyKnowledge } from "../company-knowledge";
 import { guardCheck, EMAIL_DOCTRINE } from "../email/team";
 import { getSettings } from "../email/service";
 import { newToken, renderEmail } from "../email/tracking";
@@ -36,8 +35,8 @@ export async function ensureWriter(userId: number) {
 }
 
 async function knowledgeFor(userId: number, q: string) {
-  const [facts, docs] = await Promise.all([retrieve(userId, q, 5).catch(() => []), passages(userId, q, { limit: 4 }).catch(() => [])]);
-  return { text: [...facts.map((f) => `${f.entry.title}\n${f.entry.content}`), ...docs.map((d) => `${d.title}\n${d.text}`)].join("\n\n"), facts, docs };
+  const items = await companyKnowledge(userId, q, { limit: 8 }).catch(() => []);
+  return { text: items.map((k) => `${k.title}\n${k.text}`).join("\n\n"), items };
 }
 
 /** A draft proposal for the deal. Numbers not in the firm's knowledge come back as issues to fix before it can be approved. */

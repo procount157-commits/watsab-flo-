@@ -1,4 +1,4 @@
-import { pgTable, serial, bigserial, integer, varchar, text, boolean, timestamp, jsonb, index, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, bigserial, integer, varchar, text, boolean, timestamp, jsonb, date, index, unique } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
 
 // ── Social desks ──────────────────────────────────────────────────
@@ -164,6 +164,8 @@ export const socialContentTable = pgTable("social_content", {
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   url:         text("url"),
+  /** the content plan it was written for, when it came from one */
+  planId:      integer("plan_id"),
   createdAt:   timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 export type SocialContent = typeof socialContentTable.$inferSelect;
@@ -190,3 +192,16 @@ export const socialActivityTable = pgTable("social_activity", {
   ref:       jsonb("ref").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_social_activity").on(t.userId, t.platform, t.createdAt)]);
+
+// See migration 041: one topic written for every channel, on a date.
+export const contentPlansTable = pgTable("content_plans", {
+  id:              serial("id").primaryKey(),
+  userId:          integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  topic:           text("topic").notNull(),
+  publishOn:       date("publish_on").notNull(),
+  channels:        jsonb("channels").$type<string[]>().notNull().default([]),
+  emailTemplateId: integer("email_template_id"),
+  notes:           text("notes"),
+  createdAt:       timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("idx_content_plans").on(t.userId, t.publishOn)]);
+export type ContentPlan = typeof contentPlansTable.$inferSelect;

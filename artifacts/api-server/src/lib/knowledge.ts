@@ -399,7 +399,15 @@ export async function answerFromKnowledge(
     }
   }
 
-  const kbIds = found.map((f) => f.entry.id);
+  // The rest of the firm's knowledge — the documents uploaded for email and
+  // what the owner taught the groups agent — when the bot's own base is thin.
+  // Imported late: company-knowledge reads this module.
+  if (found.length < 4) {
+    const { companyKnowledge } = await import("./company-knowledge");
+    const more = await companyKnowledge(userId, question, { limit: 4 - found.length, exclude: ["kb"] }).catch(() => []);
+    found = [...found, ...more.map((k, i) => ({ entry: { id: -(i + 1), userId, title: k.title, content: k.text, keywords: "", category: k.source, isActive: true, createdAt: new Date(), updatedAt: new Date() } as any, score: k.score, hits: [], maxIdf: 0, keywordHit: false }))];
+  }
+  const kbIds = found.map((f) => f.entry.id).filter((id) => id > 0);
 
   // No match used to mean silence. For a salesperson it should not: the reply
   // simply carries no specific claims, and asks the question that moves the

@@ -12,11 +12,12 @@
 // to answer by herself — that switch is not built until the numbers say so.
 
 import { asAgent } from "../agent-context";
+import { companyKnowledge, knowledgeLines } from "../company-knowledge";
 import { recordFeedback } from "../feedback";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db, botEmployeesTable, agentTasksTable, businessProfileTable, waGroupsTable, waGroupMessagesTable, waGroupSuggestionsTable } from "@workspace/db";
 import { complete } from "../llm";
-import { retrieve, terms } from "../knowledge";
+import { terms } from "../knowledge";
 import { memoryPreamble, remember } from "../agent-memory";
 import { skillsFor, skillsPreamble } from "../agent-skills";
 import { seedSkills } from "../skills";
@@ -154,7 +155,7 @@ async function suggestForInner(userId: number, jid: string, opts: { force?: bool
   const [head, examples, facts, brief] = await Promise.all([
     voice(userId),
     turnText ? similarExamples(userId, turnText) : Promise.resolve([]),
-    turnText ? retrieve(userId, turnText, 4).catch(() => []) : Promise.resolve([]),
+    turnText ? companyKnowledge(userId, turnText, { limit: 5, exclude: ["groups"] }).catch(() => []) : Promise.resolve([]),
     briefFor(userId, jid, turnText || line(trigger)).catch(() => ({ instructions: [], examples: [], passages: [], lessons: [] })),
   ]);
 
@@ -165,7 +166,7 @@ async function suggestForInner(userId: number, jid: string, opts: { force?: bool
       group.profile ? `ما فهمتِه عن هذا القروب سابقاً:\n${group.profile}` : "",
       group.notes ? `ملاحظات صاحب العمل عن القروب: ${group.notes}` : "",
       ...briefLines(brief),
-      facts.length ? `من معرفة الشركة:\n${facts.map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 400)}`).join("\n")}` : "",
+      knowledgeLines(facts),
       examples.length ? `هكذا ردّ صاحب العمل على رسائل مشابهة من قبل — قلّدي أسلوبه وطوله ولغته:\n${examples.map((e) => `العميل: ${e.q.slice(0, 300)}\nصاحب العمل: ${e.a.slice(0, 400)}`).join("\n---\n")}` : "",
       "",
       "اكتبي بهذا الشكل بالضبط:",

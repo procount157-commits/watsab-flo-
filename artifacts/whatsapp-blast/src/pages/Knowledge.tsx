@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Brain, Plus, Trash2, Loader2, FlaskConical, KeyRound, CheckCircle2, AlertCircle, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { UnifiedKnowledge } from "@/components/UnifiedKnowledge";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const api = async (path: string, init?: RequestInit) => {
@@ -80,6 +81,8 @@ export default function Knowledge() {
           علّم البوت عن مجالك — يجيب من هذه المعلومات فقط، ولا يخترع سعراً ولا موعداً
         </p>
       </div>
+
+      <UnifiedKnowledge />
 
       {/* Provider */}
       <div className={cn(card, "flex items-start gap-3")}>

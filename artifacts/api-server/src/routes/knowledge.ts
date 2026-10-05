@@ -262,4 +262,13 @@ router.post("/ask", async (req, res) => {
 
 router.get("/log", async (req, res) => res.json(await recentAutoReplies(req.session.userId!)));
 
+
+/** Every source of company knowledge at once: what each holds, and what the employees would find for a question. */
+router.get("/unified", async (req, res) => {
+  const userId = req.session.userId!;
+  const q = String(req.query["q"] ?? "").trim();
+  const { companyKnowledge, knowledgeCounts, SOURCE_AR } = await import("../lib/company-knowledge");
+  res.json({ counts: await knowledgeCounts(userId), sources: SOURCE_AR, results: q ? await companyKnowledge(userId, q, { limit: 8 }) : [] });
+});
+
 export default router;

@@ -12,6 +12,7 @@ import { recordFeedback, lessonsFor } from "../feedback";
 import { asAgent } from "../agent-context";
 import { dealFromHotLead } from "../deals/deals";
 import { offerLine } from "../deals/meetings";
+import { companyKnowledge, knowledgeLines } from "../company-knowledge";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -199,6 +200,7 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
   const lessons = await lessonsFor(userId, "email", `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 600)).catch(() => "");
   // When the reply asks for a call: the owner's free times, not ones the model makes up.
   const offer = await offerLine(userId, (s?.defaultLanguage ?? "en") === "ar" ? "ar" : "en").catch(() => "");
+  const more = await companyKnowledge(userId, `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 500), { limit: 3, exclude: ["kb", "docs"] }).catch(() => []);
   const out = await asAgent(userId, nora ? "email" : "sales", () => complete([
     { role: "system", content: [
       noraVoice || (sales ? `اسمك ${sales.name}${sales.title ? `، ${sales.title}` : ""}.` : "أنت مندوب مبيعات."),
@@ -220,6 +222,7 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
       memory,
       lessons,
       offer,
+      knowledgeLines(more, "ومن مصادر المعرفة الأخرى:"),
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
       facts.length || docs.length ? `معلومات مفيدة:\n${[...facts.map((f) => `${f.entry.title}\n${f.entry.content}`), ...docs.map((d) => `${d.title}\n${d.text}`)].map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}` : "لا توجد معلومة محددة — اسأل عمّا تحتاجه لتُجيب بدقة.",
       "",

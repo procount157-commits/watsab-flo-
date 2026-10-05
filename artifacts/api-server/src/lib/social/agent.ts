@@ -4,20 +4,19 @@
 // the firm's knowledge, and what was said before, so nothing is repeated.
 
 import { complete } from "../llm";
-import { retrieve } from "../knowledge";
 import { guardCheck } from "../email/team";
 import { PLATFORM, type SocialPlatform } from "./platforms";
 import { voiceFor, roleOf, type Job } from "./team";
 import { asAgent } from "../agent-context";
 import { lessonsFor } from "../feedback";
 import { offerLine } from "../deals/meetings";
+import { companyKnowledge, knowledgeLines } from "../company-knowledge";
 
 export const INTENTS = ["question", "interested", "praise", "complaint", "spam", "stop", "other"] as const;
 export type Intent = typeof INTENTS[number];
 
 async function facts(userId: number, text: string) {
-  const f = await retrieve(userId, text.slice(0, 400), 3).catch(() => []);
-  return f.length ? `من معرفة الشركة (لا تذكر غيرها من أرقام):\n${f.map((x) => `- ${x.entry.title}: ${x.entry.content.slice(0, 350)}`).join("\n")}` : "";
+  return knowledgeLines(await companyKnowledge(userId, text.slice(0, 400), { limit: 5 }).catch(() => []));
 }
 
 async function ask(userId: number, p: SocialPlatform, job: Job, rules: string[], user: string, ms = 25_000) {
@@ -116,6 +115,8 @@ export async function draftPost(userId: number, p: SocialPlatform, topic: string
     `اكتب منشوراً واحداً لحساب الشركة في ${PLATFORM[p].labelAr} عن الموضوع المطلوب.`,
     p === "linkedin"
       ? "لينكدإن: سطر أول يوقف القارئ، ثم ٤–٧ أسطر قصيرة تعلّم فكرة واحدة عملية، ثم سؤال واحد للقراء. ٣ وسوم كحد أقصى في النهاية. بالإنجليزية ما لم يُطلب غيرها."
+      : p === "tiktok"
+      ? "تيك توك: نص فيديو قصير (٣٠–٤٥ ثانية) يصوّره صاحب العمل بهاتفه، بهذه الأقسام بالضبط:\nالخطّاف (أول ٣ ثوانٍ): <جملة تُقال للكاميرا توقف التمرير>\nالمشاهد: ١. <ما يُقال وما يظهر> ٢. <…> ٣. <…>\nالختام: <دعوة واحدة: راسلنا على الخاص>\nالوصف: <سطران + ٣–٥ وسوم>\nبالعربية الخليجية البسيطة."
       : "وصف قصير لصورة أو فيديو: سطر أول جاذب، ٢–٤ أسطر فائدة، دعوة واحدة للتواصل بالخاص، ٣–٥ وسوم.",
     "لا أرقام أو غرامات أو مهل ليست في معرفة الشركة. لا وعود.",
     await facts(userId, topic),
