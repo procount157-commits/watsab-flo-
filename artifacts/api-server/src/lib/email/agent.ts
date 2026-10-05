@@ -158,7 +158,8 @@ export async function teach(userId: number, text: string, topic: string | null =
 export interface EmailDraft {
   subjects: string[];
   html: string;
-  followups: Array<{ audience: "warm" | "cold"; afterHours: number; subject: string; html: string }>;
+  /** warm: opened, no reply · cold: did not open (resent, new subject) · value: a useful insight to all who have not replied · breakup: the last note */
+  followups: Array<{ audience: "warm" | "cold" | "value" | "breakup"; afterHours: number; subject: string; html: string }>;
   why: string;
 }
 
@@ -195,7 +196,7 @@ export function parseDraft(text: string): EmailDraft | null {
   for (const m of text.matchAll(/\[متابعة([^\]]*)\]\s*\n?([\s\S]*?)\[\/متابعة\]/g)) {
     const attrs = m[1] ?? "";
     const after = Number(/بعد\s*=\s*(\d+)/.exec(attrs)?.[1] ?? 72);
-    const audience = /بارد|cold/.test(attrs) ? "cold" : "warm";
+    const audience: EmailDraft["followups"][number]["audience"] = /وداع|breakup/.test(attrs) ? "breakup" : /قيمة|value/.test(attrs) ? "value" : /بارد|cold/.test(attrs) ? "cold" : "warm";
     const inner = m[2]!.trim();
     const subject = /^\s*عنوان\s*[:：]\s*(.+)$/m.exec(inner)?.[1]?.trim();
     const bodyText = inner.replace(/^\s*عنوان\s*[:：].*$/m, "").trim();
@@ -205,7 +206,6 @@ export function parseDraft(text: string): EmailDraft | null {
   return { subjects, html: toHtml(body), followups, why };
 }
 
-const LANG: Record<string, string> = { ar: "العربية الفصحى المهنية المبسطة", en: "English (professional, plain)", both: "العربية أولاً ثم الإنجليزية في نفس الرسالة" };
 
 /**
  * A campaign for a target: two or three subjects to test, the body, and a
@@ -237,23 +237,32 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       "[عنوان] <العنوان الأول>",
       "[عنوان] <عنوان ثانٍ بزاوية مختلفة تماماً — سنختبرهما على شريحة>",
       "[الرسالة]",
-      "<نص الرسالة: فقرات قصيرة مفصولة بسطر فارغ، يبدأ بـ «{{first_name|…}}،» أو تحية باسم الشركة، وينتهي بطلب واحد، ثم سطر الزر، ثم التوقيع>",
-      "[زر] <نص زر الدعوة: ٢ إلى ٥ كلمات بلغة الرسالة، مثل «Review your AML readiness» أو «احجزوا استشارة مجانية»> — سطر مستقل قبل التوقيع في الرسالة وفي كل متابعة",
+      "<the email: short paragraphs separated by a blank line, opening «Hello {{first_name|there}},» or a greeting naming the company, ending with ONE request, then the button line, then «Best regards,» and «The Pro Count team»>",
+      "[زر] <the call-to-action button: 2 to 5 English words, e.g. «Review your AML readiness», «Book a free consultation»> — its own line before the sign-off, in the email and in every follow-up",
       "[/الرسالة]",
       "[متابعة بعد=72 جمهور=دافئ]",
-      "عنوان: <عنوان لمن فتح ولم يرد>",
-      "<نص قصير بزاوية جديدة>",
+      "عنوان: <for those who OPENED and did not reply — a new pain point from their sector and ONE easy qualification question>",
+      "<short body, new angle, not a repeat>",
       "[/متابعة]",
-      "[متابعة بعد=96 جمهور=بارد]",
-      "عنوان: <عنوان مختلف وأقصر لمن لم يفتح>",
-      "<نص أقصر من الأول>",
+      "[متابعة بعد=72 جمهور=بارد]",
+      "عنوان: <for those who did NOT open — a completely different, shorter subject; the body is the first email's core message, shortened>",
+      "<body: the same offer, tighter>",
+      "[/متابعة]",
+      "[متابعة بعد=168 جمهور=قيمة]",
+      "عنوان: <for everyone who has not replied by day 7 — one genuinely useful fact or tip from the knowledge base for their sector>",
+      "<body: the insight, why it matters to them, a soft call to action>",
+      "[/متابعة]",
+      "[متابعة بعد=336 جمهور=وداع]",
+      "عنوان: <day 14, the last note — polite, closes the loop, leaves the door open>",
+      "<body: two or three lines>",
       "[/متابعة]",
       "[السبب] <سطر: لماذا هذه الزاوية لهذا الجمهور>",
       "",
-      `اللغة: ${LANG[input.language ?? "ar"] ?? LANG.ar}.`,
+      // The owner's rule: every email in English, whatever language the request came in.
+      "LANGUAGE: write every subject, body, follow-up and button in professional UAE B2B ENGLISH — never Arabic, even when the goal, notes or audience are written in Arabic. Only the [عنوان]/[الرسالة]/[متابعة] labels stay as they are.",
       input.tone ? `النبرة: ${input.tone}.` : "",
-      "حقول الشخصنة المتاحة فقط: {{first_name}} {{company}} {{city}} {{sender}} — مع بديل: {{company|شركتكم}}.",
-      "اسم شركة المستلم {{company|شركتكم}} في أحد العنوانين على الأقل وفي السطر الأول، والتوقيع «بروكاونت للمحاسبة» في آخر الرسالة وكل متابعة.",
+      "حقول الشخصنة المتاحة فقط: {{first_name}} {{company}} {{city}} {{sender}} — مع بديل بالإنجليزية: {{company|your company}}.",
+      "اسم شركة المستلم {{company|your company}} في أحد العنوانين على الأقل وفي السطر الأول، والتوقيع «The Pro Count team» في آخر الرسالة وكل متابعة.",
       "لا رقماً أو غرامة أو مهلة أو سعراً ليس في معرفتك أعلاه — سيُراجع حارس الجودة كل رقم ويوقف الرسالة. لا HTML، نص فقط.",
     ].filter(Boolean).join("\n") },
     { role: "user", content: [

@@ -38,7 +38,7 @@ export const STAGES = {
 } as const;
 export type Stage = keyof typeof STAGES;
 
-const DEFAULTS = { enabled: false, mode: "approve", listIds: [] as number[], folderIds: [] as number[], waveSize: 150, followAfterHours: 48, maxTouches: 3, quietDays: 4, language: "ar", lastRunAt: null };
+const DEFAULTS = { enabled: false, mode: "approve", listIds: [] as number[], folderIds: [] as number[], waveSize: 150, followAfterHours: 72, maxTouches: 4, quietDays: 3, language: "en", lastRunAt: null };
 
 export async function getAutopilot(userId: number): Promise<EmailAutopilot> {
   const [row] = await db.select().from(emailAutopilotTable).where(eq(emailAutopilotTable.userId, userId)).limit(1);
@@ -59,7 +59,8 @@ export async function saveAutopilot(userId: number, b: any): Promise<EmailAutopi
     followAfterHours: clamp(b.followAfterHours, 24, 24 * 14, cur.followAfterHours),
     maxTouches: clamp(b.maxTouches, 1, 6, cur.maxTouches),
     quietDays: clamp(b.quietDays, 2, 30, cur.quietDays),
-    language: ["ar", "en", "both"].includes(b.language) ? b.language : cur.language,
+    // Every email in English — the owner's rule; the column stays for the record.
+    language: "en",
     updatedAt: new Date(),
   };
   const [row] = await db.insert(emailAutopilotTable).values(values).onConflictDoUpdate({ target: emailAutopilotTable.userId, set: values }).returning();

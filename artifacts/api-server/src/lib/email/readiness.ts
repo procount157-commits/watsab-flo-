@@ -16,6 +16,7 @@ import {
   emailListMembersTable, emailListsTable, emailSegmentsTable, emailMessagesTable,
 } from "@workspace/db";
 import { resolve as resolveSegment, describe as describeSegment } from "./segments";
+import { isEnglish } from "./language";
 import type { SegmentFilter } from "@workspace/db";
 
 export type ReadyCheck = {
@@ -71,6 +72,12 @@ export async function campaignReadiness(userId: number, campaignId: number): Pro
     : body.length < 120 ? warn("body", "نص الرسالة", `${body.length} حرفاً فقط — قصيرة لرسالة بيع`, "أضف سبباً يخصّ قطاع المستلم.")
     : ok("body", "نص الرسالة", `${body.length} حرفاً`),
   );
+
+  // The owner's rule: email goes out in English.
+  const english = [c.html ?? "", c.subject ?? "", c.subjectB ?? ""].every(isEnglish);
+  checks.push(english
+    ? ok("language", "اللغة", "إنجليزية")
+    : blocked("language", "اللغة", "الرسالة بالعربية — الإيميلات بالإنجليزية فقط", "اكتبها بالإنجليزية، أو دع نورة تعيد كتابتها."));
 
   // Personalisation is in the doctrine: a message that fits everyone is a
   // message nobody answers.

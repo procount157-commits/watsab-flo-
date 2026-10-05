@@ -185,7 +185,7 @@ for (const t of TEMPLATES) {
 }
 
 // ── The real estate campaign ──────────────────────────────────────
-export interface CampaignPack { name: string; language: "en" | "ar"; subjects: [string, string]; html: string; followups: Array<{ audience: "warm" | "cold" | "all"; afterHours: number; subject: string; html: string }> }
+export interface CampaignPack { name: string; language: "en" | "ar"; subjects: [string, string]; html: string; followups: Array<{ audience: "warm" | "cold" | "value" | "breakup"; afterHours: number; subject: string; html: string }> }
 
 export const REAL_ESTATE_CAMPAIGN_EN: CampaignPack = {
   name: "Real Estate AML Readiness — English",
@@ -204,9 +204,11 @@ export const REAL_ESTATE_CAMPAIGN_EN: CampaignPack = {
   followups: [
     { audience: "warm", afterHours: 72, subject: "{{company|Your agency}}: who is really behind each deal?",
       html: [p(HI), p("Following up on my note about AML readiness — one point that catches many agencies out: the beneficial owner is not always the person signing."), p("Under the current law, it is the natural person who owns or effectively controls — or on whose behalf a transaction is made. For property deals involving companies or third parties, the CDD file needs to show that."), p("If you would like, we can review a sample of your customer files and tell you honestly where the gaps are. A 20-minute call is enough to start."), cta("Review our customer files", "have our customer due diligence files reviewed"), p(BYE)].join("\n") },
-    { audience: "cold", afterHours: 96, subject: "A 4-question AML check for {{company|your agency}}",
+    { audience: "cold", afterHours: 72, subject: "Quick question about {{company|your agency}}'s AML file",
+      html: [p(HI), p("Resending in case my earlier note was buried: since 14 December 2025, real estate agencies work under the new AML implementing regulation — and goAML registration alone is not the framework the Ministry of Economy and Tourism expects."), p("Would a short AML readiness review for {{company|your agency}} be useful? It takes about 20 minutes."), cta("Book an AML readiness review", "book an AML readiness review for our agency"), p(BYE)].join("\n") },
+    { audience: "value", afterHours: 168, subject: "A 4-question AML check for {{company|your agency}}",
       html: [p(HI), p("A quick self-check for real estate agencies:"), ul("Do you have a current business-wide AML risk assessment?", "Do your customer files identify the beneficial owner?", "Is there a process to report suspicious activity through goAML?", "Is staff AML training recorded?"), p(`If any answer is "not sure", Pro Count can help. ${CALL[0]!.toUpperCase() + CALL.slice(1)}.`), cta("Review your AML readiness"), p(BYE)].join("\n") },
-    { audience: "all", afterHours: 168, subject: "Closing the loop on AML support for {{company|your agency}}",
+    { audience: "breakup", afterHours: 336, subject: "Closing the loop on AML support for {{company|your agency}}",
       html: [p(HI), p("I have written a couple of times about AML readiness for {{company|your agency}} and will not keep filling your inbox."), p("If an inspection, a new compliance officer, or a question about KYC comes up, we are one email or call away."), p(BYE)].join("\n") },
   ],
 };
@@ -232,9 +234,9 @@ export const REAL_ESTATE_CAMPAIGN_AR: CampaignPack = {
   followups: [
     { audience: "warm", afterHours: 72, subject: "{{company|شركتكم}}: من يقف فعلاً خلف كل صفقة؟",
       html: [p(HI_AR), p("متابعة لرسالتي عن جاهزية AML — نقطة يقع فيها كثيرون: المستفيد الحقيقي ليس دائماً من يوقّع العقد."), p("بحسب القانون الحالي، هو الشخص الطبيعي الذي يملك أو يسيطر فعلياً، أو تتم المعاملة نيابة عنه. وفي الصفقات التي تشارك فيها شركات أو أطراف ثالثة، يجب أن يُظهر ملف العميل ذلك."), p("يمكننا مراجعة عيّنة من ملفات عملائكم وإخباركم بصراحة أين الفجوات. مكالمة قصيرة تكفي للبداية."), ctaAr("راجعوا ملفات عملائنا", "مراجعة ملفات العناية الواجبة لعملائنا"), p(BYE_AR)].join("\n") },
-    { audience: "cold", afterHours: 96, subject: "فحص سريع من ٤ أسئلة لامتثال {{company|وكالتكم}}",
+    { audience: "value", afterHours: 168, subject: "فحص سريع من ٤ أسئلة لامتثال {{company|وكالتكم}}",
       html: [p(HI_AR), p("فحص ذاتي سريع للوكالات العقارية:"), ul("هل لديكم تقييم مخاطر AML حديث لنشاطكم؟", "هل تُظهر ملفات العملاء المستفيد الحقيقي؟", "هل توجد آلية للإبلاغ عن النشاط المشبوه عبر goAML؟", "هل تدريب الفريق على AML موثّق؟"), p(`إن كانت أي إجابة «لست متأكداً»، يمكننا المساعدة — ${CALL_AR}.`), ctaAr("راجعوا جاهزيتنا لـ AML", "مراجعة جاهزية وكالتنا لـ AML"), p(BYE_AR)].join("\n") },
-    { audience: "all", afterHours: 168, subject: "رسالة أخيرة بخصوص دعم AML لـ {{company|وكالتكم}}",
+    { audience: "breakup", afterHours: 336, subject: "رسالة أخيرة بخصوص دعم AML لـ {{company|وكالتكم}}",
       html: [p(HI_AR), p("راسلتكم مرتين بخصوص جاهزية AML، ولن أملأ بريدكم أكثر من ذلك."), p("إن جاء تفتيش، أو احتجتم مسؤول امتثال، أو ظهر سؤال عن معرفة العميل — نحن على بُعد رسالة أو مكالمة."), p(BYE_AR)].join("\n") },
   ],
 };

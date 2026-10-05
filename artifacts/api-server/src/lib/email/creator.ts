@@ -54,8 +54,8 @@ export async function createWithCreator(userId: number, input: {
     examples.length ? `أمثلة من مكتبة قوالب الشركة لهذه الخدمة — استلهم الأسلوب والبنية ولا تنسخها:\n${examples.map((t) => `العنوان: ${t.subject}\n${plain(t.html).slice(0, 900)}`).join("\n---\n")}` : "",
   ].filter(Boolean).join("\n\n");
   const m = await createMission(userId, {
-    name: `${svc.label} — ${input.language === "en" ? "English" : input.language === "both" ? "عربي/English" : "عربي"} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
-    goal: `${svc.goal}\n\n${notes}`, filter, language: input.language ?? "ar", requireApproval: true, agentRole: "email_creator",
+    name: `${svc.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
+    goal: `${svc.goal}\n\n${notes}`, filter, language: "en", requireApproval: true, agentRole: "email_creator",
   });
   await activity(userId, "email_creator", "create", `بدأ بناء حملة «${svc.label}» لـ ${n} شركة (${describe(filter)}) — تنتظر موافقتك حين تُكتب.`, { missionId: m.id });
   // He writes now rather than at the next round, so the owner can read it in a minute.

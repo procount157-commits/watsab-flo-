@@ -436,7 +436,7 @@ function CreatorPanel() {
       <div className="flex items-center gap-2"><span className="text-xl">🧩</span><p className="font-semibold text-sm">طارق ينشئ حملة</p><button onClick={() => setOpen(false)} className="mr-auto text-muted-foreground"><X className="w-4 h-4" /></button></div>
       <div className="grid md:grid-cols-3 gap-3">
         <label className="text-[11px] text-muted-foreground">الخدمة<select className={cn(input, "mt-1")} value={f.service} onChange={(e) => setF({ ...f, service: e.target.value })}><option value="">اختر…</option>{services.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></label>
-        <label className="text-[11px] text-muted-foreground">اللغة<select className={cn(input, "mt-1")} value={f.language} onChange={(e) => setF({ ...f, language: e.target.value })}><option value="en">English</option><option value="ar">العربية</option><option value="both">الاثنتان</option></select></label>
+<span className="text-[11px] text-muted-foreground flex items-center gap-1.5 self-end pb-2">🇬🇧 الإيميلات بالإنجليزية دائماً</span>
         <label className="text-[11px] text-muted-foreground">حجم الموجة<input type="number" className={cn(input, "mt-1")} value={f.take} onChange={(e) => setF({ ...f, take: Math.max(10, Number(e.target.value) || 10) })} /></label>
       </div>
       <div>

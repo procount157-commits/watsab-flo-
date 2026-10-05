@@ -140,6 +140,9 @@ export const emailCampaignsTable = pgTable("email_campaigns", {
   abWaitHours: integer("ab_wait_hours").notNull().default(4),
   abWinner:    varchar("ab_winner", { length: 1 }),
   abDecidedAt: timestamp("ab_decided_at", { withTimezone: true }),
+  /** How many times the subject was rewritten after almost nobody opened (the open-rate checkpoint). */
+  abRound:      integer("ab_round").notNull().default(0),
+  lowOpenAt:    timestamp("low_open_at", { withTimezone: true }),
   createdAt:   timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

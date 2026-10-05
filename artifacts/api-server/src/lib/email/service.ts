@@ -19,6 +19,7 @@ import { notify, esc } from "../telegram";
 import { sendEmail, SendError, isConfigured, messageIdFor } from "./provider";
 import { newToken, renderEmail, firstName, personalize, unsubscribeUrl } from "./tracking";
 import { brandOf } from "./layout";
+import { isEnglish, NOT_ENGLISH } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
 
 const SITE_URL = () => (process.env["SITE_URL"] ?? "").replace(/\/+$/, "");
@@ -83,7 +84,15 @@ export async function startCampaign(userId: number, campaignId: number): Promise
   const [c] = await db.select().from(emailCampaignsTable)
     .where(and(eq(emailCampaignsTable.id, campaignId), eq(emailCampaignsTable.userId, userId))).limit(1);
   if (!c) throw new Error("الحملة غير موجودة");
+  // The owner's rule, before anything else: email goes out in English.
+  if (![c.html, c.subject, c.subjectB ?? ""].every(isEnglish)) throw new Error(NOT_ENGLISH);
   if (!c.listId && !c.segmentId) throw new Error("الحملة بلا قائمة ولا جمهور");
+  // The owner resuming a campaign the checkpoint held: his decision — the rest goes with the current subject.
+  if (c.lowOpenAt || c.abRound > 0) {
+    await db.update(emailMessagesTable).set({ status: "queued", subject: c.subject, variant: null })
+      .where(and(eq(emailMessagesTable.campaignId, c.id), eq(emailMessagesTable.status, "ab_hold")));
+    await db.update(emailCampaignsTable).set({ lowOpenAt: null, abWinner: c.abWinner ?? "A", abDecidedAt: c.abDecidedAt ?? new Date() }).where(eq(emailCampaignsTable.id, c.id));
+  }
   const s = await getSettings(userId);
   if (!isConfigured(s)) throw new Error("إعدادات البريد غير مكتملة — اضبط المُرسِل أولاً");
 
@@ -453,9 +462,40 @@ export async function overview(userId: number) {
  * Decide the tests whose slice has been sent and has had time to be read,
  * and release the held rest under the winning subject.
  */
-export async function decideAbTests(now = new Date()): Promise<number> {
+/** Below this open rate in a test slice of at least this size, the rest waits (the open-rate checkpoint). */
+export const LOW_OPEN_RATE = 0.15;
+export const LOW_OPEN_MIN_SAMPLE = 50;
+
+/** Opens can only be measured when the pixel can reach us: a public address and tracking on. */
+export async function trackingActive(userId: number): Promise<boolean> {
+  if (!(process.env["SITE_URL"] ?? "").trim()) return false;
+  const s = await getSettings(userId);
+  return !!s?.tracking;
+}
+
+/**
+ * New subjects on a fresh slice of the held: a fifth of them (at least 20),
+ * split between the two, the rest still held until this round is read.
+ */
+export async function retestHeld(campaignId: number, subjectA: string, subjectB: string): Promise<{ slice: number; held: number }> {
+  const held = await db.select({ id: emailMessagesTable.id }).from(emailMessagesTable)
+    .where(and(eq(emailMessagesTable.campaignId, campaignId), eq(emailMessagesTable.status, "ab_hold")));
+  const ids = held.map((h) => h.id).sort(() => Math.random() - 0.5);
+  const slice = Math.min(ids.length, Math.max(20, Math.round(ids.length * 0.2)));
+  const a = ids.slice(0, Math.ceil(slice / 2)), b = ids.slice(Math.ceil(slice / 2), slice);
+  if (a.length) await db.update(emailMessagesTable).set({ status: "queued", subject: subjectA, variant: "A" }).where(inArray(emailMessagesTable.id, a));
+  if (b.length) await db.update(emailMessagesTable).set({ status: "queued", subject: subjectB, variant: "B" }).where(inArray(emailMessagesTable.id, b));
+  await db.update(emailCampaignsTable).set({
+    subject: subjectA, subjectB, status: "sending", pauseReason: null, lowOpenAt: null, abWinner: null, abDecidedAt: null,
+    abRound: sql`${emailCampaignsTable.abRound} + 1`,
+  }).where(eq(emailCampaignsTable.id, campaignId));
+  return { slice, held: ids.length };
+}
+
+export async function decideAbTests(now = new Date(), opts: { tracking?: (userId: number) => Promise<boolean>; onlyCampaignIds?: number[] } = {}): Promise<number> {
   const open = await db.select().from(emailCampaignsTable)
-    .where(and(eq(emailCampaignsTable.status, "sending"), sql`${emailCampaignsTable.abPct} > 0`, isNull(emailCampaignsTable.abWinner)));
+    .where(and(eq(emailCampaignsTable.status, "sending"), sql`${emailCampaignsTable.abPct} > 0`, isNull(emailCampaignsTable.abWinner),
+      opts.onlyCampaignIds ? inArray(emailCampaignsTable.id, opts.onlyCampaignIds) : sql`true`));
   let decided = 0;
   for (const c of open) {
     const [st] = await db.select({
@@ -471,6 +511,22 @@ export async function decideAbTests(now = new Date()): Promise<number> {
     }).from(emailMessagesTable).where(eq(emailMessagesTable.campaignId, c.id));
     if (!st || Number(st.pending) > 0 || !st.lastAt) continue;
     if (now.getTime() - new Date(st.lastAt).getTime() < c.abWaitHours * 3_600_000) continue;
+
+    // The checkpoint: with opens measured and a slice large enough to mean
+    // something, a test almost nobody opened does not decide anything — the
+    // rest stays held while the subject is rewritten (missions.rescueSubjects).
+    // Sending a thousand an email that the first two hundred ignored only
+    // teaches the inbox providers to file the next one as spam.
+    const testSent = Number(st.aSent) + Number(st.bSent);
+    const best = Math.max(Number(st.aSent) ? Number(st.aOpen) / Number(st.aSent) : 0, Number(st.bSent) ? Number(st.bOpen) / Number(st.bSent) : 0);
+    if (testSent >= LOW_OPEN_MIN_SAMPLE && best < LOW_OPEN_RATE && (await (opts.tracking ?? trackingActive)(c.userId))) {
+      const pct = Math.round(best * 100);
+      await db.update(emailCampaignsTable).set({ status: "paused", lowOpenAt: now, pauseReason: `نسبة الفتح ${pct}% في عينة ${testSent} — أوقفنا الباقي (${Number(st.held)}) ويُعاد كتابة العنوان` })
+        .where(eq(emailCampaignsTable.id, c.id));
+      await notify(c.userId, `<b>📧 فتح منخفض — ${esc(c.name)}</b>\nفتح ${pct}% فقط من ${testSent} في العينة. أوقفنا إرسال الباقي (${Number(st.held)}) وتكتب نورة عنوانين جديدين لعينة جديدة.`).catch(() => {});
+      logger.warn({ campaignId: c.id, best, testSent }, "فتح منخفض — أُوقف الباقي");
+      continue;
+    }
 
     const winner = pickWinner(
       { sent: Number(st.aSent), opened: Number(st.aOpen), replied: Number(st.aReply) },

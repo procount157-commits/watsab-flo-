@@ -624,6 +624,30 @@ phone; HTML stays on its own tab. Templates show as a gallery of real
 thumbnails (`/templates/:id/render`), and the brand is set under «هوية
 الرسائل» in the email settings.
 
+**English only, and the path after send.** Every email is English: writing,
+follow-ups, the subject rescue and replies to inbound mail (`lib/email/
+language.ts`). The language is enforced at approval, in auto mode, in the
+readiness check and at `startCampaign`, whatever language the request came
+in. The path is four touches over fourteen days, and it stops at a reply,
+an unsubscribe or a bounce:
+- day 0: the first email;
+- day 3: a new angle and one question for those who opened and did not
+  reply, and the same offer, shorter, under a new subject for those who did
+  not open;
+- day 7: one useful fact;
+- day 14: the last note.
+
+A mission's two sequences carry these steps, and its report is split by step.
+
+**The open-rate checkpoint** (`decideAbTests`). With opens measured
+(`SITE_URL` and tracking on), the subject test runs on 20% of the audience
+and is read after a day. Below 15% opens in a sample of at least 50, the rest
+is held, and the writer gives two new subjects for a fresh fifth of the held
+(`retestHeld`). After two such rounds the guard calls it a delivery problem
+and waits for the owner. Resuming a held campaign releases the rest. Without
+tracking the checkpoint cannot judge, so it releases as before, and the page
+says so.
+
 **Clearing email data** (`lib/email/delete.ts`). The audience can be cleared
 in one step: the ticked rows, everyone the current filter selects, a list on
 its own or with its addresses (those in no other list), or all of it. A bulk

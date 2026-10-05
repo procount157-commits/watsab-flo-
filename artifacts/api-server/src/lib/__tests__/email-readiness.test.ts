@@ -19,11 +19,11 @@ async function clean() {
 }
 await clean();
 
-const GOOD_HTML = "<p>مرحباً {{company|فريقكم}}،</p><p>" + "نص كافٍ لرسالة بيع حقيقية تشرح المشكلة والحل. ".repeat(4) + "</p>";
+const GOOD_HTML = "<p>Hello {{company|your team}},</p><p>" + "Enough text for a real sales email that explains the problem and the fix. ".repeat(4) + "</p>";
 
 async function makeCampaign(over: Partial<typeof emailCampaignsTable.$inferInsert> = {}) {
   const [c] = await db.insert(emailCampaignsTable).values({
-    userId: USER, name: "اختبار", subject: "{{company|شركتكم}}: سؤال واحد", html: GOOD_HTML, status: "draft", ...over,
+    userId: USER, name: "اختبار", subject: "{{company|Your company}}: one question", html: GOOD_HTML, status: "draft", ...over,
   } as any).returning();
   return c!;
 }
@@ -118,7 +118,7 @@ check("...لكنه يقول كم يوماً", /3 أيام/.test(r.checks.find((x
 await clean();
 await settings();
 list = await makeList([{ email: "ready-z@x.ae", mxOk: true }]);
-c = await makeCampaign({ listId: list.id, subject: "عرض", html: "<p>" + "نص عام يصلح لأي شركة بلا استثناء. ".repeat(5) + "</p>" });
+c = await makeCampaign({ listId: list.id, subject: "An offer", html: "<p>" + "A generic text that fits any company without exception. ".repeat(5) + "</p>" });
 r = (await campaignReadiness(USER, c.id))!;
 check("رسالة بلا شخصنة تُنبَّه لا تُمنع", r.canPublish && r.checks.find((x) => x.id === "personal")!.state === "warn");
 

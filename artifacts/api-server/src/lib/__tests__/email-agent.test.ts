@@ -112,7 +112,11 @@ check("...and what won before", b.includes("سؤال عن مسؤول الامت�
 
 // ── A mission, from approval to the follow-up split ──────────────
 const m = await createMission(USER, { name: "AML — عقارات", goal: "تعريف بخدمة الامتثال", filter: re });
-await db.update(emailMissionsTable).set({ stage: "awaiting_approval", pending: d as any }).where(eq(emailMissionsTable.id, m.id));
+// Email goes out in English: the approved draft is the English one.
+const en = { ...d, subjects: ["Is {{company|your agency}} ready for an AML inspection?", "A question about your compliance officer"],
+  html: "<p>Hello {{first_name|there}},</p><p>Real estate brokers are among the businesses supervised for AML. Do you have a compliance officer in place?</p>",
+  followups: d.followups.map((f) => ({ ...f, subject: `A follow-up for {{company|your team}} (${f.audience})`, html: "<p>A short follow-up for your team.</p>" })) };
+await db.update(emailMissionsTable).set({ stage: "awaiting_approval", pending: en as any }).where(eq(emailMissionsTable.id, m.id));
 await approve(USER, m.id);
 let [mm] = await db.select().from(emailMissionsTable).where(eq(emailMissionsTable.id, m.id));
 check("approval launches the campaign", mm!.stage === "sending" && !!mm!.campaignId && !!mm!.warmSequenceId && !!mm!.coldSequenceId);

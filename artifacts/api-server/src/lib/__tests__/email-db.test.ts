@@ -38,19 +38,19 @@ const [list] = await db.insert(emailListsTable).values({ userId: USER, name: "ا
 await db.insert(emailListMembersTable).values(contacts.map((c) => ({ listId: list!.id, contactId: c.id })));
 
 // ── A campaign ───────────────────────────────────────────────────
-const [camp] = await db.insert(emailCampaignsTable).values({ userId: USER, name: "حملة", listId: list!.id, subject: "العنوان أ", html: "<p>x</p>" }).returning();
+const [camp] = await db.insert(emailCampaignsTable).values({ userId: USER, name: "حملة", listId: list!.id, subject: "Subject A", html: "<p>x</p>" }).returning();
 let r = await startCampaign(USER, camp!.id);
 check("the unsubscribed and the dead domain are skipped", r.queued === 58 && r.skipped === 2, `${r.queued}/${r.skipped}`);
 r = await startCampaign(USER, camp!.id);
 check("starting again does not double up", r.queued === 0);
 
 // ── A subject test ───────────────────────────────────────────────
-const [ab] = await db.insert(emailCampaignsTable).values({ userId: USER, name: "اختبار عنوان", listId: list!.id, subject: "أ", subjectB: "ب", abPct: 20, abWaitHours: 1, html: "<p>x</p>" }).returning();
+const [ab] = await db.insert(emailCampaignsTable).values({ userId: USER, name: "اختبار عنوان", listId: list!.id, subject: "A", subjectB: "B", abPct: 20, abWaitHours: 1, html: "<p>x</p>" }).returning();
 await startCampaign(USER, ab!.id);
 const abMsgs = await db.select().from(emailMessagesTable).where(eq(emailMessagesTable.campaignId, ab!.id));
 const nA = abMsgs.filter((m) => m.variant === "A").length, nB = abMsgs.filter((m) => m.variant === "B").length, held = abMsgs.filter((m) => m.status === "ab_hold").length;
 check("the test slice is split and the rest held", nA === 10 && nB === 10 && held === 38, `${nA}/${nB}/${held}`);
-check("B carries the other subject", abMsgs.filter((m) => m.variant === "B").every((m) => m.subject === "ب"));
+check("B carries the other subject", abMsgs.filter((m) => m.variant === "B").every((m) => m.subject === "B"));
 // Pretend the slice went out two hours ago and B was opened more.
 const past = new Date(Date.now() - 2 * 3_600_000);
 await db.update(emailMessagesTable).set({ status: "sent", sentAt: past }).where(and(eq(emailMessagesTable.campaignId, ab!.id), inArray(emailMessagesTable.variant, ["A", "B"])));
@@ -61,7 +61,7 @@ check("the test is decided", (await decideAbTests()) >= 1);
 const [abAfter] = await db.select().from(emailCampaignsTable).where(eq(emailCampaignsTable.id, ab!.id));
 const released = await db.select().from(emailMessagesTable).where(and(eq(emailMessagesTable.campaignId, ab!.id), eq(emailMessagesTable.status, "queued")));
 check("...B wins", abAfter?.abWinner === "B");
-check("...and the held rest is released under B's subject", released.length === 38 && released.every((m) => m.subject === "ب"));
+check("...and the held rest is released under B's subject", released.length === 38 && released.every((m) => m.subject === "B"));
 
 // ── A sequence ───────────────────────────────────────────────────
 const [seq] = await db.insert(emailSequencesTable).values({ userId: USER, name: "متابعة", steps: [

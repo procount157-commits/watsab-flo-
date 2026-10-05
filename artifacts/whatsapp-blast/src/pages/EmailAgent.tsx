@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
 import { FolderSidebar, MoveToFolder, inFolder, type FolderSel } from "@/components/Folders";
 import { EmailEditor } from "@/components/EmailEditor";
+import { EmailFlow } from "@/components/EmailFlow";
 
 const card = "bg-card border border-card-border rounded-xl";
 const ghost = "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-card-border hover:border-primary/50 transition-colors disabled:opacity-40";
@@ -266,7 +267,7 @@ function DraftEditor({ draft, onChange }: { draft: any; onChange: (d: any) => vo
       </div>
       {draft.followups?.map((fu: any, i: number) => (
         <div key={i} className="rounded-lg border border-card-border p-3 space-y-1.5">
-          <div className="flex items-center gap-2 text-xs"><span className="font-semibold">{fu.audience === "warm" ? "متابعة لمن فتح ولم يرد" : "متابعة لمن لم يفتح"}</span>
+          <div className="flex items-center gap-2 text-xs"><span className="font-semibold">{({ warm: "يوم ٣ — لمن فتح ولم يرد", cold: "يوم ٣ — لمن لم يفتح (نفس العرض بعنوان جديد)", value: "يوم ٧ — معلومة مفيدة لمن لم يرد", breakup: "يوم ١٤ — الرسالة الأخيرة" } as Record<string, string>)[fu.audience] ?? fu.audience}</span>
             <button onClick={() => showPreview(fu.subject, fu.html)} className="text-[11px] text-primary mr-auto flex items-center gap-1"><Eye className="w-3 h-3" /> معاينة</button></div>
           <input className={input} value={fu.subject} onChange={(e) => { const f = [...draft.followups]; f[i] = { ...fu, subject: e.target.value }; onChange({ ...draft, followups: f }); }} />
           <EmailEditor value={fu.html} subject={fu.subject} compact minHeight={180} onChange={(html) => { const f = [...draft.followups]; f[i] = { ...fu, html }; onChange({ ...draft, followups: f }); }} />
@@ -300,7 +301,7 @@ export function AgentTab({ initialFilter, onMissionCreated }: { initialFilter?: 
   const [target, setTarget] = useState<Filter>(initialFilter ?? {});
   useEffect(() => { if (initialFilter) setTarget(initialFilter); }, [initialFilter]);
   const [goal, setGoal] = useState(GOALS[0]!);
-  const [lang, setLang] = useState("ar");
+  const [lang, setLang] = useState("en");
   const [tone, setTone] = useState("");
   const [notes, setNotes] = useState("");
   const [draft, setDraft] = useState<any>(null);
@@ -389,7 +390,7 @@ export function AgentTab({ initialFilter, onMissionCreated }: { initialFilter?: 
               <select className={cn(input, "text-xs mb-1.5")} value={GOALS.includes(goal) ? goal : ""} onChange={(e) => e.target.value && setGoal(e.target.value)}><option value="">— هدف مكتوب بيدك —</option>{GOALS.map((g) => <option key={g} value={g}>{g.slice(0, 80)}</option>)}</select>
               <textarea className={cn(input, "min-h-[4.5rem] text-xs")} value={goal} onChange={(e) => setGoal(e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-2">
-              <select className={cn(input, "text-xs")} value={lang} onChange={(e) => setLang(e.target.value)}><option value="ar">عربي</option><option value="en">English</option><option value="both">عربي + English</option></select>
+              <span className="text-[11px] text-muted-foreground self-center">🇬🇧 English</span>
               <input className={cn(input, "text-xs")} value={tone} onChange={(e) => setTone(e.target.value)} placeholder="النبرة (اختياري): رسمية، ودّية…" />
             </div>
             <textarea className={cn(input, "min-h-[3rem] text-xs")} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="ملاحظات لها (اختياري): اذكري العرض الحالي، لا تذكري السعر…" />
@@ -428,7 +429,7 @@ function Report({ r }: { r: any }) {
   );
   return (
     <div className="grid md:grid-cols-2 gap-3 mt-3">
-      <div className="rounded-lg border border-card-border p-2.5"><p className="text-[11px] font-semibold mb-1">حسب المرحلة <span className="text-muted-foreground font-normal">(أُرسل · فتح · رد)</span></p><T rows={r.byStage ?? []} k="stage" /></div>
+      <div className="rounded-lg border border-card-border p-2.5"><p className="text-[11px] font-semibold mb-1">حسب المرحلة <span className="text-muted-foreground font-normal">(أُرسل · فتح · رد)</span></p><T rows={(r.byStage ?? []).map((x: any) => ({ ...x, stage: ({ first: "الأولى", warm: "يوم ٣ — فتح ولم يرد", cold: "يوم ٣ — لم يفتح", value: "يوم ٧ — معلومة", breakup: "يوم ١٤ — الأخيرة" } as Record<string, string>)[x.stage] ?? x.stage }))} k="stage" /></div>
       {r.subjects?.length > 0 && <div className="rounded-lg border border-card-border p-2.5"><p className="text-[11px] font-semibold mb-1">اختبار العنوان {r.winner ? `— فاز ${r.winner}` : ""}</p><T rows={r.subjects.map((s: any) => ({ ...s, label: `${s.variant}: ${s.subject}` }))} k="label" /></div>}
       <div className="rounded-lg border border-card-border p-2.5"><p className="text-[11px] font-semibold mb-1">حسب المدينة — أيّ جمهور استجاب</p><T rows={r.byCity ?? []} k="city" /></div>
       <div className="rounded-lg border border-card-border p-2.5"><p className="text-[11px] font-semibold mb-1">حسب القطاع</p><T rows={r.bySector ?? []} k="sector" /></div>
@@ -442,12 +443,13 @@ export function MissionsTab() {
   const { data: missions = [] } = useQuery<any[]>({ queryKey: ["email-missions"], queryFn: () => api("/api/email/missions"), refetchInterval: 15_000 });
   const inv = () => qc.invalidateQueries({ queryKey: ["email-missions"] });
   const [creating, setCreating] = useState(false);
-  const [nf, setNf] = useState<{ filter: Filter; goal: string; name: string; language: string; requireApproval: boolean; followAfterHours: number }>({ filter: {}, goal: GOALS[0]!, name: "", language: "ar", requireApproval: true, followAfterHours: 48 });
+  const [nf, setNf] = useState<{ filter: Filter; goal: string; name: string; language: string; requireApproval: boolean; followAfterHours: number }>({ filter: {}, goal: GOALS[0]!, name: "", language: "en", requireApproval: true, followAfterHours: 72 });
   const [open, setOpen] = useState<number | null>(null);
   const [edits, setEdits] = useState<Record<number, any>>({});
   const create = useMutation({ mutationFn: () => api("/api/email/missions", { method: "POST", body: JSON.stringify(nf) }), onSuccess: (m: any) => { setCreating(false); setOpen(m.id); inv(); toast.success("بدأت نورة الكتابة — المسودة تظهر هنا خلال دقيقة"); }, onError: (e: Error) => toast.error(e.message) });
   const act = useMutation({ mutationFn: ({ id, a, body }: { id: number; a: string; body?: any }) => api(`/api/email/missions/${id}/${a}`, { method: "POST", body: body ? JSON.stringify(body) : undefined }), onSuccess: inv, onError: (e: Error) => toast.error(e.message) });
   const del = useMutation({ mutationFn: (id: number) => api(`/api/email/missions/${id}`, { method: "DELETE" }), onSuccess: inv });
+  const { data: ovTrack } = useQuery<any>({ queryKey: ["email-overview"], queryFn: () => api("/api/email/overview") });
 
   return (
     <div className="space-y-4">
@@ -463,7 +465,7 @@ export function MissionsTab() {
             <select className={cn(input, "text-xs")} value={GOALS.includes(nf.goal) ? nf.goal : ""} onChange={(e) => e.target.value && setNf({ ...nf, goal: e.target.value })}><option value="">— هدف مكتوب بيدك —</option>{GOALS.map((g) => <option key={g} value={g}>{g.slice(0, 80)}</option>)}</select>
             <textarea className={cn(input, "min-h-[5rem] text-xs")} value={nf.goal} onChange={(e) => setNf({ ...nf, goal: e.target.value })} />
             <div className="grid grid-cols-2 gap-2">
-              <select className={cn(input, "text-xs")} value={nf.language} onChange={(e) => setNf({ ...nf, language: e.target.value })}><option value="ar">عربي</option><option value="en">English</option><option value="both">عربي + English</option></select>
+              <span className="text-[11px] text-muted-foreground self-center">🇬🇧 الإيميلات بالإنجليزية</span>
               <label className="text-xs flex items-center gap-2">المتابعة بعد <input type="number" className={cn(input, "w-16 text-xs")} value={nf.followAfterHours} onChange={(e) => setNf({ ...nf, followAfterHours: Number(e.target.value) })} /> ساعة</label>
             </div>
             <label className="text-xs flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={nf.requireApproval} onChange={(e) => setNf({ ...nf, requireApproval: e.target.checked })} /><span>انتظري موافقتي قبل الإرسال <span className="text-muted-foreground">(موصى به — بدونها ترسل ما تكتبه مباشرة)</span></span></label>
@@ -494,6 +496,7 @@ export function MissionsTab() {
               {STAGES.map((s, i) => <div key={s.k} className="flex-1"><div className={cn("h-1.5 rounded-full", i < si ? "bg-primary" : i === si ? (m.status === "active" ? "bg-primary animate-pulse" : "bg-yellow-400") : "bg-muted")} /><p className={cn("text-[10px] mt-1", i === si ? "text-foreground" : "text-muted-foreground")}>{s.l}</p></div>)}
             </div>
             {m.status !== "active" && <p className="text-[11px] text-yellow-400 mt-2"><AlertTriangle className="w-3 h-3 inline ml-1" />موقوفة{m.log?.[0]?.kind === "error" ? ` — ${m.log[0].text}` : ""}</p>}
+            {live?.byStage?.length > 0 && <div className="mt-3"><EmailFlow compact stages={live.byStage} tracking={!!ovTrack?.trackingBase} /></div>}
             {live?.total && <p className="text-xs mt-2">أُرسل {live.total.sent} · فتح <b className="text-blue-400">{live.total.openRate}%</b> · نقر {live.total.clicked} · رد <b className="text-green-400">{live.total.replyRate}%</b> ({live.total.replied}) · ارتدّ {live.total.bounced}</p>}
 
             {m.stage === "awaiting_approval" && d && (

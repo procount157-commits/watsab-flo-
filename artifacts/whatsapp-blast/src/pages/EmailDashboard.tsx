@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
 import { useFolders } from "@/components/Folders";
 import { useEmailLists } from "./EmailLists";
+import { EmailFlow } from "@/components/EmailFlow";
 
 const card = "bg-card border border-card-border rounded-xl";
 const ghost = "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-card-border hover:border-primary/50 transition-colors disabled:opacity-40";
@@ -81,6 +82,11 @@ export function DashboardTab({ goMissions }: { goMissions: () => void }) {
       </div>
 
       {showSettings && <AutopilotSettings ap={ap} onSave={(b) => save.mutate(b)} saving={save.isPending} onClose={() => setShowSettings(false)} />}
+
+      <details className={cn(card, "p-4 group")} open={!d.campaigns?.length}>
+        <summary className="cursor-pointer text-sm font-semibold flex items-center gap-2 list-none"><Rocket className="w-4 h-4 text-primary" /> مسار كل حملة — ماذا يحدث بعد الإرسال <span className="text-[11px] font-normal text-muted-foreground mr-auto">٤ رسائل خلال ١٤ يوماً، بالإنجليزية</span></summary>
+        <div className="mt-3"><EmailFlow tracking={d.tracking} /></div>
+      </details>
 
       {!d.configured && <Banner tone="red">لا مُرسِل مضبوط — لن يُرسل الفريق شيئاً حتى تُضبط إعدادات البريد.</Banner>}
       {d.lists.reduce((t: number, l: any) => t + l.sendable, 0) === 0 && (
@@ -433,10 +439,10 @@ function AutopilotSettings({ ap, onSave, saving, onClose }: { ap: any; onSave: (
         <label className="text-[11px] text-muted-foreground">أيام الراحة بين رسالتين<input type="number" className={cn(input, "mt-1")} value={f.quietDays} onChange={num("quietDays", 2, 30)} /></label>
         <label className="text-[11px] text-muted-foreground">أقصى رسائل للشخص شهرياً<input type="number" className={cn(input, "mt-1")} value={f.maxTouches} onChange={num("maxTouches", 1, 6)} /></label>
         <label className="text-[11px] text-muted-foreground">المتابعة بعد (ساعة)<input type="number" className={cn(input, "mt-1")} value={f.followAfterHours} onChange={num("followAfterHours", 24, 336)} /></label>
-        <label className="text-[11px] text-muted-foreground">اللغة<select className={cn(input, "mt-1")} value={f.language} onChange={(e) => setF({ ...f, language: e.target.value })}><option value="ar">العربية</option><option value="en">English</option><option value="both">الاثنتان</option></select></label>
+<span className="text-[11px] text-muted-foreground flex items-center gap-1.5 self-end pb-2">🇬🇧 الإيميلات بالإنجليزية دائماً</span>
       </div>
       <div className="flex gap-2">
-        <button onClick={() => { onSave({ listIds: f.listIds, folderIds: f.folderIds, mode: f.mode, waveSize: f.waveSize, quietDays: f.quietDays, maxTouches: f.maxTouches, followAfterHours: f.followAfterHours, language: f.language }); onClose(); }} disabled={saving} className={primary}><CheckCircle2 className="w-3.5 h-3.5" /> احفظ</button>
+        <button onClick={() => { onSave({ listIds: f.listIds, folderIds: f.folderIds, mode: f.mode, waveSize: f.waveSize, quietDays: f.quietDays, maxTouches: f.maxTouches, followAfterHours: f.followAfterHours }); onClose(); }} disabled={saving} className={primary}><CheckCircle2 className="w-3.5 h-3.5" /> احفظ</button>
         <button onClick={onClose} className={ghost}>إغلاق</button>
       </div>
     </div>

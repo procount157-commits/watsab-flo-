@@ -26,6 +26,8 @@ import { notify, esc } from "../telegram";
 import { startCampaign, enrolInSequence } from "./service";
 import { writeCampaign, rememberLesson, learnFrom, type EmailDraft } from "./agent";
 import { count, describe } from "./segments";
+import { EMAIL_LANGUAGE, isEnglish, NOT_ENGLISH } from "./language";
+import { trackingActive, retestHeld } from "./service";
 import { activity, guardCheck, onDuty, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
 
@@ -42,9 +44,10 @@ export async function createMission(userId: number, input: {
 }) {
   const [m] = await db.insert(emailMissionsTable).values({
     userId, name: input.name.slice(0, 160), goal: input.goal.slice(0, 2000), filter: input.filter,
-    language: input.language ?? "ar", tone: input.tone ?? null,
+    language: EMAIL_LANGUAGE, tone: input.tone ?? null,
     requireApproval: input.requireApproval !== false,
-    followAfterHours: Math.min(24 * 14, Math.max(24, Number(input.followAfterHours) || 48)),
+    // Day 3: the first follow-up, by default.
+    followAfterHours: Math.min(24 * 14, Math.max(24, Number(input.followAfterHours) || 72)),
     agentRole: input.agentRole ?? null, sourceListId: input.sourceListId ?? null,
   }).returning();
   await log(m!.id, `أُنشئت المهمة: ${describe(input.filter)} — ${input.goal.slice(0, 200)}`, "start");
@@ -60,11 +63,20 @@ async function launch(m: EmailMission, d: EmailDraft) {
   const [seg] = await db.insert(emailSegmentsTable).values({ userId: m.userId, name: `مهمة: ${m.name}`.slice(0, 160), filter }).returning();
   const [camp] = await db.insert(emailCampaignsTable).values({
     userId: m.userId, name: m.name, segmentId: seg!.id, missionId: m.id, createdBy: "agent",
-    subject: d.subjects[0]!, subjectB: d.subjects[1] ?? null, abPct: d.subjects[1] && n >= 40 ? 20 : 0, abWaitHours: 4,
+    // With opens measured, the test slice is read after a day — enough time for a B2B inbox to be opened.
+    subject: d.subjects[0]!, subjectB: d.subjects[1] ?? null, abPct: d.subjects[1] && n >= 40 ? 20 : 0, abWaitHours: (await trackingActive(m.userId)) ? 24 : 4,
     html: d.html, status: "draft",
   }).returning();
+  // The sequence after the first email: day 3 the touch for what they did (opened → a new angle and a
+  // question; did not open → the same offer, shorter, under a new subject), day 7 something useful,
+  // day 14 the last note. Each stops the moment they reply, unsubscribe or bounce.
+  const tail = [
+    ...d.followups.filter((f) => f.audience === "value").slice(0, 1).map((f) => ({ afterHours: 96, subject: f.subject, html: f.html })),
+    ...d.followups.filter((f) => f.audience === "breakup").slice(0, 1).map((f) => ({ afterHours: 264, subject: f.subject, html: f.html })),
+  ];
   const seqFor = async (audience: "warm" | "cold") => {
-    const steps = d.followups.filter((f) => f.audience === audience).map((f) => ({ afterHours: 0, subject: f.subject, html: f.html }));
+    const first = d.followups.filter((f) => f.audience === audience).slice(0, 1).map((f) => ({ afterHours: 0, subject: f.subject, html: f.html }));
+    const steps = [...first, ...tail];
     if (!steps.length) return null;
     const [s] = await db.insert(emailSequencesTable).values({
       userId: m.userId, name: `${m.name} — ${audience === "warm" ? "فتح ولم يرد" : "لم يفتح"}`.slice(0, 160), steps, stopOnReply: true, isActive: true,
@@ -83,6 +95,7 @@ export async function approve(userId: number, id: number, edited?: Partial<Email
   const [m] = await db.select().from(emailMissionsTable).where(and(eq(emailMissionsTable.id, id), eq(emailMissionsTable.userId, userId))).limit(1);
   if (!m || m.stage !== "awaiting_approval" || !m.pending) throw new Error("لا شيء ينتظر الموافقة");
   const d = { ...(m.pending as EmailDraft), ...(edited ?? {}) } as EmailDraft;
+  if (![d.html, ...d.subjects].every(isEnglish)) throw new Error(NOT_ENGLISH);
   // Nobody to send to is said now, and the mission keeps waiting — approving
   // it into a pause, with nothing said, read as "approval does not work".
   const n = await count(userId, m.filter as SegmentFilter, true);
@@ -113,6 +126,11 @@ export async function runMission(m: EmailMission): Promise<void> {
     await log(m.id, `كتبت الحملة (${w.provider}): «${w.draft.subjects.join("» / «")}» — ${w.draft.why}`, "write");
     await activity(m.userId, role, "write", `كتب حملة «${m.name}» لـ ${w.audience.count} شركة: «${w.draft.subjects[0]}»`, { missionId: m.id });
     // ماجد reads it before anything goes out on its own; what he finds sends it to the owner instead.
+    if (!m.requireApproval && ![w.draft.html, ...w.draft.subjects].every(isEnglish)) {
+      await set(m.id, { stage: "awaiting_approval", pending: w.draft as any });
+      await log(m.id, NOT_ENGLISH, "error");
+      return;
+    }
     if (!m.requireApproval && (await onDuty(m.userId, "email_guard"))) {
       const knowledge = await knowledgeText(m.userId);
       const issues = guardCheck([...w.draft.subjects, w.draft.html, ...w.draft.followups.flatMap((f) => [f.subject, f.html])], knowledge);
@@ -137,6 +155,8 @@ export async function runMission(m: EmailMission): Promise<void> {
   if (m.stage === "sending" && m.campaignId) {
     const [c] = await db.select().from(emailCampaignsTable).where(eq(emailCampaignsTable.id, m.campaignId)).limit(1);
     if (!c) return;
+    // Almost nobody opened the test slice: the rest was held. New subjects, a fresh slice — twice at most.
+    if (c.status === "paused" && c.lowOpenAt) { await rescueSubjects(m, c); return; }
     // The subject test, once decided, is a lesson for this sector.
     const learned = await db.select({ id: emailMissionLogTable.id }).from(emailMissionLogTable)
       .where(and(eq(emailMissionLogTable.missionId, m.id), eq(emailMissionLogTable.kind, "ab"))).limit(1);
@@ -207,7 +227,10 @@ export async function missionReport(m: EmailMission) {
     db.select({ k: emailMessagesTable.variant, ...agg }).from(emailMessagesTable).where(and(eq(emailMessagesTable.campaignId, m.campaignId), sql`${emailMessagesTable.variant} is not null`)).groupBy(emailMessagesTable.variant),
     db.select({ k: emailContactsTable.city, ...agg }).from(emailMessagesTable).innerJoin(emailContactsTable, eq(emailContactsTable.id, emailMessagesTable.contactId)).where(base).groupBy(emailContactsTable.city).orderBy(sql`2 desc`).limit(12),
     db.select({ k: emailContactsTable.sector, ...agg }).from(emailMessagesTable).innerJoin(emailContactsTable, eq(emailContactsTable.id, emailMessagesTable.contactId)).where(base).groupBy(emailContactsTable.sector).orderBy(sql`2 desc`).limit(12),
-    db.select({ k: sql<string>`case when ${emailMessagesTable.campaignId} = ${m.campaignId} then 'الأولى' when ${emailSequenceJobsTable.sequenceId} = ${m.warmSequenceId ?? -1} then 'متابعة: فتح ولم يرد' else 'متابعة: لم يفتح' end`, ...agg })
+    // By step of the path: the first email, day 3 (opened / not opened), day 7, day 14.
+    db.select({ k: sql<string>`case when ${emailMessagesTable.campaignId} = ${m.campaignId} then 'first'
+        when ${emailSequenceJobsTable.stepIndex} = 1 then 'value' when ${emailSequenceJobsTable.stepIndex} >= 2 then 'breakup'
+        when ${emailSequenceJobsTable.sequenceId} = ${m.warmSequenceId ?? -1} then 'warm' else 'cold' end`, ...agg })
       .from(emailMessagesTable).leftJoin(emailSequenceJobsTable, eq(emailSequenceJobsTable.id, emailMessagesTable.sequenceJobId)).where(base).groupBy(sql`1`),
   ]);
   const [c] = await db.select().from(emailCampaignsTable).where(eq(emailCampaignsTable.id, m.campaignId)).limit(1);
@@ -261,4 +284,33 @@ export async function missionsFor(userId: number) {
     log: await db.select().from(emailMissionLogTable).where(eq(emailMissionLogTable.missionId, m.id)).orderBy(desc(emailMissionLogTable.createdAt)).limit(30),
     live: m.campaignId && m.stage !== "done" ? await missionReport(m).catch(() => null) : null,
   })));
+}
+
+/**
+ * The open-rate checkpoint's second half. The test slice was read and almost
+ * nobody opened, so the rest is held (service.decideAbTests). The writer gives
+ * two new subjects with different angles and they go to a fresh slice of the
+ * held; after two such rounds the problem is taken to be delivery — the inbox
+ * is not seeing the email at all — and the campaign waits for the owner.
+ */
+async function rescueSubjects(m: EmailMission, c: typeof emailCampaignsTable.$inferSelect) {
+  if (c.abRound >= 2) {
+    const [already] = await db.select({ id: emailMissionLogTable.id }).from(emailMissionLogTable).where(and(eq(emailMissionLogTable.missionId, m.id), eq(emailMissionLogTable.kind, "deliverability"))).limit(1);
+    if (already) return;
+    const why = "بقيت نسبة الفتح منخفضة بعد عنوانين جديدين مرتين — المشكلة غالباً في التسليم لا في العنوان: الرسائل تصل إلى السبام أو لا تصل. افحص SPF وDKIM وDMARC من إعدادات البريد، وخفّض حصة اليوم أسبوعاً، ثم استأنف الحملة.";
+    await log(m.id, why, "deliverability");
+    await activity(m.userId, "email_guard", "hold", `«${m.name}»: ${why}`, { missionId: m.id, campaignId: c.id });
+    await notify(m.userId, `<b>🛡️ ماجد: حملة «${esc(m.name)}» متوقفة</b>\n${esc(why)}`).catch(() => {});
+    return;
+  }
+  const filter = m.filter as SegmentFilter;
+  const w = await writeCampaign(m.userId, {
+    filter, role: (m.agentRole as EmailRole | null) ?? "email",
+    goal: `${m.goal}\n\nThe first subjects were opened by almost nobody: «${c.subject}» and «${c.subjectB ?? ""}». Write two NEW subjects with completely different angles (a question about their business; a specific fact from the knowledge base) — short, no hype, the company name in at least one. Keep the email body as it is.`,
+  });
+  const subjects = w?.draft.subjects.filter((x) => isEnglish(x)).slice(0, 2) ?? [];
+  if (subjects.length < 2) { await log(m.id, "تعذّرت كتابة عنوانين جديدين — أحاول في الجولة القادمة.", "error"); return; }
+  const r = await retestHeld(c.id, subjects[0]!, subjects[1]!);
+  await log(m.id, `نسبة الفتح كانت منخفضة — جُرّب عنوانان جديدان على ${r.slice} من ${r.held} المنتظرين: «${subjects[0]}» / «${subjects[1]}».`, "ab");
+  await activity(m.userId, (m.agentRole as EmailRole | null) ?? "email", "rescue", `أعاد كتابة عنوان «${m.name}» بعد فتح منخفض، وجرّبه على ${r.slice} شركة.`, { missionId: m.id, campaignId: c.id });
 }
