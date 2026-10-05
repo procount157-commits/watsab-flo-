@@ -35,7 +35,7 @@ export function EmailEditor({ value, onChange, subject, minHeight = 320, compact
   const ref = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<"design" | "html">("design");
   const [device, setDevice] = useState<"desktop" | "phone">("desktop");
-  const [preview, setPreview] = useState<{ subject: string; html: string } | null>(null);
+  const [preview, setPreview] = useState<{ subject: string; html: string; to?: { email: string; company: string | null } | null } | null>(null);
   const [showPreview, setShowPreview] = useState(!compact);
   const last = useRef(value);
   const rtl = (value.replace(/<[^>]+>/g, "").match(/[؀-ۿ]/g)?.length ?? 0) > (value.replace(/<[^>]+>/g, "").match(/[A-Za-z]/g)?.length ?? 0);
@@ -108,7 +108,7 @@ export function EmailEditor({ value, onChange, subject, minHeight = 320, compact
         <div className="rounded-xl border border-card-border overflow-hidden bg-[#eef2f6] flex flex-col">
           <div className="flex items-center gap-2 px-3 py-2 bg-white border-b text-black">
             <div className="min-w-0 flex-1" dir={rtl ? "rtl" : "ltr"}>
-              <p className="text-[10px] text-gray-500">{rtl ? "كما تصل — بأسماء مثال" : "As it arrives — with sample names"}</p>
+              <p className="text-[10px] text-gray-500 truncate" dir="rtl">{preview?.to ? `كما تصل إلى ${preview.to.company || preview.to.email} — كل مستلم يرى اسمه وشركته` : "كما تصل — باسم مثال"}</p>
               <p className="text-xs font-semibold truncate">{preview?.subject || subject || "—"}</p>
             </div>
             <button type="button" onClick={() => setDevice("desktop")} className={cn("p-1.5 rounded", device === "desktop" ? "bg-gray-200 text-black" : "text-gray-400")}><Monitor className="w-3.5 h-3.5" /></button>

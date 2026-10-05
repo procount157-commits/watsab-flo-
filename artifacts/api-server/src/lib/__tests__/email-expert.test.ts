@@ -1,3 +1,5 @@
+export {};
+
 // The email team as experts, and English as the language the firm sends in:
 // the doctrine says so and no longer caps follow-ups at three; the plain
 // layout of an English email is English and left-to-right; every writer
@@ -40,6 +42,27 @@ check("a plain English email is English and left-to-right", /<html dir="ltr" lan
 check("...with an English footer only", /Unsubscribe/.test(en) && !/إلغاء الاشتراك/.test(en));
 const ar = renderEmail("<p>مرحباً فريق شركة النور، دفاتركم قد تكون متأخرة.</p>", {}, track, foot).html;
 check("an Arabic one keeps right-to-left and both footers", /dir="rtl" lang="ar"/.test(ar) && /إلغاء الاشتراك/.test(ar) && /Unsubscribe/.test(ar));
+
+// ── Names: no Khalid, no "Hello WEST LEGEND … L.L.C" ──────────────
+const { companyName } = await import("../email/tracking");
+const { varsFor } = await import("../email/service");
+const { personalize } = await import("../email/tracking");
+const cases: Array<[string, string]> = [
+  ["WEST LEGEND REAL ESTATE BROKERS L.L.C", "West Legend Real Estate Brokers"],
+  ["A E A M Real Estate L.l.c", "A E A M Real Estate"],
+  ["KHR Real Estate", "KHR Real Estate"],
+  ["D V R C REAL ESTATE L.L.C", "D V R C Real Estate"],
+  ["AL NOOR PROPERTIES FZE", "Al Noor Properties"],
+  ["HOUSE OF GOLD TRADING CO. L.L.C", "House of Gold Trading"],
+  ["Dream Loom properties", "Dream Loom properties"],
+  ["شركة النور العقارية ذ.م.م", "شركة النور العقارية ذ.م.م"],
+];
+for (const [raw, want] of cases) check(`company «${raw}» reads «${want}»`, companyName(raw) === want, companyName(raw));
+const noPerson = varsFor({ name: null, company: "WEST LEGEND REAL ESTATE BROKERS L.L.C", email: "a@b.ae" } as any);
+check("a company without a person's name greets «Hello there,»", personalize("Hello {{first_name|there}},", noPerson) === "Hello there,");
+check("...and names the company the readable way", personalize("{{company|your company}} and AML", noPerson) === "West Legend Real Estate Brokers and AML");
+check("...keeping the legal name available", noPerson["company_legal"] === "WEST LEGEND REAL ESTATE BROKERS L.L.C");
+check("a person's name is still used", personalize("Hello {{first_name|there}},", varsFor({ name: "Mr. Paul Thompson", company: "X" } as any)) === "Hello Paul,");
 
 const reg = await register(1, { status: "all", limit: 5 });
 check("the sending register answers with rows and counts", Array.isArray(reg.rows) && typeof reg.counts === "object" && reg.limit === 5);

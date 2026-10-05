@@ -17,7 +17,7 @@ import { isWithinSendingHours } from "../sending-hours";
 import { logger } from "../logger";
 import { notify, esc } from "../telegram";
 import { sendEmail, SendError, isConfigured, messageIdFor } from "./provider";
-import { newToken, renderEmail, firstName, personalize, unsubscribeUrl } from "./tracking";
+import { newToken, renderEmail, firstName, companyName, personalize, unsubscribeUrl } from "./tracking";
 import { brandOf } from "./layout";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
@@ -238,8 +238,10 @@ export async function enqueueDueSequenceSteps(now = new Date(), onlyUserId?: num
 // ── The worker ────────────────────────────────────────────────────
 export function varsFor(c: EmailContact | null, s?: EmailSettings | null): Record<string, string | null | undefined> {
   return {
-    name: c?.name || c?.company || "", first_name: firstName(c?.name) || c?.company || "",
-    company: c?.company ?? "", email: c?.email ?? "", city: c?.city ?? "", industry: c?.industry ?? "",
+    // No person's name means no first name: the template's own fallback
+    // ("Hello {{first_name|there}}") speaks, not "Hello WEST LEGEND … L.L.C".
+    name: c?.name || companyName(c?.company) || "", first_name: firstName(c?.name),
+    company: companyName(c?.company), company_legal: c?.company ?? "", email: c?.email ?? "", city: c?.city ?? "", industry: c?.industry ?? "",
     sender: s?.fromName ?? "", sender_email: s?.fromEmail ?? "",
   };
 }

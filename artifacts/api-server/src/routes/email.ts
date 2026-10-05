@@ -15,7 +15,7 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { assertCanSend, assertCanAddContacts, planErrorToResponse } from "../lib/plans";
-import { getSettings, overview, startCampaign, pauseCampaign, enrolInSequence, cancelSequencesFor, recordEvent, verdictFor, signals } from "../lib/email/service";
+import { getSettings, overview, startCampaign, pauseCampaign, enrolInSequence, cancelSequencesFor, recordEvent, verdictFor, signals, varsFor } from "../lib/email/service";
 import { verifySettings, sendEmail, isConfigured, messageIdFor } from "../lib/email/provider";
 import { checkDomain } from "../lib/email/dns";
 import { cleanRows, detectColumns, checkMx, splitBy, type ImportRow } from "../lib/email/importer";
@@ -742,15 +742,30 @@ router.delete("/templates/:id", async (req, res) => {
   await db.delete(emailTemplatesTable).where(and(eq(emailTemplatesTable.id, Number(req.params.id)), eq(emailTemplatesTable.userId, req.session.userId!)));
   res.json({ ok: true });
 });
-/** A template rendered as it will arrive, with sample names — the gallery shows it in a frame. */
+/**
+ * Who a preview is personalised for: a real contact — from the campaign's list
+ * when there is one, else the account's — so the owner sees what recipients
+ * get ("Hello there," for a company without a person's name), not a made-up
+ * Khalid every time. Falls back to a sample only on an empty account.
+ */
+async function previewVars(userId: number, s: Awaited<ReturnType<typeof getSettings>>, opts: { listId?: number | null; contactId?: number | null } = {}) {
+  const active = and(eq(emailContactsTable.userId, userId), eq(emailContactsTable.status, "active"));
+  let [c] = opts.contactId ? await db.select().from(emailContactsTable).where(and(active, eq(emailContactsTable.id, opts.contactId))).limit(1) : [];
+  if (!c && opts.listId) [c] = await db.select({ c: emailContactsTable }).from(emailListMembersTable).innerJoin(emailContactsTable, eq(emailContactsTable.id, emailListMembersTable.contactId))
+    .where(and(active, eq(emailListMembersTable.listId, opts.listId))).orderBy(sql`random()`).limit(1).then((r) => r.map((x) => x.c));
+  if (!c) [c] = await db.select().from(emailContactsTable).where(and(active, sql`coalesce(${emailContactsTable.company}, '') <> ''`)).orderBy(sql`random()`).limit(1);
+  if (c) return { vars: varsFor(c, s), to: { id: c.id, email: c.email, company: c.company, name: c.name } };
+  return { vars: { company: "Al Noor Real Estate", city: "Dubai", sender: s?.fromName ?? "", sender_email: s?.fromEmail ?? "" }, to: null };
+}
+
+/** A template rendered as it will arrive, for a real contact — the gallery shows it in a frame. */
 router.get("/templates/:id/render", async (req, res) => {
   const userId = req.session.userId!;
   const [t] = await db.select().from(emailTemplatesTable).where(and(eq(emailTemplatesTable.id, Number(req.params.id)), eq(emailTemplatesTable.userId, userId))).limit(1);
   if (!t) return res.status(404).send("not found");
   const s = await getSettings(userId);
-  const en = directionOf(t.html) === "ltr";
-  const vars = en ? { name: "Khalid Al Ali", first_name: "Khalid", company: "Al Noor Real Estate", city: "Dubai" } : { name: "خالد العلي", first_name: "خالد", company: "شركة النور العقارية", city: "دبي" };
-  const r = renderEmail(t.html + (s?.signature ? `<div style="margin-top:20px">${s.signature}</div>` : ""), { ...vars, sender: s?.fromName ?? "" },
+  const { vars } = await previewVars(userId, s);
+  const r = renderEmail(t.html + (s?.signature ? `<div style="margin-top:20px">${s.signature}</div>` : ""), vars,
     { base: "", token: "preview", secret: "x", pixel: false, links: false },
     { base: "", token: "preview", fromName: s?.fromName ?? "", fromEmail: s?.fromEmail ?? "" }, brandOf(s));
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -759,15 +774,11 @@ router.get("/templates/:id/render", async (req, res) => {
 router.post("/templates/seed", async (req, res) => res.json(await seedEmailDefaults(req.session.userId!, true)));
 router.post("/preview", async (req, res) => {
   const s = await getSettings(req.session.userId!);
-  // Sample names in the message's own language, so an English email previews with an English company.
-  const en = directionOf(String(req.body?.html ?? "")) === "ltr";
-  const vars = en
-    ? { name: "Khalid Al Ali", first_name: "Khalid", company: "Al Noor Real Estate", city: "Dubai", industry: "Real Estate", sender: s?.fromName ?? "Pro Count", sender_email: s?.fromEmail ?? "" }
-    : { name: "خالد العلي", first_name: "خالد", company: "شركة النور للمقاولات", city: "دبي", industry: "مقاولات", sender: s?.fromName ?? "بروكاونت", sender_email: s?.fromEmail ?? "" };
+  const { vars, to } = await previewVars(req.session.userId!, s, { listId: Number(req.body?.listId) || null, contactId: Number(req.body?.contactId) || null });
   const r = renderEmail(String(req.body?.html ?? "") + (s?.signature ? `<div style="margin-top:20px">${s.signature}</div>` : ""), vars,
     { base: "", token: "preview", secret: "x", pixel: false, links: false },
     { base: "", token: "preview", fromName: s?.fromName ?? "بروكاونت", fromEmail: s?.fromEmail ?? "hello@example.com" }, brandOf(s));
-  res.json({ subject: personalize(String(req.body?.subject ?? ""), vars), html: r.html, text: r.text });
+  res.json({ subject: personalize(String(req.body?.subject ?? ""), vars), html: r.html, text: r.text, to });
 });
 
 // ── Campaigns ─────────────────────────────────────────────────────
@@ -838,13 +849,13 @@ router.post("/campaigns/:id/test", async (req, res) => {
   if (!isConfigured(s)) return res.status(400).json({ error: "إعدادات البريد غير مكتملة — اضبط المُرسِل أولاً" });
   const to = String(req.body?.to ?? s!.fromEmail).trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: "بريد الاستلام غير صالح" });
-  const vars = { name: "خالد العلي", first_name: "خالد", company: "شركة النور للمقاولات", city: "دبي", industry: "", sender: s!.fromName ?? s!.fromEmail!, sender_email: s!.fromEmail! };
+  const { vars } = await previewVars(userId, s, { listId: c.listId });
   const token = newToken();
   const r = renderEmail(c.html + (s!.signature ? `<div style="margin-top:20px">${s!.signature}</div>` : ""), vars,
     { base: "", token, secret: "x", pixel: false, links: false },
     { base: "", token, fromName: s!.fromName ?? s!.fromEmail!, fromEmail: s!.fromEmail! }, brandOf(s));
   try {
-    await sendEmail(s!, { to, subject: `[تجربة] ${personalize(c.subject, vars)}`, html: r.html, text: r.text, messageId: messageIdFor(token, s!.fromEmail!), unsubscribeUrl: null });
+    await sendEmail(s!, { to, subject: `[Test] ${personalize(c.subject, vars)}`, html: r.html, text: r.text, messageId: messageIdFor(token, s!.fromEmail!), unsubscribeUrl: null });
     res.json({ ok: true, to });
   } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
 });

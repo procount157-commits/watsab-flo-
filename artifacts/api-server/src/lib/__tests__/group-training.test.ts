@@ -1,3 +1,5 @@
+export {};
+
 // Training the groups agent and what she learns herself, against the real
 // tables for user 1 and without a model: what the owner teaches is kept and
 // checked; instructions always reach her and examples, passages and lessons

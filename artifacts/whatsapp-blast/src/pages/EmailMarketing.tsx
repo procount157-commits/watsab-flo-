@@ -329,7 +329,7 @@ function PreviewButton({ subject, html }: { subject: string; html: string }) {
       <button onClick={async () => { try { setP(await api("/api/email/preview", { method: "POST", body: JSON.stringify({ subject, html }) })); } catch (e: any) { toast.error(e.message); } }} className={ghost}><Eye className="w-3 h-3" /> معاينة</button>
       {p && <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setP(null)}>
         <div className="bg-white text-black rounded-xl max-w-2xl w-full max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-          <div className="p-3 border-b text-sm font-semibold" dir="rtl">{p.subject}</div>
+          <div className="p-3 border-b text-sm font-semibold" dir="rtl">{p.subject}{p.to && <p className="text-[11px] font-normal text-gray-500 mt-0.5">معاينة كما تصل إلى: {p.to.company || p.to.email} — كل مستلم يرى اسم شركته</p>}</div>
           <iframe title="preview" srcDoc={p.html} className="w-full h-[70vh]" />
         </div></div>}
     </>
@@ -454,7 +454,7 @@ function Templates() {
 function TemplateView({ t, onClose }: { t: any; onClose: () => void }) {
   const { data: html } = useQuery<string>({ queryKey: ["email-template-render", t.id, t.updatedAt], queryFn: async () => (await fetch(`${BASE}/api/email/templates/${t.id}/render`, { credentials: "include" })).text() });
   if (!html) return null;
-  return <EmailPreviewModal html={html} subject={t.subject.replace(/\{\{\s*company\s*(\|[^}]*)?\}\}/g, "Al Noor Real Estate").replace(/\{\{[^}]*\}\}/g, "")} onClose={onClose} />;
+  return <EmailPreviewModal html={html} subject={t.subject.replace(/\{\{\s*company\s*(\|[^}]*)?\}\}/g, "[Company]").replace(/\{\{\s*\w+\s*\|([^}]*)\}\}/g, "$1").replace(/\{\{[^}]*\}\}/g, "")} onClose={onClose} />;
 }
 
 // ── Inbox ─────────────────────────────────────────────────────────

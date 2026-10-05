@@ -17,6 +17,40 @@ export function personalize(text: string, vars: Record<string, string | null | u
   });
 }
 
+/**
+ * A company as a person would write it in a sentence: "WEST LEGEND REAL
+ * ESTATE BROKERS L.L.C" reads "West Legend Real Estate Brokers". The legal
+ * suffix goes, shouting is lowered, short initials (KHR, D V R C) and Arabic
+ * are left as they are. The register keeps the legal name; only the email
+ * speaks this way.
+ */
+export function companyName(raw?: string | null): string {
+  let n = (raw ?? "").replace(/­/g, "").replace(/\s+/g, " ").trim();
+  if (!n) return "";
+  const original = n;
+  // A branch or emirate tag in brackets is not part of the name.
+  n = n.replace(/\s*\([^)]*\bbranch\b[^)]*\)?\s*$/i, "");
+  // Everything from the first legal marker on goes: "… L.L.C S.O.C", "… LLC - RAK", "… (Property LLC)".
+  const LEGAL = /(?:^|[\s(,.\-–/])(?:l\.?\s?l\.?\s?c\b\.?|fz[\s-]?llc\b|fz[\s-]?co\b|fzco\b|fze\b|fz\b|s\.\s?o\.\s?c\b\.?|s\.\s?p\.?\s?[cs]?\b\.?|sole proprietorship|one person company|pjsc\b|p\.j\.s\.c\b\.?|ltd\b\.?|limited$|inc\b\.?)/i;
+  const m = LEGAL.exec(n);
+  if (m && m.index >= 2) n = n.slice(0, m.index);
+  n = n.replace(/[\s,.\-–/(]+$/, "");
+  if ((n.match(/\(/g) ?? []).length > (n.match(/\)/g) ?? []).length) n = n.slice(0, n.lastIndexOf("(")).trim();
+  n = n.replace(/[\s,](?:est|co|company)\.?$/i, "").replace(/[\s,.\-–]+$/, "");
+  if (n.length < 2) n = original;
+  if (/[A-Z]/.test(n) && n === n.toUpperCase()) {
+    // Short words in a shouted name are mostly initials (KHR, RRE, XO, D V R C);
+    // the common ones are words and are lowered with the rest.
+    const WORDS = /^(AL|EL|OF|IN|ON|AT|BY|TO|AND|THE|FOR|BIN|BU|ABU|DAR|BAB|TOP|SKY|OAK|NEW|ONE|TWO|KEY|BAY|SEA|SUN|RED|BIG|MY|OUR|ART|HUB|WAY|CITY)$/;
+    n = n.split(" ").map((w) => {
+      const bare = w.replace(/[^A-Z]/g, "");
+      if (bare.length >= 1 && bare.length <= 3 && bare.length === w.replace(/[()&.,\-]/g, "").length && !WORDS.test(bare)) return w;
+      return w.replace(/[A-Z][A-Z'’]*/g, (x) => x.charAt(0) + x.slice(1).toLowerCase());
+    }).join(" ").replace(/ (Of|And|The|For|In) /g, (x) => x.toLowerCase());
+  }
+  return n;
+}
+
 export function firstName(name?: string | null): string {
   const n = (name ?? "").trim();
   if (!n) return "";
