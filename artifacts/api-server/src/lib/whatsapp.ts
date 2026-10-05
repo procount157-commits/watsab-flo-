@@ -20,6 +20,8 @@ import qrcode from "qrcode";
 import { getObjectBuffer, objectNameFromUrl } from "./storage";
 
 
+import { captureGroupMessage, captureGroupHistory } from "./groups/store";
+import { onGroupMessage } from "./groups/assistant";
 export const BASE_SESSION_DIR = path.resolve(process.cwd(), "whatsapp-session");
 
 
@@ -267,6 +269,7 @@ class WhatsAppInstance {
   private userId: number;
   private sessionDir: string;
   private state: WAState = { status: "disconnected", connected: false, phone: null, name: null, qr: null, socket: null };
+  getSocket() { return this.state.connected ? this.state.socket : null; }
   private loggedOutRetries = 0;
   /**
    * Counts how many QR cycles have expired without a scan in the current session.
@@ -1905,8 +1908,10 @@ class WhatsAppInstance {
       const incomingRows: { userId: number; phone: string; messageId: string | null; text: string | null; receivedAt: Date }[] = [];
       const threadRows:   { userId: number; phone: string; messageId: string | null; text: string | null; msgType: string; fromMe: boolean; createdAt: Date }[] = [];
       let totalHistMsgs = 0;
+      const groupHistory: any[] = [];
       for (const msg of (histMessages ?? [])) {
         try {
+          if (msg.key?.remoteJid?.endsWith("@g.us")) { groupHistory.push(msg); continue; }
           const jid = msg.key?.remoteJid ?? msg.key?.participant;
           if (!jid || !jid.endsWith("@s.whatsapp.net")) continue;
           const phone  = jid.replace("@s.whatsapp.net", "");
@@ -1942,6 +1947,10 @@ class WhatsAppInstance {
             });
           }
         } catch { /* تجاهل أخطاء رسائل منفردة */ }
+      }
+
+      if (groupHistory.length) {
+        void captureGroupHistory(this.userId, groupHistory, this.lidToPhone).catch((err) => this.log.warn({ err: String(err?.message ?? err) }, "group history insert error"));
       }
 
       // حفظ wa_thread_messages بـ onConflictDoNothing (dedup عبر unique index)
@@ -2073,6 +2082,19 @@ class WhatsAppInstance {
       if (type !== "notify" && type !== "append") return;
 
       for (const msg of messages) {
+        // Groups: kept, filed and shown to the groups agent — never answered from here.
+        if (msg.key?.remoteJid?.endsWith("@g.us")) {
+          try {
+            const kept = await captureGroupMessage(this.userId, sock, msg, {
+              lidToPhone: this.lidToPhone,
+              download: isLive ? () => downloadMediaMessage(msg, "buffer", {}) as Promise<Buffer> : undefined,
+            });
+            if (kept && isLive) void onGroupMessage(this.userId, kept.group, kept.parsed).catch(() => {});
+          } catch (err) {
+            this.log.warn({ err: String((err as any)?.message ?? err).slice(0, 160) }, "تعذّر حفظ رسالة القروب");
+          }
+          continue;
+        }
         // Resolve the sender, including LID-addressed contacts. Dropping
         // everything that was not @s.whatsapp.net here is what silently broke
         // inbound once WhatsApp started migrating contacts to LIDs.
@@ -2885,6 +2907,8 @@ export async function restoreAllSessions() {
 // ── Public helpers ────────────────────────────────────────────────
 
 export function getStatus(userId: number)   { return waManager.get(userId).getStatus(); }
+/** The live socket, or null when not connected — for reading groups and asking for older history. */
+export function getSocket(userId: number): any { return waManager.get(userId).getSocket(); }
 export function getQr(userId: number)       { return waManager.get(userId).getQr(); }
 export function getHealth(userId: number)   { return waManager.get(userId).getHealth(); }
 export function getSyncStats(userId: number){ return waManager.get(userId).syncStats; }

@@ -742,6 +742,54 @@ Follow-ups no longer pile up while no sender is configured, never land within
 is switched off. Imports no longer enrol everyone in a sequence by default.
 
 
+## WhatsApp customer groups
+
+The owner works with customers in WhatsApp groups. Until this section, every
+group message was dropped at the door: `resolveSenderPhone` returned null for
+`@g.us`. Groups now take their own path in `messages.upsert` and in the
+history sync (`lib/groups/store.ts`, migration 032). The one-to-one path is
+untouched.
+
+**Kept and filed.**
+- Every group message is stored in `wa_group_messages` (sender, text, type,
+  file name), once per message id.
+- On connect (and from the page), `groupFetchAllParticipating` fills names,
+  descriptions and member counts.
+- Documents and images a customer group sends are saved on the machine under
+  `~/Library/Application Support/whatsapp-marketer/groups/<group>/ملفات/<YYYY-MM>/`.
+  `GROUP_FILES_DIR` overrides the location.
+- Each group's conversation is appended to a monthly `محادثة-YYYY-MM.txt`
+  beside the files.
+- «حمّل سجلاً أقدم» asks WhatsApp for 50 older messages
+  (`fetchMessageHistory`), which arrive through the history sync.
+
+**سارة, the groups agent (`lib/groups/assistant.ts`, role `groups`), suggests
+and never sends.**
+- In a watched group she waits a minute after the customer's last line, then
+  decides whether the turn needs our reply.
+- When it does, she writes one as the owner would. She works from:
+  - the last 30 messages;
+  - her written understanding of the group, built by «افهمي القروب» from 400
+    messages (customer, people, services, recurring topics, open requests,
+    tone);
+  - the owner's notes;
+  - the knowledge base;
+  - and, above all, the owner's own past replies to similar messages in any
+    group (customer line followed by our reply within six hours), as style
+    examples.
+- Suggestions wait on the «قروبات العملاء» page under the message they
+  answer.
+
+**Learning and the readiness meter.**
+- When the owner answers from his phone, his reply is matched to her pending
+  suggestion and scored (term overlap).
+- His verdicts teach her: right, edited (the edit becomes a remembered right
+  reply) or wrong (a note becomes a standing instruction).
+- Her "no reply needed" counts as right when nobody replies for six hours.
+- Accuracy over 30 days is shown with a readiness rule: at least 50 decided
+  and 80% right. Answering by herself is deliberately not built until the
+  numbers support it.
+
 ## Hardening
 
 CORS is an allow-list (`CORS_ORIGINS`, plus localhost dev ports) — it used

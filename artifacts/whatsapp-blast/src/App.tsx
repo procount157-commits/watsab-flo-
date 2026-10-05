@@ -26,6 +26,7 @@ import AdminPage from "@/pages/AdminPage";
 import WaExtractor from "@/pages/WaExtractor";
 import WaInbox from "@/pages/WaInbox";
 import Conversations from "@/pages/Conversations";
+import Groups from "@/pages/Groups";
 import WaLinkGenerator from "@/pages/WaLinkGenerator";
 import DirectLoginPage from "@/pages/DirectLoginPage";
 import WaPublicSetup from "@/pages/WaPublicSetup";
@@ -182,6 +183,7 @@ function AuthenticatedRoutes() {
           <Route path="/ops"            component={AgentOps} />
           <Route path="/employees"      component={Employees} />
           <Route path="/conversations"  component={Conversations} />
+          <Route path="/groups"         component={Groups} />
           <Route path="/inbox"          component={WaInbox} />
           <Route path="/extractor"      component={WaExtractor} />
           <Route path="/wa-link"        component={WaLinkGenerator} />

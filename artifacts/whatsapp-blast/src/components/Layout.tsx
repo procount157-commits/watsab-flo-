@@ -15,6 +15,7 @@ const NAV = [
   { href: "/dashboard",     label: "لوحة التحكم",       icon: LayoutDashboard },
   { href: "/connect",       label: "ربط الواتساب",      icon: QrCode },
   { href: "/conversations", label: "المحادثات",          icon: MessageSquare },
+  { href: "/groups",        label: "قروبات العملاء",     icon: Users2, badge: "جديد" },
   { href: "/contacts",      label: "قوائم الأرقام",     icon: Users },
   { href: "/inbox",         label: "صندوق الوارد",       icon: MessagesSquare },
   { href: "/extractor",     label: "مستخرج الأرقام",    icon: Download },
