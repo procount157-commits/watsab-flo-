@@ -943,6 +943,80 @@ The old `instagram_*` tables are no longer used. Their one account and its
 action log were copied into `social_*`. The tables were left in place; drop
 them by hand once the new desk has been in use.
 
+## The whole team: learning, deals, knowledge, content, the morning brief
+
+**Learning from every edit** (`lib/feedback.ts`, migration 037).
+- Every draft's outcome is recorded in `agent_feedback`: sent as written,
+  edited, or thrown away. This covers social comments, messages, first
+  contacts and content; email missions and replies; group suggestions; and
+  proposals.
+- `lessonsFor(userId, role, context)` puts the closest edited or rejected
+  cases in front of the same employee next time.
+- `asAgent()` (`lib/agent-context.ts`, AsyncLocalStorage) tells
+  `complete()` which employee a call belongs to. Calls, failures and
+  characters are counted per employee per day in `llm_usage`.
+- `/team` («الهيكل والأداء») shows every employee by department: work this
+  week, accuracy, model usage, a "try" box, and employees sharing a name.
+
+**List hygiene** (`lib/email/hygiene.ts`, migration 038).
+- Each address gets a risk level:
+  - low: role addresses;
+  - medium: personal mailboxes at large companies;
+  - high: a personal mailbox where another one bounced, or a dead domain.
+- High risk is held back by default (`skip_risky`). The rest are queued
+  lowest-risk first.
+- Every domain is looked up at campaign start when it has never been
+  checked, or not for a month.
+- Lists get a health card. Settings shows the warm-up schedule.
+
+**Group requests and client deadlines** (`lib/groups/tasks.ts`,
+`lib/groups/obligations.ts`, migration 039).
+- When سارة reads a group, she lists new requests as tasks (due in 24 h
+  unless the customer gave a date) and closes the ones the conversation
+  shows done. An overdue task is told on Telegram once.
+- Deadlines are entered by the owner and never computed. A reminder waits in
+  the client's group as a suggestion; recurring deadlines roll forward.
+
+**Deals, proposals and meetings** (`lib/deals/*`, `routes/deals.ts`,
+`routes/booking.ts`, migration 040).
+- A deal opens by itself from a hot lead on WhatsApp, email or social. One
+  company is one deal across channels, with one cross-channel timeline.
+- عمّار (`proposals`) writes proposals from the deal's history and the
+  company knowledge. A price not in the knowledge is left as `[[السعر]]`,
+  and a proposal with a blank cannot be sent. He drafts up to two
+  follow-ups; each proposal and follow-up is approved before it goes.
+- Meetings: weekly hours in Gulf time and free slots after notice and
+  buffer. The email and social writers offer exactly those times.
+- The public booking page `/book/:token` (API `/api/book/:token`) re-checks
+  the slot when it is taken and is rate-limited. The owner gets a Telegram
+  brief before each meeting, and each meeting downloads as `.ics`.
+- The booking link is only reachable from outside once `SITE_URL` is set.
+
+**Unified knowledge** (`lib/company-knowledge.ts`).
+- `companyKnowledge()` reads the bot's knowledge base, the email documents,
+  the facts drawn from them, and the groups training, with near-duplicates
+  dropped.
+- It is used by the WhatsApp bot (when its own knowledge base is thin), the
+  email writers, the social desks, سارة and عمّار.
+- The knowledge page shows each source's size and what the team would find
+  for a question.
+
+**Content calendar** (`lib/content/plans.ts`, `/content`, migration 041).
+One topic and a date become a newsletter (saved as an email template), a
+LinkedIn post, an Instagram caption and a TikTok script.
+
+**Morning brief** (`lib/morning-brief.ts`, `/api/brief`, migration 042).
+- One Telegram message from شمّة at the owner's hour (8:00 by default; sent
+  up to five hours late, never twice a day). It covers:
+  - approvals waiting, by desk;
+  - new deals, today's meetings and deadlines within a week;
+  - what is late;
+  - what is broken: WhatsApp disconnected, a social account restricted, a
+    paused campaign;
+  - how long the machine slept (the wake detector now records to
+    `host_sleeps`);
+  - yesterday's numbers.
+
 ## Hardening
 
 CORS is an allow-list (`CORS_ORIGINS`, plus localhost dev ports) — it used

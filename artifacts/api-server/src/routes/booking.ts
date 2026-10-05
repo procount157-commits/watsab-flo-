@@ -27,7 +27,13 @@ router.get("/:token", async (req, res) => {
   if (!s) return res.status(404).json({ error: "رابط الحجز غير صحيح" });
   const [p] = await db.select({ name: businessProfileTable.name }).from(businessProfileTable).where(eq(businessProfileTable.userId, s.userId)).limit(1);
   const free = await availableSlots(s.userId, 14, 60);
-  res.json({ business: p?.name ?? "", durationMin: s.durationMin, slots: free.map((d) => ({ at: d.toISOString(), ar: slotLabel(d, "ar"), en: slotLabel(d, "en") })) });
+  const z = { timeZone: "Asia/Dubai" } as const;
+  res.json({ business: p?.name ?? "", durationMin: s.durationMin, slots: free.map((d) => ({
+    at: d.toISOString(), ar: slotLabel(d, "ar"), en: slotLabel(d, "en"),
+    // Grouped by the Gulf date, each button only the time.
+    day: d.toLocaleDateString("en-CA", z), dayAr: d.toLocaleDateString("ar-AE", { ...z, weekday: "long", day: "numeric", month: "long" }),
+    dayEn: d.toLocaleDateString("en-GB", { ...z, weekday: "short", day: "numeric", month: "short" }), time: d.toLocaleTimeString("ar-AE", { ...z, hour: "numeric", minute: "2-digit" }),
+  })) });
 });
 
 router.post("/:token", async (req, res) => {

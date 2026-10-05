@@ -2,7 +2,7 @@
 // follow-up split — against the real tables for user 1, with no model call:
 // the draft is supplied, the way the owner's approval supplies it.
 
-import { and, eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like, sql } from "drizzle-orm";
 import {
   db, emailSettingsTable, emailContactsTable, emailListsTable, emailListMembersTable, emailCampaignsTable, emailSegmentsTable,
   emailSequencesTable, emailSequenceJobsTable, emailMessagesTable, emailEventsTable, emailInboundTable, emailMissionsTable, agentMemoryTable,
@@ -64,6 +64,7 @@ check("HTML is escaped", toHtml("<script>x</script>").includes("&lt;script&gt;")
 
 // ── Setup ────────────────────────────────────────────────────────
 async function clean() {
+  await db.execute(sql`DELETE FROM agent_feedback WHERE user_id = ${USER} AND role = 'email'`);
   await db.delete(emailMissionsTable).where(eq(emailMissionsTable.userId, USER));
   await db.delete(emailInboundTable).where(eq(emailInboundTable.userId, USER));
   await db.delete(emailEventsTable).where(eq(emailEventsTable.userId, USER));

@@ -24,7 +24,7 @@ export default function BookPage() {
     setDone(d);
   };
   const days = new Map<string, any[]>();
-  for (const s of data?.slots ?? []) { const k = s.ar.split("،")[0] ?? s.ar; days.set(k, [...(days.get(k) ?? []), s]); }
+  for (const s of data?.slots ?? []) days.set(s.day, [...(days.get(s.day) ?? []), s]);
   const field = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:border-emerald-500";
 
   return (
@@ -46,8 +46,8 @@ export default function BookPage() {
             <div className="space-y-2">
               <p className="text-sm font-semibold">١. اختر الوقت — Pick a time</p>
               {!data.slots.length ? <p className="text-sm text-gray-500">لا أوقات متاحة حالياً — No times available right now.</p> : [...days.entries()].map(([day, list]) => (
-                <div key={day}><p className="text-xs text-gray-500 mb-1">{day}</p><div className="flex flex-wrap gap-1.5">{list.map((s) => (
-                  <button key={s.at} onClick={() => setPick(s.at)} className={`px-3 py-1.5 rounded-lg border text-xs ${pick === s.at ? "bg-emerald-600 text-white border-emerald-600" : "border-gray-300 hover:border-emerald-500"}`}>{s.ar.split("،").slice(-1)[0]?.trim() ?? s.ar}</button>
+                <div key={day}><p className="text-xs text-gray-500 mb-1">{list[0].dayAr} · <span dir="ltr">{list[0].dayEn}</span></p><div className="flex flex-wrap gap-1.5">{list.map((s) => (
+                  <button key={s.at} onClick={() => setPick(s.at)} className={`px-3 py-1.5 rounded-lg border text-xs ${pick === s.at ? "bg-emerald-600 text-white border-emerald-600" : "border-gray-300 hover:border-emerald-500"}`}>{s.time}</button>
                 ))}</div></div>
               ))}
             </div>

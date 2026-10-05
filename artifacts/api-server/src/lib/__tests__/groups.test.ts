@@ -10,7 +10,7 @@ import path from "node:path";
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "groups-test-"));
 process.env["GROUP_FILES_DIR"] = ROOT;
 
-const { and, eq, like } = await import("drizzle-orm");
+const { and, eq, like, sql } = await import("drizzle-orm");
 const { db, waGroupsTable, waGroupMessagesTable, waGroupSuggestionsTable, agentMemoryTable } = await import("@workspace/db");
 const { parseGroupMessage, captureGroupMessage, captureGroupHistory, folderFor } = await import("../groups/store");
 const { similarity, similarExamples, recordOwnerReply, feedback, accuracy } = await import("../groups/assistant");
@@ -20,6 +20,7 @@ const G = "120363999000111222@g.us";
 let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(60)} ${d}`); };
 async function clean() {
+  await db.execute(sql`DELETE FROM agent_feedback WHERE user_id = ${USER} AND role = 'groups'`);
   await db.delete(waGroupMessagesTable).where(and(eq(waGroupMessagesTable.userId, USER), eq(waGroupMessagesTable.groupJid, G)));
   await db.delete(waGroupSuggestionsTable).where(and(eq(waGroupSuggestionsTable.userId, USER), eq(waGroupSuggestionsTable.groupJid, G)));
   await db.delete(waGroupsTable).where(and(eq(waGroupsTable.userId, USER), eq(waGroupsTable.jid, G)));

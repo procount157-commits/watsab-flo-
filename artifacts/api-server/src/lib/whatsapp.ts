@@ -3000,6 +3000,8 @@ export function startWakeDetector() {
     last = now;
     if (gap < TICK_MS + JUMP_MS) return;
     appLogger.warn({ asleepSeconds: Math.round(gap / 1000) }, "clock jumped — the host was asleep; reconnecting every session");
+    // Kept, so the morning brief can tell the owner how often the machine slept.
+    void import("@workspace/db").then(({ db, hostSleepsTable }) => db.insert(hostSleepsTable).values({ seconds: Math.round(gap / 1000) })).catch(() => {});
     invalidateWaVersion("host woke from sleep");
     waManager.onSystemWake();
   }, TICK_MS);
