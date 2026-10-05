@@ -25,4 +25,5 @@ export * from "./email";
 export * from "./audit";
 export * from "./outbox";
 export * from "./instagram";
+export * from "./social";
 export * from "./groups";

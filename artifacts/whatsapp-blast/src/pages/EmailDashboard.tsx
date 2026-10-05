@@ -257,7 +257,7 @@ function Tip({ x, title, rows }: { x: number; title: string; rows: Array<[string
 const Empty = ({ text }: { text: string }) => <div className="h-44 flex items-center justify-center text-xs text-muted-foreground border border-dashed border-card-border rounded-lg">{text}</div>;
 
 // ── The team ─────────────────────────────────────────────────────
-function AgentCard({ t }: { t: any }) {
+export function AgentCard({ t }: { t: any }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const teach = useMutation({

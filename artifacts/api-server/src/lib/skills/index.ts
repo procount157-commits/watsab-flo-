@@ -29,6 +29,7 @@ import {
 import {
   SOCIAL_REPLY_SKILL, SOCIAL_TRIAGE_SKILL, SOCIAL_DM_SKILL,
   SOCIAL_SAFETY_SKILL, SYSTEM_HEALTH_SKILL, LIST_HYGIENE_SKILL,
+  SOCIAL_OUTREACH_SKILL, SOCIAL_CONTENT_SKILL,
 } from "./social";
 import { GROUP_REPLY_SKILL } from "./groups";
 import { logger } from "../logger";
@@ -54,6 +55,7 @@ export const LIBRARY: SkillDef[] = [
   // something. مارك had neither.
   SOCIAL_REPLY_SKILL, SOCIAL_TRIAGE_SKILL, SOCIAL_DM_SKILL,
   SOCIAL_SAFETY_SKILL, SYSTEM_HEALTH_SKILL, LIST_HYGIENE_SKILL,
+  SOCIAL_OUTREACH_SKILL, SOCIAL_CONTENT_SKILL,
   GROUP_REPLY_SKILL,
 ];
 
@@ -80,6 +82,30 @@ const WRITES_TO_CUSTOMERS = [
   DIALECT_SKILL.name, INTENT_READING_SKILL.name,
 ];
 
+/**
+ * One social team's grants, for whichever platform. The safety skill goes to
+ * all twelve for the same reason deliverability goes to all six on email: one
+ * restricted account ends the channel for everyone.
+ */
+function socialGrants(prefix: "ig" | "tt" | "li"): Record<string, string[]> {
+  const S = SOCIAL_SAFETY_SKILL.name;
+  const g: Record<string, string[]> = {
+    manager:    [S, ANALYSIS_SKILL.name, SALES_MANAGEMENT_SKILL.name, SOCIAL_TRIAGE_SKILL.name],
+    watcher:    [S, SOCIAL_TRIAGE_SKILL.name],
+    triage:     [S, SOCIAL_TRIAGE_SKILL.name, INTENT_READING_SKILL.name],
+    writer:     [S, SOCIAL_REPLY_SKILL.name, DIALECT_MATCH_SKILL.name, DIALECT_SKILL.name, HUMAN_WRITING_SKILL.name],
+    inviter:    [S, SOCIAL_TRIAGE_SKILL.name, SOCIAL_DM_SKILL.name, INTENT_READING_SKILL.name],
+    dm:         [S, SOCIAL_DM_SKILL.name, DIALECT_MATCH_SKILL.name, INTENT_READING_SKILL.name, DISCOVERY_SKILL.name, HUMAN_WRITING_SKILL.name],
+    prospector: [S, SOCIAL_OUTREACH_SKILL.name, DIALECT_MATCH_SKILL.name, DISCOVERY_SKILL.name],
+    qualify:    [S, DISCOVERY_SKILL.name, STAGE_SKILL.name, ANALYSIS_SKILL.name],
+    followup:   [S, SOCIAL_OUTREACH_SKILL.name, SOCIAL_DM_SKILL.name, FOLLOWUP_WRITING_SKILL.name, DIALECT_MATCH_SKILL.name],
+    creator:    [S, SOCIAL_CONTENT_SKILL.name, SOCIAL_REPLY_SKILL.name],
+    guard:      [S, SYSTEM_HEALTH_SKILL.name],
+    analyst:    [S, ANALYSIS_SKILL.name, EMAIL_FUNNEL_SKILL.name],
+  };
+  return Object.fromEntries(Object.entries(g).map(([job, skills]) => [`${prefix}_${job}`, skills]));
+}
+
 export const GRANTS: Record<string, string[]> = {
   sales:     [...WRITES_TO_CUSTOMERS, STAGE_SKILL.name, NEGOTIATION_SKILL.name, DISCOVERY_SKILL.name],
   support:   [...WRITES_TO_CUSTOMERS, COMPLAINT_SKILL.name],
@@ -97,22 +123,8 @@ export const GRANTS: Record<string, string[]> = {
   // than what is about to break.
   monitor:   [SYSTEM_HEALTH_SKILL.name, ANALYSIS_SKILL.name],
 
-  // ── Instagram ──
-  // The safety skill goes to all ten for the same reason deliverability goes
-  // to all six on email: one restricted account ends the channel for everyone,
-  // so it is nobody's job alone.
-  ig_manager:  [SOCIAL_SAFETY_SKILL.name, ANALYSIS_SKILL.name, SALES_MANAGEMENT_SKILL.name, SOCIAL_TRIAGE_SKILL.name],
-  ig_watcher:  [SOCIAL_SAFETY_SKILL.name, SOCIAL_TRIAGE_SKILL.name],
-  ig_triage:   [SOCIAL_SAFETY_SKILL.name, SOCIAL_TRIAGE_SKILL.name, INTENT_READING_SKILL.name],
-  ig_writer:   [SOCIAL_SAFETY_SKILL.name, SOCIAL_REPLY_SKILL.name, DIALECT_MATCH_SKILL.name,
-                DIALECT_SKILL.name, HUMAN_WRITING_SKILL.name],
-  ig_inviter:  [SOCIAL_SAFETY_SKILL.name, SOCIAL_TRIAGE_SKILL.name, SOCIAL_DM_SKILL.name, INTENT_READING_SKILL.name],
-  ig_dm:       [SOCIAL_SAFETY_SKILL.name, SOCIAL_DM_SKILL.name, DIALECT_MATCH_SKILL.name,
-                INTENT_READING_SKILL.name, DISCOVERY_SKILL.name, HUMAN_WRITING_SKILL.name],
-  ig_qualify:  [SOCIAL_SAFETY_SKILL.name, DISCOVERY_SKILL.name, STAGE_SKILL.name, ANALYSIS_SKILL.name],
-  ig_followup: [SOCIAL_SAFETY_SKILL.name, SOCIAL_DM_SKILL.name, FOLLOWUP_WRITING_SKILL.name, DIALECT_MATCH_SKILL.name],
-  ig_guard:    [SOCIAL_SAFETY_SKILL.name, SYSTEM_HEALTH_SKILL.name],
-  ig_analyst:  [SOCIAL_SAFETY_SKILL.name, ANALYSIS_SKILL.name, EMAIL_FUNNEL_SKILL.name],
+  // ── Social desks: Instagram, TikTok, LinkedIn ──
+  ...socialGrants("ig"), ...socialGrants("tt"), ...socialGrants("li"),
 
   // ── WhatsApp customer groups ──
   // سارة writes WhatsApp, so the WhatsApp writing skills are hers too.

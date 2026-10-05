@@ -21,7 +21,7 @@ import AgentOps from "@/pages/AgentOps";
 import Board from "@/pages/Board";
 import BrowserDesk from "@/pages/BrowserDesk";
 import Meetings from "@/pages/Meetings";
-import Instagram from "@/pages/Instagram";
+import SocialDesk from "@/pages/social/SocialDesk";
 import AdminPage from "@/pages/AdminPage";
 import WaExtractor from "@/pages/WaExtractor";
 import WaInbox from "@/pages/WaInbox";
@@ -179,7 +179,8 @@ function AuthenticatedRoutes() {
           <Route path="/board"          component={Board} />
           <Route path="/browser"        component={BrowserDesk} />
           <Route path="/meetings"       component={Meetings} />
-          <Route path="/instagram"      component={Instagram} />
+          <Route path="/instagram/:tab?/:id?">{() => <SocialDesk platform="instagram" />}</Route>
+          <Route path="/tiktok/:tab?/:id?">{() => <SocialDesk platform="tiktok" />}</Route>
           <Route path="/ops"            component={AgentOps} />
           <Route path="/employees"      component={Employees} />
           <Route path="/conversations"  component={Conversations} />

@@ -872,6 +872,77 @@ and never sends.**
 - She carries the «الرد في قروبات العملاء» skill, plus the WhatsApp writing
   skills.
 
+## Social desks: Instagram and TikTok (LinkedIn pending)
+
+One shared layer serves every platform. The code is in `lib/social/` and
+`routes/social.ts` (mounted at `/api/social/:platform`), with migration 036.
+The interface is `pages/social/*`, at `/instagram/:tab` and `/tiktok/:tab`.
+It has the email section's shape:
+- dashboard
+- comments
+- messages
+- first contact
+- target lists
+- content
+- account and settings
+
+**Browser and login.**
+- The team drives the account's own Chrome profile through Playwright.
+- The owner signs in by hand in a visible window. No password is stored.
+- Drivers live in `lib/social/drivers/{instagram,tiktok}.ts` behind one
+  `Driver` interface. They find things by `data-e2e` attributes and button
+  words, try several routes, and report "the page changed" instead of
+  crashing.
+- A verification wall (puzzle, code, "confirm it's you") or a restriction
+  stops the desk and alerts the owner on Telegram. It is never pushed
+  through.
+
+**The team.** Each platform has twelve employees, `ig_*` / `tt_*` / `li_*`
+(`lib/social/team.ts`). Their jobs are manager, watcher, triage, writer,
+inviter, dm, prospector, qualify, followup, creator, guard and analyst. Each
+platform has its own names. Skills are granted by `socialGrants()`; the new
+skills are «التواصل الأول» and «صناعة المحتوى».
+
+**A round** (`lib/social/engine.ts`) runs every 20 minutes when autopilot is
+on, or on demand:
+1. Check the login.
+2. Find our new posts.
+3. Read and judge comments, and draft public replies.
+4. Read the inbox, keep the messages, and draft replies. Tag each thread hot,
+   warm or cold; hot ones go to Telegram. Someone who asks us to stop is
+   stopped for good.
+5. Draft first messages for people on the lists the owner chose.
+6. Draft one follow-up after N days.
+7. Send what is approved.
+
+**Outreach rules.**
+- The team writes first only to people on an owner-approved list, filled by
+  a platform search, an Excel/CSV upload, or pasted handles.
+- Each person gets one first message and at most one follow-up.
+- Any reply takes them out of the path. A refusal marks them declined.
+- An account starts in dry run and approve mode. In auto mode a draft must
+  pass the guard first: the email guard's checks plus no word-for-word
+  repeats.
+
+**The gate (`mayAct`).** It is checked before every action and refuses:
+- outside Gulf hours;
+- after 5 failures in a day;
+- past the daily cap for the action kind (reply, dm, outreach, followup,
+  post, engage), using platform defaults the owner can raise up to 3×;
+- too soon after the previous action (45 s on Instagram, 60 s on TikTok).
+
+**Posting.** Instagram and TikTok cannot post without media from a browser.
+The team drafts the caption and the owner posts it from the phone.
+
+**LinkedIn.** The platform definition, the team and the data model are ready.
+There is no driver yet, so it has no browser actions and no page. Writing the
+driver (invitations with a note, messaging once accepted, people search,
+posting) was held back for the owner's explicit go-ahead.
+
+The old `instagram_*` tables are no longer used. Their one account and its
+action log were copied into `social_*`. The tables were left in place; drop
+them by hand once the new desk has been in use.
+
 ## Hardening
 
 CORS is an allow-list (`CORS_ORIGINS`, plus localhost dev ports) — it used

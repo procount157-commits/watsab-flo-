@@ -19,7 +19,7 @@ import {
   db, meetingsTable, meetingTurnsTable, botEmployeesTable,
   autoReplyLogTable, contactSegmentsTable, followupDeliberationsTable,
   opsAlertsTable, leadSourcesTable, followUpJobsTable, agentMemoryTable,
-  meetingProposalsTable, instagramAccountsTable, instagramCommentsTable,
+  meetingProposalsTable, socialAccountsTable,
   emailMessagesTable,
   type Meeting,
 } from "@workspace/db";
@@ -158,14 +158,15 @@ async function buildAgenda(userId: number): Promise<Agenda> {
  */
 async function channelFacts(userId: number): Promise<Record<string, unknown>> {
   const day = new Date(Date.now() - 24 * 60 * 60_000);
-  const [[ig], [igc], [mail]] = await Promise.all([
-    db.select().from(instagramAccountsTable).where(eq(instagramAccountsTable.userId, userId)).limit(1).catch(() => []),
-    db.select({
-      total:   sql<number>`count(*)`,
-      drafted: sql<number>`count(*) filter (where ${instagramCommentsTable.status} = 'drafted')`,
-      replied: sql<number>`count(*) filter (where ${instagramCommentsTable.status} = 'replied')`,
-      leads:   sql<number>`count(*) filter (where ${instagramCommentsTable.isLead})`,
-    }).from(instagramCommentsTable).where(eq(instagramCommentsTable.userId, userId)).catch(() => []),
+  const [desks, social, [mail]] = await Promise.all([
+    db.select().from(socialAccountsTable).where(eq(socialAccountsTable.userId, userId)).catch(() => [] as any[]),
+    db.execute<any>(sql`SELECT platform,
+        (SELECT count(*) FROM social_comments c WHERE c.user_id = ${userId} AND c.platform = a.platform)::int AS comments,
+        (SELECT count(*) FROM social_comments c WHERE c.user_id = ${userId} AND c.platform = a.platform AND c.status = 'drafted')::int AS drafted,
+        (SELECT count(*) FROM social_comments c WHERE c.user_id = ${userId} AND c.platform = a.platform AND c.is_lead)::int AS leads,
+        (SELECT count(*) FROM social_targets t WHERE t.user_id = ${userId} AND t.platform = a.platform AND t.status IN ('sent','invited','replied','declined'))::int AS reached,
+        (SELECT count(*) FROM social_targets t WHERE t.user_id = ${userId} AND t.platform = a.platform AND t.status = 'replied')::int AS answered
+      FROM social_accounts a WHERE a.user_id = ${userId}`).then((r) => r.rows).catch(() => [] as any[]),
     db.select({
       sent:   sql<number>`count(*) filter (where ${emailMessagesTable.sentAt} >= ${day})`,
       opened: sql<number>`count(*) filter (where ${emailMessagesTable.openedAt} >= ${day})`,
@@ -179,12 +180,16 @@ async function channelFacts(userId: number): Promise<Record<string, unknown>> {
     checkpoint: "يطلب تأكيد الهوية", restricted: "مقيَّد", unknown: "لم يُسجَّل دخوله بعد",
   };
 
+  const AR: Record<string, string> = { instagram: "إنستجرام", tiktok: "تيك توك", linkedin: "لينكدإن" };
+  const out: Record<string, unknown> = {};
+  for (const p of ["instagram", "tiktok", "linkedin"]) {
+    const a = desks.find((d) => d.platform === p), f = social.find((x: any) => x.platform === p);
+    out[AR[p]!] = !a ? "لم يُضبط بعد — لا بيانات"
+      : `${IG_STATE[a.state] ?? a.state}${a.dryRun ? " · وضع التجربة" : ""} · ${Number(f?.comments ?? 0)} تعليق، ${Number(f?.drafted ?? 0)} رد ينتظر الاعتماد، ` +
+        `${Number(f?.leads ?? 0)} فرصة، تواصلنا مع ${Number(f?.reached ?? 0)} وردّ ${Number(f?.answered ?? 0)}`;
+  }
   return {
-    "إنستجرام": !ig
-      ? "لم يُضبط بعد — لا بيانات"
-      : `${IG_STATE[ig.state] ?? ig.state}${ig.dryRun ? " · وضع التجربة" : ""} · ` +
-        `${Number(igc?.total ?? 0)} تعليق، ${Number(igc?.drafted ?? 0)} رد ينتظر الاعتماد، ` +
-        `${Number(igc?.replied ?? 0)} أُرسل، ${Number(igc?.leads ?? 0)} فرصة`,
+    ...out,
     "البريد": `${Number(mail?.sent ?? 0)} أُرسلت اليوم، ${Number(mail?.opened ?? 0)} فُتحت، ` +
       `${Number(mail?.failed ?? 0)} فشلت، ${Number(mail?.queued ?? 0)} في الطابور`,
   };
