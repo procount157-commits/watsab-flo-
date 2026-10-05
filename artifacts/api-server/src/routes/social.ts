@@ -14,6 +14,7 @@ import { driverFor } from "../lib/social/drivers";
 import * as engine from "../lib/social/engine";
 import * as agent from "../lib/social/agent";
 import { activity } from "../lib/social/team";
+import { recordFeedback } from "../lib/feedback";
 import { addTargets, createList, dashboard, listsWithFunnel, rowsFromSheet, searchIntoList } from "../lib/social/desk";
 
 const router = Router();
@@ -24,6 +25,10 @@ const P = (req: Request) => req.params["platform"] as SocialPlatform;
 router.param("platform", (req: Request, res: Response, next: NextFunction, v: string) => (isPlatform(v) ? next() : res.status(404).json({ error: "منصة غير معروفة" })));
 const uid = (req: Request) => req.session.userId!;
 const mine = (t: { userId: any; platform: any; id: any }, req: Request, id: number) => and(eq(t.id, id), eq(t.userId, uid(req)), eq(t.platform, P(req)));
+const role = (req: Request, job: string) => `${PLATFORM[P(req)].prefix}_${job}`;
+/** What the owner did with a draft — kept so the employee learns from it. */
+const learn = (req: Request, job: string, kind: string, refId: number, context: string | null, original: string | null | undefined, final: string | null, verdict: "approved" | "edited" | "rejected") =>
+  original ? recordFeedback({ userId: uid(req), role: role(req, job), channel: "social", kind, refId, context, original, final, verdict }) : Promise.resolve();
 const fail = (res: Response, err: any) => res.status(400).json({ error: String(err?.message ?? err).slice(0, 300) });
 
 router.get("/:platform", async (req, res) => {
@@ -96,17 +101,25 @@ router.get("/:platform/comments", async (req, res) => {
   res.json({ rows: rows.map((r) => ({ ...r.c, postUrl: r.url })), counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) });
 });
 router.post("/:platform/comments/:id/approve", async (req, res) => {
+  const id = Number(req.params["id"]);
+  const [before] = await db.select().from(socialCommentsTable).where(mine(socialCommentsTable, req, id)).limit(1);
   const set: Record<string, unknown> = { status: "approved" };
-  if (typeof req.body?.draft === "string" && req.body.draft.trim()) set["draft"] = req.body.draft.trim().slice(0, 2_000);
-  const [row] = await db.update(socialCommentsTable).set(set).where(mine(socialCommentsTable, req, Number(req.params["id"]))).returning();
+  const edited = typeof req.body?.draft === "string" && req.body.draft.trim() ? req.body.draft.trim().slice(0, 2_000) : null;
+  if (edited) set["draft"] = edited;
+  const [row] = await db.update(socialCommentsTable).set(set).where(mine(socialCommentsTable, req, id)).returning();
+  if (before?.status === "drafted") await learn(req, "writer", "comment", id, `@${before.author}: ${before.text}`, before.draft, edited ?? before.draft, edited ? "edited" : "approved");
   res.json(row ?? null);
 });
 router.post("/:platform/comments/:id/skip", async (req, res) => {
-  const [row] = await db.update(socialCommentsTable).set({ status: "skipped", skipReason: "تخطّاه صاحب العمل" }).where(mine(socialCommentsTable, req, Number(req.params["id"]))).returning();
+  const id = Number(req.params["id"]);
+  const [before] = await db.select().from(socialCommentsTable).where(mine(socialCommentsTable, req, id)).limit(1);
+  const [row] = await db.update(socialCommentsTable).set({ status: "skipped", skipReason: "تخطّاه صاحب العمل" }).where(mine(socialCommentsTable, req, id)).returning();
+  if (before?.status === "drafted") await learn(req, "writer", "comment", id, `@${before.author}: ${before.text}`, before.draft, null, "rejected");
   res.json(row ?? null);
 });
 router.post("/:platform/comments/approve-all", async (req, res) => {
-  const r = await db.update(socialCommentsTable).set({ status: "approved" }).where(and(eq(socialCommentsTable.userId, uid(req)), eq(socialCommentsTable.platform, P(req)), eq(socialCommentsTable.status, "drafted"))).returning({ id: socialCommentsTable.id });
+  const r = await db.update(socialCommentsTable).set({ status: "approved" }).where(and(eq(socialCommentsTable.userId, uid(req)), eq(socialCommentsTable.platform, P(req)), eq(socialCommentsTable.status, "drafted"))).returning();
+  for (const c of r) await learn(req, "writer", "comment", c.id, `@${c.author}: ${c.text}`, c.draft, c.draft, "approved");
   res.json({ approved: r.length });
 });
 
@@ -148,14 +161,27 @@ router.get("/:platform/messages", async (req, res) => {
     .where(and(eq(socialMessagesTable.userId, uid(req)), eq(socialMessagesTable.platform, P(req)), eq(socialMessagesTable.status, String(req.query["status"] ?? "drafted")))).orderBy(asc(socialMessagesTable.createdAt)).limit(100);
   res.json(rows.map((r) => ({ ...r.m, handle: r.handle, name: r.name })));
 });
+/** The last thing they said before our draft — what the draft was answering. */
+async function lastTheirs(threadId: number) {
+  const [m] = await db.select({ text: socialMessagesTable.text }).from(socialMessagesTable).where(and(eq(socialMessagesTable.threadId, threadId), eq(socialMessagesTable.fromMe, false))).orderBy(desc(socialMessagesTable.createdAt)).limit(1);
+  return m?.text ?? null;
+}
+const jobOfMessage = (m: { kind: string | null }) => (m.kind === "followup" ? "followup" : "dm");
 router.post("/:platform/messages/:id/approve", async (req, res) => {
+  const id = Number(req.params["id"]);
+  const [before] = await db.select().from(socialMessagesTable).where(and(mine(socialMessagesTable, req, id), eq(socialMessagesTable.fromMe, true))).limit(1);
   const set: Record<string, unknown> = { status: "approved" };
-  if (typeof req.body?.text === "string" && req.body.text.trim()) set["text"] = req.body.text.trim().slice(0, 2_000);
-  const [row] = await db.update(socialMessagesTable).set(set).where(and(mine(socialMessagesTable, req, Number(req.params["id"])), eq(socialMessagesTable.fromMe, true))).returning();
+  const edited = typeof req.body?.text === "string" && req.body.text.trim() ? req.body.text.trim().slice(0, 2_000) : null;
+  if (edited) set["text"] = edited;
+  const [row] = await db.update(socialMessagesTable).set(set).where(and(mine(socialMessagesTable, req, id), eq(socialMessagesTable.fromMe, true))).returning();
+  if (before?.status === "drafted") await learn(req, jobOfMessage(before), before.kind ?? "reply", id, await lastTheirs(before.threadId), before.text, edited ?? before.text, edited ? "edited" : "approved");
   res.json(row ?? null);
 });
 router.post("/:platform/messages/:id/skip", async (req, res) => {
-  const [row] = await db.update(socialMessagesTable).set({ status: "skipped" }).where(and(mine(socialMessagesTable, req, Number(req.params["id"])), eq(socialMessagesTable.fromMe, true))).returning();
+  const id = Number(req.params["id"]);
+  const [before] = await db.select().from(socialMessagesTable).where(and(mine(socialMessagesTable, req, id), eq(socialMessagesTable.fromMe, true))).limit(1);
+  const [row] = await db.update(socialMessagesTable).set({ status: "skipped" }).where(and(mine(socialMessagesTable, req, id), eq(socialMessagesTable.fromMe, true))).returning();
+  if (before?.status === "drafted") await learn(req, jobOfMessage(before), before.kind ?? "reply", id, await lastTheirs(before.threadId), before.text, null, "rejected");
   res.json(row ?? null);
 });
 
@@ -224,8 +250,10 @@ router.post("/:platform/targets/:id/approve", async (req, res) => {
   const set: Record<string, unknown> = { status: "approved", updatedAt: new Date() };
   if (typeof req.body?.draft === "string" && req.body.draft.trim()) set["draft"] = req.body.draft.trim().slice(0, PLATFORM[P(req)].firstContactMax);
   const given = typeof req.body?.draft === "string" && !!req.body.draft.trim();
+  const [before] = await db.select().from(socialTargetsTable).where(mine(socialTargetsTable, req, Number(req.params["id"]))).limit(1);
   // Nothing is approved without words to send.
   const [row] = await db.update(socialTargetsTable).set(set).where(and(mine(socialTargetsTable, req, Number(req.params["id"])), given ? sql`true` : isNotNull(socialTargetsTable.draft))).returning();
+  if (row && before?.status === "drafted") await learn(req, "prospector", "outreach", row.id, targetContext(before), before.draft, row.draft, given ? "edited" : "approved");
   res.json(row ?? null);
 });
 router.post("/:platform/targets/bulk", async (req, res) => {
@@ -233,12 +261,24 @@ router.post("/:platform/targets/bulk", async (req, res) => {
   const action = String(req.body?.action ?? "");
   if (!ids.length) return res.status(400).json({ error: "لم تختر أحداً" });
   const where = and(eq(socialTargetsTable.userId, uid(req)), eq(socialTargetsTable.platform, P(req)), inArray(socialTargetsTable.id, ids));
-  if (action === "approve") return res.json({ n: (await db.update(socialTargetsTable).set({ status: "approved", updatedAt: new Date() }).where(and(where, eq(socialTargetsTable.status, "drafted"))).returning({ id: socialTargetsTable.id })).length });
-  if (action === "skip") return res.json({ n: (await db.update(socialTargetsTable).set({ status: "skipped", updatedAt: new Date() }).where(and(where, inArray(socialTargetsTable.status, ["new", "drafted", "approved"]))).returning({ id: socialTargetsTable.id })).length });
+  if (action === "approve") {
+    const r = await db.update(socialTargetsTable).set({ status: "approved", updatedAt: new Date() }).where(and(where, eq(socialTargetsTable.status, "drafted"))).returning();
+    for (const t of r) await learn(req, "prospector", "outreach", t.id, targetContext(t), t.draft, t.draft, "approved");
+    return res.json({ n: r.length });
+  }
+  if (action === "skip") {
+    const drafted = await db.select().from(socialTargetsTable).where(and(where, eq(socialTargetsTable.status, "drafted")));
+    const r = await db.update(socialTargetsTable).set({ status: "skipped", updatedAt: new Date() }).where(and(where, inArray(socialTargetsTable.status, ["new", "drafted", "approved"]))).returning({ id: socialTargetsTable.id });
+    for (const t of drafted) await learn(req, "prospector", "outreach", t.id, targetContext(t), t.draft, null, "rejected");
+    return res.json({ n: r.length });
+  }
   if (action === "reset") return res.json({ n: (await db.update(socialTargetsTable).set({ status: "new", draft: null, updatedAt: new Date() }).where(and(where, inArray(socialTargetsTable.status, ["drafted", "approved", "skipped", "failed"]))).returning({ id: socialTargetsTable.id })).length });
   if (action === "delete") return res.json({ n: (await db.delete(socialTargetsTable).where(and(where, inArray(socialTargetsTable.status, ["new", "drafted", "approved", "skipped", "unreachable", "failed"]))).returning({ id: socialTargetsTable.id })).length });
   res.status(400).json({ error: "إجراء غير معروف" });
 });
+
+const targetContext = (t: { handle: string; name: string | null; headline: string | null; company: string | null }) =>
+  [t.name ?? `@${t.handle}`, t.headline, t.company].filter(Boolean).join(" — ");
 
 // ── Content ──────────────────────────────────────────────────────
 router.get("/:platform/content", async (req, res) => {
@@ -258,10 +298,18 @@ router.post("/:platform/content", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 router.patch("/:platform/content/:id", async (req, res) => {
+  const id = Number(req.params["id"]);
+  const [before] = await db.select().from(socialContentTable).where(mine(socialContentTable, req, id)).limit(1);
   const set: Record<string, unknown> = {};
   if (typeof req.body?.text === "string") set["text"] = req.body.text.slice(0, 3_000);
   if (["draft", "approved", "skipped"].includes(req.body?.status)) set["status"] = req.body.status;
-  const [row] = await db.update(socialContentTable).set(set).where(mine(socialContentTable, req, Number(req.params["id"]))).returning();
+  const [row] = await db.update(socialContentTable).set(set).where(mine(socialContentTable, req, id)).returning();
+  if (before && before.status === "draft") {
+    const ctx = before.kind === "post" ? `منشور عن: ${before.topic ?? ""}` : `تعليق على: ${(before.targetText ?? "").slice(0, 300)}`;
+    if (typeof set["text"] === "string") await learn(req, "creator", before.kind, id, ctx, before.text, set["text"] as string, "edited");
+    else if (set["status"] === "approved") await learn(req, "creator", before.kind, id, ctx, before.text, before.text, "approved");
+    else if (set["status"] === "skipped") await learn(req, "creator", before.kind, id, ctx, before.text, null, "rejected");
+  }
   res.json(row ?? null);
 });
 router.delete("/:platform/content/:id", async (req, res) => {

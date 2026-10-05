@@ -12,6 +12,8 @@
 // because the model answering may be whatever free tier is up, and a weak
 // model mislabels a block far less often than it breaks JSON.
 
+import { lessonsFor } from "../feedback";
+import { asAgent } from "../agent-context";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, agentMemoryTable, botEmployeesTable, businessProfileTable, DEFAULT_EMPLOYEES, type SegmentFilter } from "@workspace/db";
 import { complete } from "../llm";
@@ -226,11 +228,13 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
   ]);
   const sample = sampleRows.map((r) => [r.company ?? r.name, r.city].filter(Boolean).join(" — ")).filter(Boolean);
   const audience = { description: describe(input.filter), count: n, sample };
+  const lessons = await lessonsFor(userId, input.role ?? "email", input.goal).catch(() => "");
 
-  const out = await complete([
+  const out = await asAgent(userId, input.role ?? "email", () => complete([
     { role: "system", content: [
       head,
       "",
+      lessons,
       knows,
       facts.length ? `من قاعدة معرفة الشركة:\n${facts.map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 400)}`).join("\n")}` : "",
       docs.length ? `من مستندات الشركة التي رفعها صاحب العمل:\n${docs.map((d) => `[${d.title}]\n${d.text}`).join("\n\n")}` : "",
@@ -267,7 +271,7 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       sample.length ? `أمثلة منهم: ${sample.slice(0, 8).join("؛ ")}` : "",
       input.notes ? `ملاحظات صاحب العمل: ${input.notes}` : "",
     ].filter(Boolean).join("\n") },
-  ], 90_000);
+  ], 90_000));
   if (!out?.text) return null;
   const draft = parseDraft(out.text);
   if (!draft) { logger.warn({ userId, sample: out.text.slice(0, 300) }, "مسودة نورة لم تُقرأ"); return null; }

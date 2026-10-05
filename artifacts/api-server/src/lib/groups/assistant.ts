@@ -11,6 +11,8 @@
 // memory. The score over time is how the owner decides whether she is ready
 // to answer by herself — that switch is not built until the numbers say so.
 
+import { asAgent } from "../agent-context";
+import { recordFeedback } from "../feedback";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db, botEmployeesTable, agentTasksTable, businessProfileTable, waGroupsTable, waGroupMessagesTable, waGroupSuggestionsTable } from "@workspace/db";
 import { complete } from "../llm";
@@ -133,6 +135,9 @@ const line = (m: any) => `${who(m)}: ${m.text || (m.msgType === "document" ? `[�
 
 /** Her suggestion for what was last said in the group, or nothing when we spoke last or it needs no answer. */
 export async function suggestFor(userId: number, jid: string, opts: { force?: boolean } = {}) {
+  return asAgent(userId, GROUPS_ROLE, () => suggestForInner(userId, jid, opts));
+}
+async function suggestForInner(userId: number, jid: string, opts: { force?: boolean } = {}) {
   const [group] = await db.select().from(waGroupsTable).where(and(eq(waGroupsTable.userId, userId), eq(waGroupsTable.jid, jid))).limit(1);
   if (!group || (!group.watch && !opts.force)) return null;
   const recent = (await db.select().from(waGroupMessagesTable).where(and(eq(waGroupMessagesTable.userId, userId), eq(waGroupMessagesTable.groupJid, jid))).orderBy(desc(waGroupMessagesTable.createdAt)).limit(40)).reverse();
@@ -187,6 +192,9 @@ export async function suggestFor(userId: number, jid: string, opts: { force?: bo
 // ── Understanding a group ────────────────────────────────────────
 /** What she understands of the group, from its history: written down, and used every time she suggests. */
 export async function buildProfile(userId: number, jid: string) {
+  return asAgent(userId, GROUPS_ROLE, () => buildProfileInner(userId, jid));
+}
+async function buildProfileInner(userId: number, jid: string) {
   const [group] = await db.select().from(waGroupsTable).where(and(eq(waGroupsTable.userId, userId), eq(waGroupsTable.jid, jid))).limit(1);
   if (!group) throw new Error("القروب غير موجود");
   const rows = (await db.select().from(waGroupMessagesTable).where(and(eq(waGroupMessagesTable.userId, userId), eq(waGroupMessagesTable.groupJid, jid))).orderBy(desc(waGroupMessagesTable.createdAt)).limit(400)).reverse();
@@ -220,6 +228,9 @@ export async function feedback(userId: number, id: number, input: { verdict: "co
     status: input.verdict, ownerReply: ownerReply ?? null, feedback: input.note?.slice(0, 1000) ?? null, decidedAt: new Date(),
     matchScore: input.verdict === "correct" ? 1 : input.verdict === "wrong" ? 0 : ownerReply ? similarity(s.suggestion, ownerReply) : null,
   }).where(eq(waGroupSuggestionsTable.id, id));
+  // The same outcome on the team page, beside every other employee's.
+  await recordFeedback({ userId, role: GROUPS_ROLE, channel: "groups", kind: "reply", refId: id, context: s.triggerText, original: s.suggestion, final: input.verdict === "wrong" ? null : ownerReply ?? s.suggestion,
+    verdict: input.verdict === "correct" ? "approved" : input.verdict === "edited" ? "edited" : "rejected" });
   // What she should remember.
   const q = (s.triggerText ?? "").replace(/\s+/g, " ").slice(0, 160);
   if (input.verdict === "edited" && ownerReply) {

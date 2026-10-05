@@ -7,6 +7,7 @@
 // Ad leads identify themselves: a click-to-WhatsApp ad stamps the first
 // incoming message with referral data, which is what sourceFilter="ad" keys on.
 
+import { asAgent } from "./agent-context";
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import {
   db, leadSourcesTable, followUpSequencesTable, followUpJobsTable,
@@ -411,13 +412,14 @@ async function autoReplyIfAppropriate(
   const card = await cardPreamble(userId, phone).catch(() => "");
 
   // Pass the phone so the reply sees the conversation, not just this line.
-  const answer = await answerFromKnowledge(
+  const leadCard = await getCard(userId, phone).catch(() => null);
+  const answer = await asAgent(userId, routing?.agent.role ?? "sales", () => answerFromKnowledge(
     userId, text, phone, voice,
     routing ? agentJob(routing) : undefined,
     finalCheck,
     card || undefined,
-    { card: await getCard(userId, phone).catch(() => null) },
-  );
+    { card: leadCard },
+  ));
   if (!answer.reply) {
     if (answer.retryable && attempt < REPLY_RETRIES) {
       const delay = REPLY_RETRY_MS * attempt;

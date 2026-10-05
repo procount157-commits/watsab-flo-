@@ -16,6 +16,7 @@
 //   done              the report — by subject, by city, by sector — and what
 //                     she learned, into her memory, and to the owner.
 
+import { recordFeedback } from "../feedback";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   db, emailMissionsTable, emailMissionLogTable, emailCampaignsTable, emailSegmentsTable, emailSequencesTable,
@@ -107,6 +108,10 @@ export async function approve(userId: number, id: number, edited?: Partial<Email
   if (!n) throw new Error(`لا أحد في جمهور هذه الحملة يمكن مراسلته الآن (${describe(m.filter as SegmentFilter)}). ارفع القائمة أو غيّر الجمهور، ثم وافق.`);
   await db.update(emailMissionsTable).set({ status: "active", pending: d as any }).where(eq(emailMissionsTable.id, m.id));
   await log(m.id, "وافق صاحب العمل.", "approve");
+  // What the owner changed is what the writer learns from.
+  const was = m.pending as EmailDraft;
+  const asText = (x: EmailDraft) => `${x.subjects.join(" | ")}\n${x.html}`;
+  await recordFeedback({ userId, role: "email", channel: "email", kind: "campaign", refId: m.id, context: m.goal, original: asText(was), final: asText(d), verdict: edited ? "edited" : "approved" });
   await launch({ ...m, status: "active" }, d);
 }
 

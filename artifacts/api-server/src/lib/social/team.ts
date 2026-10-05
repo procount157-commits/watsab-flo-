@@ -24,7 +24,7 @@ export const teamRoles = (platform: SocialPlatform) => JOBS.map((j) => roleOf(pl
 
 const NAMES: Record<SocialPlatform, Record<Job, string>> = {
   instagram: { manager: "عبدالله", watcher: "ريّان", triage: "لمياء", writer: "تركي", inviter: "نوف", dm: "سلطان", prospector: "غدير", qualify: "دانة", followup: "بدر", creator: "رنا", guard: "ماجد الحارس", analyst: "هيا" },
-  tiktok:    { manager: "فيصل", watcher: "مشعل", triage: "ريم", writer: "زياد", inviter: "لولوة", dm: "حمد", prospector: "شهد", qualify: "عهود", followup: "عمر", creator: "جود", guard: "سيف", analyst: "مها" },
+  tiktok:    { manager: "فيصل", watcher: "مشعل", triage: "رزان", writer: "زياد", inviter: "لولوة", dm: "حمد", prospector: "شهد", qualify: "عهود", followup: "عمر", creator: "جود", guard: "سيف", analyst: "مها" },
   linkedin:  { manager: "خليفة", watcher: "نايف", triage: "أسماء", writer: "راشد", inviter: "منيرة", dm: "طلال", prospector: "بشاير", qualify: "حصة", followup: "وليد", creator: "ناصر", guard: "عادل", analyst: "العنود" },
 };
 

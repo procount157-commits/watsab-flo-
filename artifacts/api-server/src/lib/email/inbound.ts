@@ -8,6 +8,8 @@
 // answer — which waits for a person unless the owner switches auto-reply
 // on for email.
 
+import { recordFeedback, lessonsFor } from "../feedback";
+import { asAgent } from "../agent-context";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -191,7 +193,8 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
     passages(userId, `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 500), { sectors: contact?.sector ? [contact.sector] : [], limit: 3 }).catch(() => []),
   ]);
 
-  const out = await complete([
+  const lessons = await lessonsFor(userId, "email", `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 600)).catch(() => "");
+  const out = await asAgent(userId, nora ? "email" : "sales", () => complete([
     { role: "system", content: [
       noraVoice || (sales ? `اسمك ${sales.name}${sales.title ? `، ${sales.title}` : ""}.` : "أنت مندوب مبيعات."),
       noraVoice ? "" : sales?.persona ?? "",
@@ -210,6 +213,7 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
         ...skills.filter((x) => /التفاوض|تشخيص|احتواء|قراءة نية/.test(x.name)),
       ]),
       memory,
+      lessons,
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
       facts.length || docs.length ? `معلومات مفيدة:\n${[...facts.map((f) => `${f.entry.title}\n${f.entry.content}`), ...docs.map((d) => `${d.title}\n${d.text}`)].map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}` : "لا توجد معلومة محددة — اسأل عمّا تحتاجه لتُجيب بدقة.",
       "",
@@ -226,7 +230,7 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
       `عنوان رده: ${inb.subject ?? ""}`,
       `رده:\n${inb.text ?? ""}`,
     ].filter(Boolean).join("\n") },
-  ], 45_000);
+  ], 45_000));
   if (!out?.text) return null;
 
   const summary = /الخلاصة\s*[:：]\s*(.+)/.exec(out.text)?.[1]?.trim() ?? "";
@@ -258,6 +262,7 @@ export async function sendReply(userId: number, inboundId: number, subject?: str
     const r = await sendEmail(s!, { to: inb.fromEmail, toName: inb.fromName, subject: subj, html, text, messageId, unsubscribeUrl: null, inReplyTo: inb.messageIdHdr });
     await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId }).where(eq(emailMessagesTable.id, m!.id));
     await db.update(emailInboundTable).set({ state: "sent", draftSubject: subj, draftReply: text, autoSendAt: null }).where(eq(emailInboundTable.id, inboundId));
+    if (inb.draftReply) await recordFeedback({ userId, role: "email", channel: "email", kind: "email_reply", refId: inboundId, context: (inb.text ?? "").slice(0, 1_500), original: inb.draftReply, final: text, verdict: body != null ? "edited" : "approved" });
     await recordEvent(userId, m!.id, "sent", { meta: { reply: true } });
   } catch (err: any) {
     await db.update(emailMessagesTable).set({ status: "failed", error: String(err?.message ?? err).slice(0, 400) }).where(eq(emailMessagesTable.id, m!.id));

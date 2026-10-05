@@ -15,6 +15,7 @@
 // With none set, callers fall back to answering from the knowledge base
 // directly, which needs no network at all.
 
+import { currentAgent } from "./agent-context";
 import { and, eq } from "drizzle-orm";
 import { db, llmSettingsTable } from "@workspace/db";
 import { logger } from "./logger";
@@ -357,6 +358,15 @@ const EXTRA_MODELS: Record<string, string[]> = {
  * chain never runs out.
  */
 export async function complete(messages: LlmMessage[], timeoutMs = 20_000): Promise<LlmResult | null> {
+  // Counted against the employee whose work this is, when it runs inside asAgent().
+  const who = currentAgent(), t0 = Date.now();
+  const out = await completeInner(messages, timeoutMs);
+  // Imported late: feedback reads the knowledge module, which calls back into this one.
+  if (who) void import("./feedback").then((f) => f.recordUsage(who.userId, who.role, { ok: !!out, charsIn: messages.reduce((a, m) => a + m.content.length, 0), charsOut: out?.text.length ?? 0, ms: Date.now() - t0 })).catch(() => {});
+  return out;
+}
+
+async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise<LlmResult | null> {
   const resolved = await resolveProvider();
   if (!resolved || !resolved.apiKey) return null;
   // A stored key has to win over the environment for the whole call, so the

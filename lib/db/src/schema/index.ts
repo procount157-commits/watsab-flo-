@@ -27,3 +27,4 @@ export * from "./outbox";
 export * from "./instagram";
 export * from "./social";
 export * from "./groups";
+export * from "./feedback";

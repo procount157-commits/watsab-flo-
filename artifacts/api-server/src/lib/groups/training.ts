@@ -13,6 +13,7 @@
 // When she suggests a reply, the instructions always come with her, and the
 // examples, passages and lessons closest to what the customer wrote.
 
+import { asAgent } from "../agent-context";
 import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, waGroupsTable, waGroupMessagesTable, waGroupKnowledgeTable, type WaGroupKnowledge } from "@workspace/db";
 import { complete } from "../llm";
@@ -176,6 +177,9 @@ export type LearnResult = { read: number; lessons: string[]; profile: boolean } 
  * and keep the lessons that hold beyond it. `force` reads even one message.
  */
 export async function learnFromGroup(userId: number, jid: string, opts: { force?: boolean } = {}): Promise<LearnResult> {
+  return asAgent(userId, "groups", () => learnInner(userId, jid, opts));
+}
+async function learnInner(userId: number, jid: string, opts: { force?: boolean }): Promise<LearnResult> {
   const [group] = await db.select().from(waGroupsTable).where(and(eq(waGroupsTable.userId, userId), eq(waGroupsTable.jid, jid))).limit(1);
   if (!group) return null;
   const fresh = await db.select().from(waGroupMessagesTable).where(and(

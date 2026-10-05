@@ -7,7 +7,9 @@ import { complete } from "../llm";
 import { retrieve } from "../knowledge";
 import { guardCheck } from "../email/team";
 import { PLATFORM, type SocialPlatform } from "./platforms";
-import { voiceFor, type Job } from "./team";
+import { voiceFor, roleOf, type Job } from "./team";
+import { asAgent } from "../agent-context";
+import { lessonsFor } from "../feedback";
 
 export const INTENTS = ["question", "interested", "praise", "complaint", "spam", "stop", "other"] as const;
 export type Intent = typeof INTENTS[number];
@@ -18,11 +20,15 @@ async function facts(userId: number, text: string) {
 }
 
 async function ask(userId: number, p: SocialPlatform, job: Job, rules: string[], user: string, ms = 25_000) {
-  const out = await complete([
-    { role: "system", content: [await voiceFor(userId, p, job), "", ...rules].filter(Boolean).join("\n") },
-    { role: "user", content: user },
-  ], ms);
-  return out?.text?.trim() ?? "";
+  const role = roleOf(p, job);
+  return asAgent(userId, role, async () => {
+    const [voice, lessons] = await Promise.all([voiceFor(userId, p, job), lessonsFor(userId, role, user).catch(() => "")]);
+    const out = await complete([
+      { role: "system", content: [voice, "", ...rules, lessons].filter(Boolean).join("\n") },
+      { role: "user", content: user },
+    ], ms);
+    return out?.text?.trim() ?? "";
+  });
 }
 
 const clean = (t: string, max: number) => t.replace(/^[«"'`]+|[»"'`]+$/g, "").replace(/^(الرد|الرسالة|المنشور|التعليق)\s*[:：]\s*/i, "").trim().slice(0, max);
