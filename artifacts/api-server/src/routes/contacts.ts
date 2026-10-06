@@ -6,7 +6,11 @@ import { assertCanAddContacts, planErrorToResponse } from "../lib/plans";
 import * as XLSX from "xlsx";
 import multer from "multer";
 import { readWorkbook, readText, parseTables, whatsappEntries } from "../lib/phone-import";
-import { saveToGroup, saveToNewGroup, validateGroup, validateInBackground } from "../lib/contact-save";
+import { saveToGroup, saveToNewGroup, validateGroup, validateInBackground, validatePending } from "../lib/contact-save";
+import { registerOnConnectHook } from "../lib/whatsapp";
+
+// An import made while the line was down is checked the moment it comes back.
+registerOnConnectHook((userId) => { setTimeout(() => void validatePending(userId).catch(() => {}), 30_000); });
 import { findDuplicates, removeDuplicates } from "../lib/dedupe";
 import { folderForSector, listSector } from "../lib/folders";
 import { logger } from "../lib/logger";
@@ -215,7 +219,8 @@ router.post("/import", upload.single("file"), async (req, res) => {
   }
 
   const parsed = parseTables(tables, country);
-  const wa = whatsappEntries(parsed.rows, { mobileOnly, allMobiles });
+  const foreign = b.foreign === "true" || b.foreign === true;
+  const wa = whatsappEntries(parsed.rows, { mobileOnly, allMobiles, foreign });
   if (!wa.entries.length) {
     return res.status(400).json({
       error: parsed.total ? "لم أجد أرقام واتساب في الملف" : "الملف فارغ",
@@ -252,9 +257,11 @@ router.post("/import", upload.single("file"), async (req, res) => {
 
   let saved;
   try {
+    // Waiting for WhatsApp's word: nothing is shown as active, or sent to, until it comes.
+    const status = verify ? "pending" as const : "active" as const;
     saved = groupId
-      ? await saveToGroup(userId, groupId, wa.entries, { allowOtherLists })
-      : await saveToNewGroup(userId, listName, description, wa.entries, { allowOtherLists, folderId: folderId ?? folder?.id ?? null });
+      ? await saveToGroup(userId, groupId, wa.entries, { allowOtherLists, status })
+      : await saveToNewGroup(userId, listName, description, wa.entries, { allowOtherLists, folderId: folderId ?? folder?.id ?? null, status });
   } catch (err: any) {
     return res.status(400).json({ error: String(err?.message ?? err) });
   }
@@ -273,6 +280,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
     otherListNames: saved.otherListNames,
     duplicates: wa.duplicates,
     skippedLandline: wa.skippedLandline,
+    skippedForeign: wa.skippedForeign,
     noNumber: parsed.noNumber,
     named: wa.entries.filter((e) => e.name).length,
     byCountry: parsed.byCountry,

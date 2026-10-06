@@ -46,6 +46,11 @@ export const COUNTRIES: Country[] = [
   { cc: "213", iso: "DZ", local: [9],    mobile: /^[567]\d{8}$/ },
   { cc: "91",  iso: "IN", local: [10],   mobile: /^[6-9]\d{9}$/ },
   { cc: "92",  iso: "PK", local: [10],   mobile: /^3\d{9}$/ },
+  { cc: "44",  iso: "GB", local: [10],   mobile: /^7\d{9}$/ },
+  { cc: "880", iso: "BD", local: [10],   mobile: /^1[3-9]\d{8}$/ },
+  { cc: "63",  iso: "PH", local: [10],   mobile: /^9\d{9}$/ },
+  { cc: "94",  iso: "LK", local: [9],    mobile: /^7\d{8}$/ },
+  { cc: "977", iso: "NP", local: [10],   mobile: /^9[78]\d{8}$/ },
 ];
 const BY_ISO = new Map(COUNTRIES.map((c) => [c.iso, c]));
 // Longest code first, so 971 is tried before 97 would be.
@@ -112,8 +117,11 @@ export function normalizePhone(raw: unknown, fallback: CountryIso = "AE"): Phone
 
 function genericIntl(d: string): Phone | null {
   // An international number from somewhere not described above. Kept, with
-  // mobility unknown, rather than thrown away.
+  // mobility unknown, rather than thrown away — but not one that starts with
+  // a described country's code and failed that country's rules: 9718001599
+  // is a UAE toll-free number, not a number in some unknown country.
   if (d.length < 10 || d.length > 15 || d.startsWith("0")) return null;
+  if (BY_CC.some((c) => d.startsWith(c.cc))) return null;
   return { e164: d, iso: null, mobile: null };
 }
 
@@ -435,15 +443,18 @@ export function contactName(r: Pick<ParsedRow, "company" | "person">): string | 
  * `allMobiles`, a row's second and third mobiles become entries too — a
  * company often lists the owner's and the manager's.
  */
-export function whatsappEntries(rows: ParsedRow[], opts: { mobileOnly?: boolean; allMobiles?: boolean } = {}) {
+export function whatsappEntries(rows: ParsedRow[], opts: { mobileOnly?: boolean; allMobiles?: boolean; foreign?: boolean } = {}) {
   const mobileOnly = opts.mobileOnly !== false;
   const seen = new Set<string>();
   const out: Array<{ phone: string; name: string | null }> = [];
-  let duplicates = 0, skippedLandline = 0;
+  let duplicates = 0, skippedLandline = 0, skippedForeign = 0;
   for (const r of rows) {
-    const candidates = opts.allMobiles
-      ? r.phones.filter((p) => p.mobile !== false || !mobileOnly)
-      : [r.whatsapp ?? (!mobileOnly ? r.phones[0] ?? null : null)].filter(Boolean) as Phone[];
+    // A UAE company's British or American office number is not who the list
+    // is for: only the row's own country, unless the owner allows others.
+    const home = (p: Phone) => opts.foreign || p.iso === r.country;
+    const usable = r.phones.filter((p) => (p.mobile !== false || !mobileOnly) && (p.mobile !== null || !mobileOnly || opts.foreign) && home(p));
+    if (!opts.foreign && r.phones.some((p) => !home(p)) && !usable.length) skippedForeign++;
+    const candidates = opts.allMobiles ? usable : usable.slice(0, 1);
     if (!candidates.length && r.phones.length) skippedLandline++;
     for (const p of candidates) {
       if (seen.has(p.e164)) { duplicates++; continue; }
@@ -451,5 +462,5 @@ export function whatsappEntries(rows: ParsedRow[], opts: { mobileOnly?: boolean;
       out.push({ phone: p.e164, name: contactName(r) });
     }
   }
-  return { entries: out, duplicates, skippedLandline };
+  return { entries: out, duplicates, skippedLandline, skippedForeign };
 }

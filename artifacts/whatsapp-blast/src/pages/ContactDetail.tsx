@@ -42,7 +42,9 @@ export default function ContactDetail() {
   const queryClient = useQueryClient();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: group, isLoading } = useGetContactGroup(id, { query: { enabled: !!id } as any });
+  // While WhatsApp is still checking the numbers, the list refreshes itself until every one has an answer.
+  const { data: group, isLoading } = useGetContactGroup(id, { query: { enabled: !!id,
+    refetchInterval: (q: any) => (q.state.data?.contacts ?? []).some((c: any) => c.status === "pending") ? 5_000 : false } as any });
 
   const [pasteText, setPasteText]       = useState("");
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -426,6 +428,8 @@ export default function ContactDetail() {
                         ? <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-400">ليس على واتساب</span>
                         : contact.status === "active"
                           ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-400">واتساب ✓</span>
+                          : contact.status === "pending"
+                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400">قيد الفحص…</span>
                           : <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{contact.status}</span>}
                     </td>
                   </tr>

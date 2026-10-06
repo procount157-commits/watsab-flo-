@@ -24,12 +24,12 @@ export interface SaveResult {
   groups: Array<{ id: number; name: string; count: number }>;
 }
 
-async function insertAll(groupId: number, entries: Array<{ phone: string; name: string | null }>) {
+async function insertAll(groupId: number, entries: Array<{ phone: string; name: string | null }>, status = "active") {
   for (let i = 0; i < entries.length; i += INSERT_BATCH) {
     // The unique index is the last word: two imports racing into one list
     // cannot both add the same number.
     await db.insert(contactsTable).values(entries.slice(i, i + INSERT_BATCH)
-      .map(({ phone, name }) => ({ groupId, phone, name: name || null, status: "active" }))).onConflictDoNothing();
+      .map(({ phone, name }) => ({ groupId, phone, name: name || null, status }))).onConflictDoNothing();
   }
 }
 
@@ -40,7 +40,8 @@ async function insertAll(groupId: number, entries: Array<{ phone: string; name: 
  */
 export async function saveToGroup(
   userId: number, groupId: number, entries: Array<{ phone: string; name: string | null }>,
-  opts: { allowOtherLists?: boolean } = {},
+  /** status: "pending" for numbers WhatsApp has yet to confirm — no campaign sends to them until it does. */
+  opts: { allowOtherLists?: boolean; status?: "active" | "pending" } = {},
 ): Promise<SaveResult> {
   const [group] = await db.select().from(contactGroupsTable)
     .where(and(eq(contactGroupsTable.id, groupId), eq(contactGroupsTable.userId, userId))).limit(1);
@@ -70,12 +71,12 @@ export async function saveToGroup(
   // One list, whatever its size: the owner keeps a file as one list, and a
   // list split into "- 1", "- 2" … scattered it across the page and out of
   // its folder.
-  await insertAll(groupId, fresh);
+  await insertAll(groupId, fresh, opts.status ?? "active");
   return { added: fresh.length, existing: entries.length - fresh.length - skippedOther, ...extra, autoSplit: false, groups: [{ id: groupId, name: group.name, count: existing.length + fresh.length }] };
 }
 
 /** A new list, named after the file, and the numbers in it. */
-export async function saveToNewGroup(userId: number, name: string, description: string | null, entries: Array<{ phone: string; name: string | null }>, opts: { allowOtherLists?: boolean; folderId?: number | null } = {}): Promise<SaveResult> {
+export async function saveToNewGroup(userId: number, name: string, description: string | null, entries: Array<{ phone: string; name: string | null }>, opts: { allowOtherLists?: boolean; folderId?: number | null; status?: "active" | "pending" } = {}): Promise<SaveResult> {
   const [g] = await db.insert(contactGroupsTable).values({ userId, name: name.slice(0, 240) || "قائمة جديدة", description, folderId: opts.folderId ?? null }).returning();
   const r = await saveToGroup(userId, g!.id, entries, opts);
   // Everything in the file was already elsewhere: an empty list helps nobody.
@@ -133,4 +134,18 @@ export function validateInBackground(userId: number, groupIds: number[]): boolea
     }
   })();
   return true;
+}
+
+
+/**
+ * Every list of this account with numbers still waiting for WhatsApp's word —
+ * an import made while the line was down — checked now, and what WhatsApp
+ * does not know removed. Run on every (re)connect.
+ */
+export async function validatePending(userId: number) {
+  const groups = await db.selectDistinct({ id: contactsTable.groupId }).from(contactsTable)
+    .innerJoin(contactGroupsTable, eq(contactGroupsTable.id, contactsTable.groupId))
+    .where(and(eq(contactGroupsTable.userId, userId), eq(contactsTable.status, "pending")));
+  for (const g of groups) await validateGroup(userId, g.id, { prune: true }).catch((err) => logger.warn({ userId, groupId: g.id, err: String(err?.message ?? err) }, "pending validation failed"));
+  return groups.length;
 }

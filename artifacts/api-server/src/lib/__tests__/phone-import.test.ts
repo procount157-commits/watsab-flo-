@@ -26,7 +26,7 @@ check("a Saudi landline", mob("011 234 5678", "SA") === false);
 check("Qatar", e("+974 5512 3456") === "97455123456" && mob("+974 5512 3456") === true);
 check("Kuwait", e("+965 9123 4567") === "96591234567");
 check("Egypt mobile", e("+20 100 123 4567") === "201001234567" && mob("+20 100 123 4567") === true);
-check("an unknown country is kept with mobility unknown", normalizePhone("+44 7700 900123")?.mobile === null && e("+44 7700 900123") === "447700900123");
+check("an unknown country is kept with mobility unknown", normalizePhone("+49 1512 3456789")?.mobile === null && e("+49 1512 3456789") === "4915123456789");
 check("scientific notation is refused, not guessed", e("9.71501E+11") === null);
 check("too short is refused", e("12345") === null);
 check("empty is refused", e("") === null && e(null) === null);
@@ -134,6 +134,16 @@ const dirWa = whatsappEntries(dirRep.rows, {});
 check("from such a file only real mobiles are taken", dirWa.entries.map((e) => e.phone).join(",") === "971561235179,971566664999", dirWa.entries.map((e) => e.phone).join(","));
 check("...each under its company, not its link", dirWa.entries[0]?.name === "Digital Home" && dirRep.sheets[0]!.columns["company"] === "الجهة");
 check("...and the website column is not the city", dirRep.sheets[0]!.columns["city"] === "المدينة");
+
+// ── Only WhatsApp-shaped numbers, from the row's own country ──
+check("a UAE toll-free number is not a number in some unknown country", normalizePhone("+9718001599") === null && normalizePhone("+97180023726427") === null);
+check("...nor a UAE landline of the wrong length", normalizePhone("+9717136624") === null);
+check("a UK mobile is recognised as one", normalizePhone("+447360247692")?.mobile === true && normalizePhone("+442039660128")?.mobile === false);
+const mixed = readText(["الجهة\tالهاتف\tالدولة", "Elithair Dubai\t+447360247692\tالإمارات", "Digital Home\t+971561235179\tالإمارات", "Heidrick\t+12023314900\tالإمارات"].join("\n"));
+const mixedRows = parseTables(mixed, "AE").rows;
+const home = whatsappEntries(mixedRows, {});
+check("a UAE list keeps UAE mobiles only", home.entries.map((e) => e.phone).join(",") === "971561235179" && home.skippedForeign === 2, `${home.entries.map((e) => e.phone)} / ${home.skippedForeign}`);
+check("...unless the owner allows other countries", whatsappEntries(mixedRows, { foreign: true }).entries.length === 3);
 
 console.log(`\n${pass}/${total} مرّ`);
 process.exit(pass === total ? 0 : 1);
