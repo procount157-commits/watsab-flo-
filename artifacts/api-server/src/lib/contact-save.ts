@@ -89,7 +89,7 @@ export interface ValidateResult { total: number; valid: number; invalid: number;
  * Ask WhatsApp which numbers in a list are real. Dead ones are parked as
  * `invalid` (never deleted); one that resolves again is revived.
  */
-export async function validateGroup(userId: number, groupId: number): Promise<ValidateResult> {
+export async function validateGroup(userId: number, groupId: number, opts: { prune?: boolean } = {}): Promise<ValidateResult> {
   const rows = await db.select({ id: contactsTable.id, phone: contactsTable.phone })
     .from(contactsTable).where(eq(contactsTable.groupId, groupId));
   if (rows.length === 0) return { total: 0, valid: 0, invalid: 0, unknown: 0, invalidPhones: [] };
@@ -107,7 +107,10 @@ export async function validateGroup(userId: number, groupId: number): Promise<Va
     else { invalidIds.push(...ids); invalidPhones.push(r.phone); }
   }
   for (let i = 0; i < invalidIds.length; i += 1000) {
-    await db.update(contactsTable).set({ status: "invalid" }).where(inArray(contactsTable.id, invalidIds.slice(i, i + 1000)));
+    // A list is for WhatsApp: after an import, a number WhatsApp says it does
+    // not know is removed rather than kept as a row nobody can message.
+    if (opts.prune) await db.delete(contactsTable).where(inArray(contactsTable.id, invalidIds.slice(i, i + 1000)));
+    else await db.update(contactsTable).set({ status: "invalid" }).where(inArray(contactsTable.id, invalidIds.slice(i, i + 1000)));
   }
   for (let i = 0; i < validIds.length; i += 1000) {
     await db.update(contactsTable).set({ status: "active" })
@@ -125,7 +128,7 @@ export function validateInBackground(userId: number, groupIds: number[]): boolea
   if (!groupIds.length || !getStatus(userId)?.connected) return false;
   void (async () => {
     for (const id of groupIds) {
-      await validateGroup(userId, id).catch((err) =>
+      await validateGroup(userId, id, { prune: true }).catch((err) =>
         logger.warn({ userId, groupId: id, err: String(err?.message ?? err) }, "background validation failed"));
     }
   })();

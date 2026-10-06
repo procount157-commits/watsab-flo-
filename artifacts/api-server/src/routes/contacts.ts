@@ -202,7 +202,12 @@ router.post("/import", upload.single("file"), async (req, res) => {
   let tables;
   let fileName = "";
   try {
-    if (req.file) { fileName = req.file.originalname; tables = readWorkbook(req.file.buffer); }
+    if (req.file) {
+      // Multer reads the name as latin1; an Arabic file name arrives as its UTF-8 bytes.
+      const re = Buffer.from(req.file.originalname, "latin1").toString("utf8");
+      fileName = /[\u0080-\u00ff]/.test(req.file.originalname) && !re.includes("\ufffd") ? re : req.file.originalname;
+      tables = readWorkbook(req.file.buffer);
+    }
     else if (typeof b.text === "string" && b.text.trim()) tables = readText(b.text);
     else return res.status(400).json({ error: "ارفع ملفاً أو الصق الأرقام" });
   } catch {

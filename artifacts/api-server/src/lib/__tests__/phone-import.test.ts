@@ -113,5 +113,27 @@ const ms = Date.now() - t0;
 check("50,000 rows are read", bigRep.total === 50_000 && bigRep.withWhatsapp === 50_000, `${bigRep.withWhatsapp}`);
 check("...in a few seconds", ms < 15_000, `${ms} ms`);
 
+// ── A directory export with links beside the numbers ──
+// The file that put 623 Facebook page ids into a list as phones: the social
+// column's header said «التواصل», which read as a phone column, and the digits
+// in the link were taken as a number.
+check("a column of social accounts is never a phone column", headerField("حسابات التواصل") === "skip" && headerField("جاهز للتواصل") === "skip");
+check("...while «رقم التواصل» still is", headerField("رقم التواصل") === "phone" && headerField("التصنيف") === "industry");
+check("«الجهة» is the company", headerField("الجهة") === "company");
+check("digits inside a link are not a number", phonesInCell("https://www.facebook.com/427946550588719").length === 0 && phonesInCell("www.instagram.com/971501234567").length === 0);
+check("...nor inside an email or a coordinate", phonesInCell("info971501234567@x.ae").length === 0 && phonesInCell("24.97241973876953,55.17534255981445").length === 0);
+check("...while a number beside a link is still found", phonesInCell("Tel 050 123 4567 · site www.x.ae")[0]?.e164 === "971501234567");
+const dir = readText([
+  "البريد\tالجهة\tالهاتف\tواتساب\tالموقع\tالمدينة\tحسابات التواصل",
+  "-\tMills Bowley Concrete\t+97148854549\t\t\tدبي\thttps://www.facebook.com/427946550588719",
+  "a@b.ae\tDigital Home\t+971561235179\t\thttp://dh.ae\tدبي\thttps://www.facebook.com/105056307532897",
+  "-\tAl Etlala\t+97143334444\t+971566664999\twww.etlala.ae\tدبي\t",
+].join("\n"));
+const dirRep = parseTables(dir, "AE");
+const dirWa = whatsappEntries(dirRep.rows, {});
+check("from such a file only real mobiles are taken", dirWa.entries.map((e) => e.phone).join(",") === "971561235179,971566664999", dirWa.entries.map((e) => e.phone).join(","));
+check("...each under its company, not its link", dirWa.entries[0]?.name === "Digital Home" && dirRep.sheets[0]!.columns["company"] === "الجهة");
+check("...and the website column is not the city", dirRep.sheets[0]!.columns["city"] === "المدينة");
+
 console.log(`\n${pass}/${total} مرّ`);
 process.exit(pass === total ? 0 : 1);

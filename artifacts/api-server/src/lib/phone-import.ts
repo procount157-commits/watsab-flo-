@@ -125,7 +125,10 @@ function genericIntl(d: string): Phone | null {
 export function phonesInCell(raw: unknown, fallback: CountryIso = "AE"): Phone[] {
   if (raw === null || raw === undefined || raw === "") return [];
   if (typeof raw === "number") { const p = normalizePhone(raw, fallback); return p ? [p] : []; }
-  const s = toLatinDigits(String(raw));
+  const s = toLatinDigits(String(raw))
+    .replace(/https?:\/\/\S+|www\.\S+|\S+\.(?:com|net|org|ae|sa|io|co)(?:\/\S*)?/gi, " ")
+    .replace(/\S+@\S+/g, " ")
+    .replace(/-?\d{1,3}\.\d{4,}/g, " ");
   const out: Phone[] = [];
   const seen = new Set<string>();
   const push = (p: Phone | null) => { if (p && !seen.has(p.e164)) { seen.add(p.e164); out.push(p); } };
@@ -150,19 +153,22 @@ export function phonesInCell(raw: unknown, fallback: CountryIso = "AE"): Phone[]
 
 // ── Columns ───────────────────────────────────────────────────────
 
-export type Field = "company" | "person" | "email" | "phone" | "mobile" | "whatsapp" | "landline" | "fax" | "country" | "city" | "industry";
+export type Field = "company" | "person" | "email" | "phone" | "mobile" | "whatsapp" | "landline" | "fax" | "country" | "city" | "industry" | "skip";
 
 // Header words, normalised the way normalizeArabic writes them (ة→ه, أ→ا,
 // ى→ي, lower-case, punctuation to spaces). Order matters: more specific
 // fields first, so "اسم الشركه" is a company before "اسم" makes it a person.
 const HEADERS: Array<[Field, RegExp]> = [
+  // Never numbers, whatever digits they hold: a Facebook page id in a link
+  // read as a fifteen-digit "phone" once, for half of a 1,300-row list.
+  ["skip",     /(social|links?|url|website|web site|facebook|instagram|linkedin|twitter|tiktok|coordinates|lat(itude)?|lng|lon(gitude)?|confidence|score|source|حسابات|روابط|رابط|الموقع الالكتروني|موقع الكتروني|الاحداثيات|احداثيات|الثقه|المصدر|تصنيف المصدر|سبب التصنيف|ملاحظات|جاهز للتواصل)/],
   ["fax",      /\b(fax|فاكس)\b/],
   ["whatsapp", /(whats ?app|واتس ?اب|واتساب|وتساب)/],
   ["email",    /(e ?mail|البريد|الايميل|ايميل|بريد الكتروني|mail)/],
   ["mobile",   /(mobile|mob\b|cell|gsm|جوال|الجوال|موبايل|محمول|نقال)/],
   ["landline", /(landline|land line|office (phone|tel)|هاتف ثابت|الهاتف الثابت|ثابت|المكتب)/],
-  ["phone",    /(phone|tel\b|telephone|contact (no|number)|number|هاتف|الهاتف|تلفون|تليفون|رقم|ارقام|التواصل)/],
-  ["company",  /(company|business|trade ?name|establishment|organi[sz]ation|firm|account name|brand|store|shop|agency|brokerage|office name|entity|شركه|الشركه|المنشاه|منشاه|المؤسسه|مؤسسه|الاسم التجاري|اسم تجاري|المحل|محل|المكتب العقاري|الوكاله)/],
+  ["phone",    /(phone|tel\b|telephone|contact (no|number)|number|هاتف|الهاتف|تلفون|تليفون|رقم|ارقام|(رقم|هاتف) (ال)?تواصل)/],
+  ["company",  /(company|business|trade ?name|establishment|organi[sz]ation|firm|account name|brand|store|shop|agency|brokerage|office name|entity|شركه|الشركه|المنشاه|منشاه|المؤسسه|مؤسسه|الاسم التجاري|اسم تجاري|المحل|محل|المكتب العقاري|الوكاله|^الجهه$|^جهه$|اسم الجهه)/],
   ["person",   /^(name|full ?name|contact|contact (name|person)|owner|manager|first ?name|person|client|customer|الاسم|اسم|اسم العميل|العميل|الشخص|المسؤول|اسم المسؤول|المالك|صاحب|المدير|اسم الشخص)$|^(name|contact person|الاسم|اسم المسؤول)\b/],
   ["country",  /^(country|nationality|الدوله|البلد|الدول)$/],
   ["city",     /(city|emirate|region|area|location|المدينه|الاماره|الامارات?|المنطقه|الموقع)/],
@@ -270,7 +276,7 @@ export function mapColumns(t: SheetTable): ColumnMap {
   const m: ColumnMap = { phones: [], company: null, person: null, email: null, country: null, city: null, industry: null, labels: {} };
   const label = (i: number) => t.headers[i] || `عمود ${i + 1}`;
   const pick = (f: "company" | "person" | "email" | "country" | "city" | "industry") => {
-    const i = byHeader.findIndex((x) => x === f);
+    const i = byHeader.findIndex((x, j) => x === f && share(j, (v) => /https?:\/\/|www\./i.test(String(v ?? ""))) < 0.3);
     if (i >= 0) { m[f] = i; m.labels[f] = label(i); }
   };
   (["company", "person", "email", "country", "city", "industry"] as const).forEach(pick);
@@ -279,9 +285,11 @@ export function mapColumns(t: SheetTable): ColumnMap {
   // values are mostly numbers whatever it is called — but never the fax.
   const looksPhone = (v: unknown) => phonesInCell(v).length > 0;
   const phoneCols: Array<{ i: number; p: number }> = [];
+  const linky = (v: unknown) => /https?:\/\/|www\.|\.(com|net|org|ae)\b/i.test(String(v ?? ""));
   for (let i = 0; i < width; i++) {
     const f = byHeader[i];
-    if (f === "fax" || i === m.email) continue;
+    if (f === "fax" || f === "skip" || i === m.email) continue;
+    if (share(i, linky) >= 0.3) continue;
     if (f && f in PHONE_PRIORITY) phoneCols.push({ i, p: PHONE_PRIORITY[f]! });
     else if (!f && filled(i) > 0 && share(i, looksPhone) >= 0.5) phoneCols.push({ i, p: 2.5 });
   }
@@ -305,7 +313,7 @@ export function mapColumns(t: SheetTable): ColumnMap {
   if (m.company === null) {
     let best = -1, bestScore = 0;
     for (let i = 0; i < width; i++) {
-      if (taken.has(i)) continue;
+      if (taken.has(i) || byHeader[i] === "skip" || share(i, linky) >= 0.3) continue;
       const vals = sample.map((r) => String(r[i] ?? "").trim()).filter(Boolean);
       const texty = vals.filter((v) => /\p{L}{2,}/u.test(v) && !/^\d/.test(v) && !EMAIL_RE.test(v) && v.length <= 120);
       const distinct = new Set(texty).size;

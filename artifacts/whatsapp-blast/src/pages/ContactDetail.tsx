@@ -422,7 +422,11 @@ export default function ContactDetail() {
                     )}
                     <td className="px-5 py-2.5 text-sm font-mono text-foreground" dir="ltr">{contact.phone}</td>
                     <td className="px-5 py-2.5">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-400">نشط</span>
+                      {contact.status === "invalid"
+                        ? <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-400">ليس على واتساب</span>
+                        : contact.status === "active"
+                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-400">واتساب ✓</span>
+                          : <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{contact.status}</span>}
                     </td>
                   </tr>
                 ))}
