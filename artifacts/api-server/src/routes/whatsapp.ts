@@ -108,10 +108,12 @@ router.post("/auto-heal", async (req, res) => {
 });
 
 // ── إرسال اختباري — يرسل رسالة واحدة فوراً للتحقق من صحة الجلسة ──────
-// POST /api/whatsapp/test-send  { phone: "9715XXXXXXXX", message?: "..." }
+// POST /api/whatsapp/test-send  { phone: "9715XXXXXXXX", message?: "...", buttons?: ButtonDef[], mediaUrl?: "..." }
+// With buttons, the test goes exactly as a campaign's would — real buttons, image header if given.
 router.post("/test-send", async (req, res) => {
   const userId = req.session.userId!;
-  const { phone, message: testMsg = "رسالة اختبار ✓ واتساب ماركتر" } = req.body as { phone?: string; message?: string };
+  const { phone, message: testMsg = "رسالة اختبار ✓ واتساب ماركتر", buttons, mediaUrl } =
+    req.body as { phone?: string; message?: string; buttons?: unknown[]; mediaUrl?: string };
   if (!phone) return res.status(400).json({ error: "phone مطلوب" });
 
   const waState = getStatus(userId);
@@ -123,7 +125,8 @@ router.post("/test-send", async (req, res) => {
   if (cleanPhone.length < 9) return res.status(400).json({ error: "رقم الهاتف غير صالح" });
 
   try {
-    await sendMessage(userId, cleanPhone, testMsg);
+    const withButtons = Array.isArray(buttons) && buttons.length > 0;
+    await sendMessage(userId, cleanPhone, testMsg, withButtons ? (mediaUrl ? "image_button" : "button") : "text", mediaUrl ?? null, withButtons ? JSON.stringify(buttons) : null);
     res.json({ success: true, message: `تم إرسال رسالة اختبار إلى ${cleanPhone} ✓` });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || "فشل إرسال الرسالة الاختبارية" });
