@@ -12,14 +12,14 @@ import {
   ArrowRight, Plus, Trash2, Loader2, Upload,
   X, Image, Film, Users, ClipboardPaste, Braces,
   Phone, Link2, MessageSquare, Eye, Shuffle, ShieldAlert, ShieldCheck, ShieldX,
-  BookOpen, Sparkles, ThumbsUp, ThumbsDown,
+  BookOpen, Sparkles, ThumbsUp, ThumbsDown, BellOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────────
 
-type ButtonType  = "url" | "call" | "reply" | "interested" | "not_interested";
+type ButtonType  = "url" | "call" | "reply" | "interested" | "not_interested" | "stop";
 type ButtonColor = "default" | "green" | "blue" | "red" | "orange" | "purple";
 type Button = { text: string; type: ButtonType; url?: string; phone?: string; color?: ButtonColor };
 type CarouselCard = {
@@ -54,7 +54,30 @@ const BTN_TYPES: { val: ButtonType; label: string; icon: React.ReactNode }[] = [
   { val: "reply",          label: "رد سريع",      icon: <MessageSquare className="w-3.5 h-3.5" /> },
   { val: "interested",     label: "مهتم",         icon: <ThumbsUp className="w-3.5 h-3.5" /> },
   { val: "not_interested", label: "غير مهتم",     icon: <ThumbsDown className="w-3.5 h-3.5" /> },
+  { val: "stop",           label: "إيقاف الرسائل", icon: <BellOff className="w-3.5 h-3.5" /> },
 ];
+
+const STOP_BUTTON: Button = { text: "إيقاف الرسائل", type: "stop", url: "", color: "red" };
+
+/** Ready buttons: one tap adds one. Links and calls still need their address. */
+const BTN_PRESETS: { icon: string; label: string; btn: Button }[] = [
+  { icon: "👍", label: "مهتم",             btn: { text: "مهتم", type: "interested", url: "", color: "green" } },
+  { icon: "👎", label: "غير مهتم",         btn: { text: "غير مهتم", type: "not_interested", url: "", color: "default" } },
+  { icon: "🛑", label: "إيقاف الرسائل",    btn: STOP_BUTTON },
+  { icon: "💰", label: "أريد عرض سعر",     btn: { text: "أريد عرض سعر", type: "reply", url: "", color: "purple" } },
+  { icon: "❓", label: "عندي سؤال",        btn: { text: "عندي سؤال", type: "reply", url: "", color: "blue" } },
+  { icon: "⏰", label: "كلمني لاحقاً",     btn: { text: "كلمني لاحقاً", type: "reply", url: "", color: "orange" } },
+  { icon: "📞", label: "اتصل بنا",         btn: { text: "اتصل بنا", type: "call", url: "", phone: "", color: "default" } },
+  { icon: "🌐", label: "زوروا موقعنا",     btn: { text: "زوروا موقعنا", type: "url", url: "", color: "blue" } },
+  { icon: "📅", label: "احجز موعد",        btn: { text: "احجز موعد", type: "url", url: "", color: "green" } },
+  { icon: "📍", label: "موقعنا",           btn: { text: "موقعنا على الخريطة", type: "url", url: "", color: "default" } },
+];
+
+/** The buttons as they will go: with the stop button added if asked and not already there. */
+function withStopButton(btns: Button[], add: boolean): Button[] {
+  const valid = btns.filter((b) => b.text.trim());
+  return add && valid.length > 0 && !valid.some((b) => b.type === "stop") ? [...valid, STOP_BUTTON] : valid;
+}
 
 const BTN_COLORS: { val: ButtonColor; emoji: string; label: string; previewCls: string }[] = [
   { val: "default", emoji: "⬜", label: "افتراضي", previewCls: "bg-primary/15 border-primary/40 text-primary" },
@@ -426,45 +449,25 @@ function WAPreview({
                       </div>
                     )}
 
-                    {/* Ad-style buttons — rendered inline as they appear in WhatsApp */}
-                    {(messageType === "button" || messageType === "image_button") && buttons.filter(b => b.text).length > 0 && (
-                      <div className="px-3 pb-2 space-y-2">
-                          {buttons.filter(b => b.text).map((btn, i) => (
-                            <div key={i}>
-                              {/* Pill button */}
-                              <div className="rounded-full border border-white/20 bg-white/5 px-3 py-1.5 flex items-center gap-1.5 shadow-sm">
-                                <span className="text-[11px] leading-none">
-                                  {btn.type === "call" ? "📞"
-                                    : btn.type === "reply" ? "💬"
-                                    : btn.type === "interested" ? "👍"
-                                    : btn.type === "not_interested" ? "👎"
-                                    : "🔗"}
-                                </span>
-                                <p className="text-[10px] font-semibold text-white leading-tight flex-1 text-center">
-                                  {btn.text}
-                                </p>
-                              </div>
-                              {btn.type === "url" && btn.url && (
-                                <p className="text-[8px] text-primary/70 mt-0.5 pr-1 break-all leading-tight">
-                                  👉 {btn.url}
-                                </p>
-                              )}
-                              {btn.type === "call" && btn.phone && (
-                                <p className="text-[8px] text-white/40 mt-0.5 pr-1 leading-tight">
-                                  ☎️ {btn.phone}
-                                </p>
-                              )}
-                            </div>
-                          ))}
-                      </div>
-                    )}
-
                     {/* Timestamp */}
                     <div className="px-3 pb-2 flex justify-end items-center gap-1">
                       <span className="text-[9px] text-white/30">{now}</span>
                       <span className="text-[9px] text-primary">✓✓</span>
                     </div>
                   </div>
+                  {/* Real WhatsApp buttons — under the bubble, one per row, as the phone shows them */}
+                  {(messageType === "button" || messageType === "image_button") && buttons.filter(b => b.text).length > 0 && (
+                    <div className="max-w-[90%] space-y-0.5">
+                      {buttons.filter(b => b.text).map((btn, i) => (
+                        <div key={i} className="rounded-lg bg-[#1a3a25] shadow-sm px-3 py-2 flex items-center justify-center gap-1.5">
+                          <span className="text-[11px] leading-none text-[#53bdeb]">
+                            {btn.type === "call" ? "📞" : btn.type === "url" ? "↗" : btn.type === "stop" ? "🛑" : "↩"}
+                          </span>
+                          <p className="text-[11px] font-medium text-[#53bdeb] leading-tight text-center">{btn.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -523,6 +526,8 @@ export default function CampaignNew() {
   const [buttons, setButtons] = useState<Button[]>([{ text: "", type: "url", url: "", color: "default" }]);
   const [hasButtons, setHasButtons] = useState(false);
   const [optOut, setOptOut] = useState(false);
+  // With buttons, the way out is a button — added unless the owner turns it off.
+  const [autoStop, setAutoStop] = useState(true);
   const [carousel, setCarousel] = useState<CarouselCard[]>([
     { title: "", description: "", imagePath: "", imageFilename: "", imageUrl: "", buttonText: "", buttonUrl: "" },
   ]);
@@ -680,7 +685,7 @@ export default function CampaignNew() {
       if (!valid.length) { toast.error("أضف بطاقة كاروسيل واحدة على الأقل"); return; }
     }
 
-    const finalMessage = optOut
+    const finalMessage = optOut && !needsButtons
       ? form.message + "\n\n━━━━━━━━━━\n🔕 لإيقاف الرسائل أرسل: 0"
       : form.message;
 
@@ -708,7 +713,7 @@ export default function CampaignNew() {
     }
 
     if (needsButtons) {
-      payload.buttons = JSON.stringify(buttons.filter((b) => b.text.trim()));
+      payload.buttons = JSON.stringify(withStopButton(buttons, autoStop));
     } else {
       payload.buttons = null;
     }
@@ -1072,20 +1077,20 @@ export default function CampaignNew() {
 
               {/* ── Quick presets ─────────────────────────────────── */}
               <div>
-                <p className="text-xs text-muted-foreground mb-2">⚡ بريسيت سريع — اضغط لإضافة زر جاهز:</p>
+                <p className="text-xs text-muted-foreground mb-2">⚡ أزرار جاهزة — اضغط لإضافة زر:</p>
                 <div className="flex flex-wrap gap-2">
-                  {([
-                    { icon: "💾", label: "احفظ الرقم",     btn: { text: "احفظ الرقم", type: "url" as const, url: "", color: "default" as const } },
-                    { icon: "💬", label: "رد بكلمة مهتم", btn: { text: "مهتم", type: "reply" as const, url: "", color: "green" as const } },
-                    { icon: "🎁", label: "اطلب العرض",     btn: { text: "أريد العرض", type: "reply" as const, url: "", color: "purple" as const } },
-                    { icon: "📞", label: "تحدث معنا",      btn: { text: "تحدث معنا", type: "call" as const, url: "", phone: "", color: "default" as const } },
-                    { icon: "📅", label: "احجز الآن",      btn: { text: "احجز الآن", type: "url" as const, url: "", color: "green" as const } },
-                    { icon: "👁️", label: "شاهد التفاصيل", btn: { text: "شاهد التفاصيل", type: "url" as const, url: "", color: "blue" as const } },
-                  ] as const).map(({ icon, label, btn }) => (
+                  <button type="button"
+                    onClick={() => setButtons([BTN_PRESETS[0]!.btn, BTN_PRESETS[1]!.btn, STOP_BUTTON].map((b) => ({ ...b })))}
+                    className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-primary/15 border border-primary/40 text-primary font-medium hover:bg-primary/25 transition-colors">
+                    ✨ الطقم الأساسي: مهتم · غير مهتم · إيقاف
+                  </button>
+                  {BTN_PRESETS.map(({ icon, label, btn }) => (
+
                     <button
                       key={label}
                       type="button"
                       onClick={() => setButtons((prev) => {
+                        if (btn.type === "stop" && prev.some((b) => b.type === "stop")) return prev;
                         const newBtn: Button = { ...btn };
                         // Replace the first empty button if it exists, otherwise append
                         const firstEmpty = prev.findIndex((b) => !b.text.trim());
@@ -1104,11 +1109,23 @@ export default function CampaignNew() {
                   ))}
                 </div>
               </div>
+              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-orange-500/25 bg-orange-500/5 cursor-pointer select-none">
+                <input type="checkbox" checked={autoStop || buttons.some((b) => b.type === "stop")}
+                  disabled={buttons.some((b) => b.type === "stop")}
+                  onChange={(e) => setAutoStop(e.target.checked)} className="mt-0.5 accent-orange-500" />
+                <span>
+                  <span className="block text-sm font-medium text-foreground">🛑 أضف زر «إيقاف الرسائل» تلقائياً</span>
+                  <span className="block text-xs text-muted-foreground mt-0.5">
+                    من يضغطه لا يُراسَل ٥ أشهر. زر الخروج يحمي رقمك: من يجد طريقة سهلة للإيقاف لا يضغط «إبلاغ وحظر».
+                  </span>
+                </span>
+              </label>
+
               <div className="space-y-3">
                 {buttons.map((btn, i) => (
                   <div key={i} className="bg-card border border-card-border rounded-xl p-3 space-y-2">
                     {/* Button type tabs */}
-                    <div className="flex gap-1">
+                    <div className="flex flex-wrap gap-1">
                       {BTN_TYPES.map(({ val, label, icon }) => (
                         <button key={val} type="button"
                           onClick={() => {
@@ -1116,6 +1133,7 @@ export default function CampaignNew() {
                             if (!btn.text.trim()) {
                               if (val === "interested") updateButton(i, "text", "مهتم 👍");
                               if (val === "not_interested") updateButton(i, "text", "غير مهتم");
+                              if (val === "stop") updateButton(i, "text", "إيقاف الرسائل");
                             }
                           }}
                           className={cn(
@@ -1151,6 +1169,12 @@ export default function CampaignNew() {
                       <input type="tel" value={btn.phone ?? ""}
                         onChange={(e) => updateButton(i, "phone", e.target.value)}
                         placeholder="رقم الهاتف (971XXXXXXXXX)" className={inputCls} dir="ltr" />
+                    )}
+                    {btn.type === "stop" && (
+                      <p className="text-xs text-orange-400/90">🛑 من يضغطه لا تصله أي رسالة منك لمدة ٥ أشهر، ثم يعود تلقائياً لقوائمك.</p>
+                    )}
+                    {(btn.type === "interested" || btn.type === "not_interested") && (
+                      <p className="text-xs text-muted-foreground">تُسجَّل الضغطة في تقرير الحملة ويصله رد شكر تلقائي.</p>
                     )}
                     {/* reply has no extra field */}
 
@@ -1375,8 +1399,8 @@ export default function CampaignNew() {
               className={inputCls} />
           </div>
 
-          {/* Opt-out toggle */}
-          <div
+          {/* Opt-out toggle — a text line; with buttons the stop button does this */}
+          {!needsButtons && <div
             onClick={() => setOptOut((v) => !v)}
             className={cn(
               "flex items-center justify-between p-4 rounded-xl border cursor-pointer transition-colors select-none",
@@ -1405,7 +1429,7 @@ export default function CampaignNew() {
                 optOut ? "right-0.5" : "left-0.5"
               )} />
             </div>
-          </div>
+          </div>}
 
           {/* Submit */}
           <button type="submit" disabled={createMutation.isPending || updateMutation.isPending}
@@ -1427,7 +1451,7 @@ export default function CampaignNew() {
             messageType={hasButtons ? (isImage ? "image_button" : "button") : form.messageType}
             message={form.message}
             media={uploadedMedia}
-            buttons={buttons}
+            buttons={withStopButton(buttons, autoStop)}
             carousel={carousel}
           />
         </div>

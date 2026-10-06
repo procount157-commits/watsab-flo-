@@ -32,6 +32,7 @@ import { eq } from "drizzle-orm";
 import https from "https";
 import http from "http";
 import { execSync } from "child_process";
+import { startOptOutSweep } from "./lib/opt-out";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -145,6 +146,7 @@ function startListening() {
     startEmailWorkers();
     startInboundPolling();
     startMissionWorker();
+    startOptOutSweep();
     startAutopilotWorker();
     // نورة joins every team that exists, so she appears beside the others.
     setTimeout(async () => {

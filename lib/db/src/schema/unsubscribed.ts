@@ -8,6 +8,8 @@ export const unsubscribedPhonesTable = pgTable(
     userId:    integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
     phone:     varchar("phone", { length: 50 }).notNull(),
     reason:    text("reason"),
+    /** NULL = for good (a typed stop); a date = until then (the stop button). */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [

@@ -323,7 +323,7 @@ function FailureReportCard({ campaignId, failedCount, onRetry }: { campaignId: n
 }
 
 interface ButtonResponse { phone: string; contactName: string | null; action: string; buttonText: string | null; createdAt: string; }
-interface ResponsesReport { total: number; interestedCount: number; notInterestedCount: number; responses: ButtonResponse[]; }
+interface ResponsesReport { total: number; interestedCount: number; notInterestedCount: number; stopCount?: number; responses: ButtonResponse[]; }
 
 function ResponsesPanel({ campaignId }: { campaignId: number }) {
   const [report, setReport] = useState<ResponsesReport | null>(null);
@@ -344,7 +344,7 @@ function ResponsesPanel({ campaignId }: { campaignId: number }) {
     <div className="bg-card border border-card-border rounded-xl overflow-hidden">
       <div className="flex items-center gap-2 px-5 py-3.5 border-b border-card-border">
         <ThumbsUp className="w-4 h-4 text-green-400" />
-        <h2 className="text-sm font-semibold text-foreground">ردود المهتمين</h2>
+        <h2 className="text-sm font-semibold text-foreground">ضغطات الأزرار</h2>
         <span className="text-xs text-muted-foreground mr-auto">{report.total} رد</span>
       </div>
       <div className="p-5 space-y-4">
@@ -355,6 +355,11 @@ function ResponsesPanel({ campaignId }: { campaignId: number }) {
           <span className="flex items-center gap-1.5 text-red-400 font-medium">
             <ThumbsDown className="w-4 h-4" /> غير مهتم: {report.notInterestedCount}
           </span>
+          {!!report.stopCount && (
+            <span className="flex items-center gap-1.5 text-orange-400 font-medium" title="لن تُراسَل هذه الأرقام ٥ أشهر">
+              🛑 أوقفوا الرسائل: {report.stopCount}
+            </span>
+          )}
         </div>
         <div className="divide-y divide-card-border max-h-80 overflow-y-auto">
           {report.responses.map((r, i) => (
@@ -367,10 +372,12 @@ function ResponsesPanel({ campaignId }: { campaignId: number }) {
                 "flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border font-medium",
                 r.action === "interested"
                   ? "bg-green-500/15 text-green-400 border-green-500/20"
+                  : r.action === "stop"
+                  ? "bg-orange-500/15 text-orange-400 border-orange-500/20"
                   : "bg-red-500/15 text-red-400 border-red-500/20"
               )}>
-                {r.action === "interested" ? <ThumbsUp className="w-3 h-3" /> : <ThumbsDown className="w-3 h-3" />}
-                {r.action === "interested" ? "مهتم" : "غير مهتم"}
+                {r.action === "interested" ? <ThumbsUp className="w-3 h-3" /> : r.action === "stop" ? "🛑" : <ThumbsDown className="w-3 h-3" />}
+                {r.action === "interested" ? "مهتم" : r.action === "stop" ? "أوقف الرسائل" : "غير مهتم"}
               </span>
             </div>
           ))}

@@ -1930,8 +1930,9 @@ router.get("/:id/responses", async (req, res) => {
 
   const interestedCount    = rows.filter((r) => r.action === "interested").length;
   const notInterestedCount = rows.filter((r) => r.action === "not_interested").length;
+  const stopCount          = rows.filter((r) => r.action === "stop").length;
 
-  res.json({ total: rows.length, interestedCount, notInterestedCount, responses: rows });
+  res.json({ total: rows.length, interestedCount, notInterestedCount, stopCount, responses: rows });
 });
 
 // ── Retry Failed Contacts ──────────────────────────────────────────────

@@ -15,6 +15,7 @@ import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
 import { useDatabaseAuthState, migrateSessionFilesToDb } from "./wa-auth-state";
 import { transcribe } from "./voice";
+import { isStopTap, tappedButtonId, stopForMonths, STOP_ACK } from "./opt-out";
 import { nativeFlowButtons, interactiveReplyText, type ButtonDef } from "./wa-buttons";
 import { speak } from "./tts";
 import { assessSession, isRejection, isHandshakeRejection, STABLE_AFTER_MS, FLAP_WINDOW_MS, COOLDOWN_MS } from "./session-breaker";
@@ -180,6 +181,8 @@ function formatButtonsAdStyle(body: string, btns: ButtonDef[]): string {
       out += `\n\n${pillButton("👍", `*${b.text}*`)}`;
     } else if (b.type === "not_interested") {
       out += `\n\n${pillButton("👎", `*${b.text}*`)}`;
+    } else if (b.type === "stop") {
+      out += `\n\n${pillButton("🛑", `*${b.text}*`)}`;
     } else {
       out += `\n\n${pillButton("🔗", `*${b.text}*`)}`;
       if (b.url) out += `\n   👉  ${b.url}`;
@@ -241,7 +244,7 @@ async function matchCampaignButtonResponse(
   userId: number,
   phone: string,
   text: string
-): Promise<{ action: "interested" | "not_interested"; campaignName: string } | null> {
+): Promise<{ action: "interested" | "not_interested" | "stop"; campaignName: string } | null> {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return null;
 
@@ -275,12 +278,12 @@ async function matchCampaignButtonResponse(
     }
     const match = btns.find(
       (b) =>
-        (b.type === "interested" || b.type === "not_interested") &&
+        (b.type === "interested" || b.type === "not_interested" || b.type === "stop") &&
         b.text?.trim().toLowerCase() === normalized
     );
     if (!match) continue;
 
-    const action = match.type as "interested" | "not_interested";
+    const action = match.type as "interested" | "not_interested" | "stop";
     await db
       .insert(campaignButtonResponsesTable)
       .values({ campaignId: row.campaignId, userId, phone, buttonText: match.text, action })
@@ -2232,6 +2235,29 @@ class WhatsAppInstance {
         // Only process opt-out / chatbot for live messages
         if (!isLive) continue;
 
+        // ── The stop button ───────────────────────────────────────
+        // Before anything reads the tap: the bots are not to answer it, and
+        // the follow-up engine would read «إيقاف» as a stop for good. Known
+        // by the button's id, or — on a phone that sends only the words — by
+        // matching a stop button of a campaign this number received.
+        let buttonMatch: Awaited<ReturnType<typeof matchCampaignButtonResponse>> = null;
+        if (text) {
+          buttonMatch = await matchCampaignButtonResponse(this.userId, phone, text).catch((err) => {
+            this.log.error({ err, phone }, "Campaign button response matching error");
+            return null;
+          });
+        }
+        if (isStopTap(tappedButtonId(msg.message)) || buttonMatch?.action === "stop") {
+          try {
+            const until = await stopForMonths(this.userId, phone);
+            this.log.info({ phone, until, campaign: buttonMatch?.campaignName }, "stop button — no messages to this number for five months");
+            this.sendMessage(phone, STOP_ACK).catch(() => {});
+          } catch (err) {
+            this.log.error({ err, phone }, "stop button could not be recorded");
+          }
+          continue;
+        }
+
         // Let the follow-up engine see every live inbound message: a new lead
         // to enrol, or a reply that should stop a sequence. Fired before the
         // opt-out and chatbot branches below, both of which `continue`.
@@ -2249,13 +2275,13 @@ class WhatsAppInstance {
             .values({ userId: this.userId, phone, reason: text.trim() })
             .onConflictDoNothing()
             .catch(() => {});
-          // Delete from all contact groups belonging to this user
+          // Delete from this account's lists only — the number may be another
+          // subscriber's customer, and their lists are theirs.
           db.delete(contactsTable)
-            .where(
-              and(
-                eq(contactsTable.phone, phone),
-              )
-            )
+            .where(and(
+              eq(contactsTable.phone, phone),
+              sql`${contactsTable.groupId} IN (SELECT id FROM contact_groups WHERE user_id = ${this.userId})`,
+            ))
             .catch(() => {});
           // Confirm opt-out to the user
           this.sendMessage(phone, "تم إلغاء اشتراكك ✅ لن تصلك رسائل منا مرة أخرى.").catch(() => {});
@@ -2266,7 +2292,7 @@ class WhatsAppInstance {
         // If the reply matches an "interested"/"not_interested" button from a
         // recently-sent campaign, record it and acknowledge — before chatbot.
         try {
-          const matched = await matchCampaignButtonResponse(this.userId, phone, text);
+          const matched = buttonMatch;
           if (matched) {
             const ack = matched.action === "interested"
               ? "شكراً لاهتمامك! 🙏 سنتواصل معك قريباً."

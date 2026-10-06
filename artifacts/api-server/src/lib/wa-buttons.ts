@@ -2,7 +2,7 @@
 // What a campaign's buttons become in a native-flow interactive message, and
 // how a tap on one comes back. Kept apart from the socket so it can be tested.
 
-export type ButtonDef = { text: string; type?: "url" | "call" | "reply" | "interested" | "not_interested"; url?: string; phone?: string };
+export type ButtonDef = { text: string; type?: "url" | "call" | "reply" | "interested" | "not_interested" | "stop"; url?: string; phone?: string };
 
 /** The native-flow buttons for one message. A link or call with no target becomes a reply. */
 export function nativeFlowButtons(btns: ButtonDef[]) {
