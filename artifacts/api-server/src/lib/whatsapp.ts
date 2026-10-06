@@ -210,12 +210,12 @@ async function sendNativeButtons(
   jid: string,
   body: string,
   btns: ButtonDef[],
-  image?: WAMediaUpload,
+  media?: { image: WAMediaUpload } | { video: WAMediaUpload },
 ): Promise<{ key: { id: string; remoteJid: string; fromMe: boolean } }> {
   const buttons = nativeFlowButtons(btns);
   if (buttons.length === 0) throw new Error("no buttons");
-  const header = image
-    ? { hasMediaAttachment: true, ...(await prepareWAMessageMedia({ image }, { upload: sock.waUploadToServer })) }
+  const header = media
+    ? { hasMediaAttachment: true, ...(await prepareWAMessageMedia(media, { upload: sock.waUploadToServer })) }
     : { hasMediaAttachment: false, title: "" };
   const msg = generateWAMessageFromContent(jid, {
     viewOnceMessage: {
@@ -2247,7 +2247,9 @@ class WhatsAppInstance {
             return null;
           });
         }
-        if (isStopTap(tappedButtonId(msg.message)) || buttonMatch?.action === "stop") {
+        // A lone «0» is the old way out — the line campaigns used to carry —
+        // and means the same as the button now: five months, not for good.
+        if (isStopTap(tappedButtonId(msg.message)) || buttonMatch?.action === "stop" || /^\s*[0٠]\s*$/.test(text ?? "")) {
           try {
             const until = await stopForMonths(this.userId, phone);
             this.log.info({ phone, until, campaign: buttonMatch?.campaignName }, "stop button — no messages to this number for five months");
@@ -2267,7 +2269,7 @@ class WhatsAppInstance {
         // ── Opt-out detection ──────────────────────────────────────
         // If the contact sends an opt-out keyword, remove them from all
         // contact groups and add to the unsubscribed list permanently.
-        const OPTOUT_RE = /^(0|stop|unsubscribe|توقف|وقف|أوقف|ايقاف|إيقاف|الغاء|إلغاء|لا\s*ارسال|لا\s*تراسلني|ارفع\s*رقمي|إلغاء\s*الاشتراك|الغاء\s*الاشتراك|remove\s*me)$/i;
+        const OPTOUT_RE = /^(stop|unsubscribe|توقف|وقف|أوقف|ايقاف|إيقاف|الغاء|إلغاء|لا\s*ارسال|لا\s*تراسلني|ارفع\s*رقمي|إلغاء\s*الاشتراك|الغاء\s*الاشتراك|remove\s*me)$/i;
         if (OPTOUT_RE.test(text.trim())) {
           this.log.info({ phone }, "Opt-out received — removing from contacts");
           // Insert unsubscribed (ignore duplicate)
@@ -2697,10 +2699,20 @@ class WhatsAppInstance {
         const btns: ButtonDef[] = JSON.parse(buttons);
         const image = await resolveMedia(mediaUrl);
         try {
-          result = await withTimeout(sendNativeButtons(this.state.socket, jid, uniqueText, btns, image), "image_button") as any;
+          result = await withTimeout(sendNativeButtons(this.state.socket, jid, uniqueText, btns, { image }), "image_button") as any;
         } catch (err: any) {
           this.log.warn({ phone, err: String(err?.message ?? err).slice(0, 160) }, "real image buttons refused — sending a caption instead");
           result = await withTimeout(this.state.socket.sendMessage(jid, { image: await resolveMedia(mediaUrl), caption: formatButtonsAdStyle(uniqueText, btns) }), "image_button-text");
+        }
+
+      } else if (messageType === "video_button" && mediaUrl && buttons) {
+        const btns: ButtonDef[] = JSON.parse(buttons);
+        const video = await resolveMedia(mediaUrl);
+        try {
+          result = await withTimeout(sendNativeButtons(this.state.socket, jid, uniqueText, btns, { video }), "video_button") as any;
+        } catch (err: any) {
+          this.log.warn({ phone, err: String(err?.message ?? err).slice(0, 160) }, "real video buttons refused — sending a caption instead");
+          result = await withTimeout(this.state.socket.sendMessage(jid, { video: await resolveMedia(mediaUrl), caption: formatButtonsAdStyle(uniqueText, btns) }), "video_button-text");
         }
 
       } else if (messageType === "carousel" && carousel) {

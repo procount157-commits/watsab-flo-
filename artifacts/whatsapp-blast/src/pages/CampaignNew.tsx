@@ -76,8 +76,11 @@ const BTN_PRESETS: { icon: string; label: string; btn: Button }[] = [
 /** The buttons as they will go: with the stop button added if asked and not already there. */
 function withStopButton(btns: Button[], add: boolean): Button[] {
   const valid = btns.filter((b) => b.text.trim());
-  return add && valid.length > 0 && !valid.some((b) => b.type === "stop") ? [...valid, STOP_BUTTON] : valid;
+  return add && !valid.some((b) => b.type === "stop") ? [...valid, STOP_BUTTON] : valid;
 }
+
+/** The «أرسل: 0» line campaigns used to end with — the stop button replaced it. */
+const stripZeroLine = (m: string) => m.replace(/\n*━+\n🔕 لإيقاف الرسائل أرسل: 0[ \t]*/g, "").trimEnd();
 
 const BTN_COLORS: { val: ButtonColor; emoji: string; label: string; previewCls: string }[] = [
   { val: "default", emoji: "⬜", label: "افتراضي", previewCls: "bg-primary/15 border-primary/40 text-primary" },
@@ -433,7 +436,7 @@ function WAPreview({
                         </div>
                       )
                     )}
-                    {messageType === "video" && (
+                    {(messageType === "video" || messageType === "video_button") && (
                       <div className="w-full h-32 bg-black/30 flex items-center justify-center">
                         <Film className="w-8 h-8 text-white/40" />
                         {media && <span className="absolute text-xs text-white/60 mt-16 font-mono">{media.filename}</span>}
@@ -456,7 +459,7 @@ function WAPreview({
                     </div>
                   </div>
                   {/* Real WhatsApp buttons — under the bubble, one per row, as the phone shows them */}
-                  {(messageType === "button" || messageType === "image_button") && buttons.filter(b => b.text).length > 0 && (
+                  {(messageType === "button" || messageType === "image_button" || messageType === "video_button") && buttons.filter(b => b.text).length > 0 && (
                     <div className="max-w-[90%] space-y-0.5">
                       {buttons.filter(b => b.text).map((btn, i) => (
                         <div key={i} className="rounded-lg bg-[#1a3a25] shadow-sm px-3 py-2 flex items-center justify-center gap-1.5">
@@ -525,9 +528,9 @@ export default function CampaignNew() {
   const [uploadedMedia, setUploadedMedia] = useState<UploadedMedia | null>(null);
   const [buttons, setButtons] = useState<Button[]>([{ text: "", type: "url", url: "", color: "default" }]);
   const [hasButtons, setHasButtons] = useState(false);
-  const [optOut, setOptOut] = useState(false);
-  // With buttons, the way out is a button — added unless the owner turns it off.
-  const [autoStop, setAutoStop] = useState(true);
+  // The way out is a button under every campaign message — fixed, not optional.
+  // The server adds it too, so a campaign made before this carries it as well.
+  const autoStop = true;
   const [carousel, setCarousel] = useState<CarouselCard[]>([
     { title: "", description: "", imagePath: "", imageFilename: "", imageUrl: "", buttonText: "", buttonUrl: "" },
   ]);
@@ -595,9 +598,9 @@ export default function CampaignNew() {
     const c: any = existingCampaign;
     setForm({
       name: c.name ?? "",
-      message: c.message ?? "",
+      message: stripZeroLine(c.message ?? ""),
       companyName: c.companyName ?? "",
-      messageType: c.messageType === "image_button" ? "image" : (c.messageType ?? "text"),
+      messageType: c.messageType === "image_button" ? "image" : c.messageType === "video_button" ? "video" : c.messageType === "button" ? "text" : (c.messageType ?? "text"),
       pacingMode: (c.pacingMode === "manual" ? "manual" : "auto") as "auto" | "manual",
       delayMin: c.delayMin ?? 15,
       delayMax: c.delayMax ?? 45,
@@ -610,9 +613,11 @@ export default function CampaignNew() {
     if (c.buttons) {
       try {
         const parsed = JSON.parse(c.buttons);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        // The stop button is the toggle's; the editor shows only the others.
+        const others = Array.isArray(parsed) ? parsed.filter((b: any) => b?.type !== "stop") : [];
+        if (others.length > 0) {
           setHasButtons(true);
-          setButtons(parsed.map((b: any) => ({
+          setButtons(others.map((b: any) => ({
             text: b.text ?? "", type: (b.type as ButtonType) ?? "url",
             url: b.url ?? "", phone: b.phone ?? "", color: b.color ?? "default",
           })));
@@ -640,12 +645,15 @@ export default function CampaignNew() {
   const isCarousel = form.messageType === "carousel";
 
   const needsMedia   = isImage || isVideo;
-  const needsButtons = hasButtons && !isCarousel && !isVideo;
+  const needsButtons = hasButtons && !isCarousel;
+  // What goes: the owner's buttons, and the stop button unless turned off.
+  const sentButtons  = isCarousel ? [] : withStopButton(needsButtons ? buttons : [], autoStop);
+  const sentType     = sentButtons.length ? (isImage ? "image_button" : isVideo ? "video_button" : "button") : form.messageType;
 
   const handleTypeChange = (val: string) => {
     setUploadedMedia(null);
     setForm((f) => ({ ...f, messageType: val }));
-    if (val === "carousel" || val === "video") setHasButtons(false);
+    if (val === "carousel") setHasButtons(false);
   };
 
   const updateCard = (i: number, key: keyof CarouselCard, val: string) => {
@@ -685,13 +693,8 @@ export default function CampaignNew() {
       if (!valid.length) { toast.error("أضف بطاقة كاروسيل واحدة على الأقل"); return; }
     }
 
-    const finalMessage = optOut && !needsButtons
-      ? form.message + "\n\n━━━━━━━━━━\n🔕 لإيقاف الرسائل أرسل: 0"
-      : form.message;
-
-    const finalMsgType = hasButtons
-      ? (isImage ? "image_button" : "button")
-      : form.messageType;
+    const finalMessage = stripZeroLine(form.message);
+    const finalMsgType = sentType;
 
     const payload: any = {
       name: form.name,
@@ -712,11 +715,7 @@ export default function CampaignNew() {
       }
     }
 
-    if (needsButtons) {
-      payload.buttons = JSON.stringify(withStopButton(buttons, autoStop));
-    } else {
-      payload.buttons = null;
-    }
+    payload.buttons = sentButtons.length ? JSON.stringify(sentButtons) : null;
 
     if (isCarousel) {
       payload.carousel = JSON.stringify(
@@ -1028,7 +1027,7 @@ export default function CampaignNew() {
           )}
 
           {/* Buttons toggle — independent from message type */}
-          {!isCarousel && !isVideo && (
+          {!isCarousel && (
             <div
               onClick={() => setHasButtons((v) => !v)}
               className={cn(
@@ -1109,17 +1108,6 @@ export default function CampaignNew() {
                   ))}
                 </div>
               </div>
-              <label className="flex items-start gap-2.5 p-3 rounded-xl border border-orange-500/25 bg-orange-500/5 cursor-pointer select-none">
-                <input type="checkbox" checked={autoStop || buttons.some((b) => b.type === "stop")}
-                  disabled={buttons.some((b) => b.type === "stop")}
-                  onChange={(e) => setAutoStop(e.target.checked)} className="mt-0.5 accent-orange-500" />
-                <span>
-                  <span className="block text-sm font-medium text-foreground">🛑 أضف زر «إيقاف الرسائل» تلقائياً</span>
-                  <span className="block text-xs text-muted-foreground mt-0.5">
-                    من يضغطه لا يُراسَل ٥ أشهر. زر الخروج يحمي رقمك: من يجد طريقة سهلة للإيقاف لا يضغط «إبلاغ وحظر».
-                  </span>
-                </span>
-              </label>
 
               <div className="space-y-3">
                 {buttons.map((btn, i) => (
@@ -1399,37 +1387,19 @@ export default function CampaignNew() {
               className={inputCls} />
           </div>
 
-          {/* Opt-out toggle — a text line; with buttons the stop button does this */}
-          {!needsButtons && <div
-            onClick={() => setOptOut((v) => !v)}
-            className={cn(
-              "flex items-center justify-between p-4 rounded-xl border cursor-pointer transition-colors select-none",
-              optOut
-                ? "bg-red-500/10 border-red-500/30"
-                : "bg-card border-card-border hover:border-primary/20"
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <span className="text-xl">🔕</span>
+          {/* The stop button — fixed under every message, not a «send 0» line */}
+          {!isCarousel && (
+            <div className="flex items-center gap-3 p-4 rounded-xl border bg-orange-500/10 border-orange-500/30">
+              <span className="text-xl">🛑</span>
               <div>
-                <p className={cn("text-sm font-semibold", optOut ? "text-red-400" : "text-foreground")}>
-                  زر إيقاف الرسائل (Opt-out)
-                </p>
+                <p className="text-sm font-semibold text-orange-400">زر «إيقاف الرسائل» ثابت تحت كل رسالة</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  يُضيف في نهاية الرسالة: "لإيقاف الرسائل أرسل: 0" — عند الإرسال يُحذف الرقم تلقائياً
+                  من يضغطه يُحظر من الإرسال ٥ أشهر تلقائياً — يتخطّاه النظام في كل الحملات حتى لو جاء دوره، ثم يعود بعدها.
+                  زر الخروج السهل يقلّل «الإبلاغ والحظر» على رقمك.
                 </p>
               </div>
             </div>
-            <div className={cn(
-              "w-10 h-5 rounded-full transition-colors relative flex-shrink-0",
-              optOut ? "bg-red-500" : "bg-muted"
-            )}>
-              <div className={cn(
-                "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
-                optOut ? "right-0.5" : "left-0.5"
-              )} />
-            </div>
-          </div>}
+          )}
 
           {/* Submit */}
           <button type="submit" disabled={createMutation.isPending || updateMutation.isPending}
@@ -1448,10 +1418,10 @@ export default function CampaignNew() {
         {/* ── Live Preview ── */}
         <div className="hidden xl:block">
           <WAPreview
-            messageType={hasButtons ? (isImage ? "image_button" : "button") : form.messageType}
+            messageType={sentType}
             message={form.message}
             media={uploadedMedia}
-            buttons={withStopButton(buttons, autoStop)}
+            buttons={sentButtons}
             carousel={carousel}
           />
         </div>

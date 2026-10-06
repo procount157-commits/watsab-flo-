@@ -17,6 +17,7 @@ import { logger } from "../lib/logger";
 import { classifyFailure, NON_RETRYABLE_PATTERN } from "../lib/failure-classifier";
 import fs from "fs";
 import path from "path";
+import { withStopButton } from "../lib/opt-out";
 
 // Connection-lost errors that trigger reconnect logic
 // NOTE: "fetch failed" is intentionally excluded — it indicates a media-download
@@ -1474,7 +1475,9 @@ async function runCampaign(userId: number, campaign: any, contacts: any[], info:
     );
 
     try {
-      const waMessageId = await sendWithReconnect(userId, contact.phone, personalizedMessage, campaign.messageType, campaign.mediaUrl, campaign.buttons ?? null, campaign.carousel ?? null);
+      // The stop button goes under every campaign message, made today or long ago.
+      const out = withStopButton(personalizedMessage, campaign.messageType, campaign.buttons ?? null);
+      const waMessageId = await sendWithReconnect(userId, contact.phone, out.message, out.messageType, campaign.mediaUrl, out.buttons, campaign.carousel ?? null);
       // Wrap DB writes in retry — a transient DB blip must not lose the "sent" record
       await withDbRetry(() =>
         db.insert(messageLogs).values({ campaignId: campaign.id, phone: contact.phone, status: "sent", sentAt: new Date(), messageId: waMessageId ?? null })
