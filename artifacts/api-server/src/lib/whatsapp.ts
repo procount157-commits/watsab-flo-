@@ -6,6 +6,8 @@ import makeWASocket, {
   Browsers,
   WAMediaUpload,
   downloadMediaMessage,
+  generateWAMessageFromContent,
+  prepareWAMessageMedia,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import { logger as appLogger } from "./logger";
@@ -13,6 +15,7 @@ import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
 import { useDatabaseAuthState, migrateSessionFilesToDb } from "./wa-auth-state";
 import { transcribe } from "./voice";
+import { nativeFlowButtons, interactiveReplyText, type ButtonDef } from "./wa-buttons";
 import { speak } from "./tts";
 import { assessSession, isRejection, isHandshakeRejection, STABLE_AFTER_MS, FLAP_WINDOW_MS, COOLDOWN_MS } from "./session-breaker";
 import path from "path";
@@ -185,6 +188,48 @@ function formatButtonsAdStyle(body: string, btns: ButtonDef[]): string {
   return out;
 }
 
+// ── Real buttons ─────────────────────────────────────────────────
+// The buttons a customer taps, not a drawing of them. WhatsApp's "native
+// flow" interactive message is what the business platforms send: quick
+// replies that come back as a reply, a link button that opens the page, a
+// call button that dials. It needs the <biz><interactive> node on the stanza
+// or the phone shows "this message cannot be displayed". If WhatsApp refuses
+// it, the same words go with the buttons drawn as text, so nothing is lost.
+
+const INTERACTIVE_NODES = [{
+  tag: "biz", attrs: {},
+  content: [{ tag: "interactive", attrs: { type: "native_flow", v: "1" }, content: [{ tag: "native_flow", attrs: { v: "9", name: "mixed" } }] }],
+}];
+
+/** Sends body + buttons (and an optional header image) as one interactive message. */
+async function sendNativeButtons(
+  sock: NonNullable<WAState["socket"]>,
+  jid: string,
+  body: string,
+  btns: ButtonDef[],
+  image?: WAMediaUpload,
+): Promise<{ key: { id: string; remoteJid: string; fromMe: boolean } }> {
+  const buttons = nativeFlowButtons(btns);
+  if (buttons.length === 0) throw new Error("no buttons");
+  const header = image
+    ? { hasMediaAttachment: true, ...(await prepareWAMessageMedia({ image }, { upload: sock.waUploadToServer })) }
+    : { hasMediaAttachment: false, title: "" };
+  const msg = generateWAMessageFromContent(jid, {
+    viewOnceMessage: {
+      message: {
+        messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+        interactiveMessage: {
+          body: { text: body },
+          header,
+          nativeFlowMessage: { buttons, messageParamsJson: "" },
+        },
+      },
+    },
+  } as any, { userJid: sock.user!.id });
+  await sock.relayMessage(jid, msg.message!, { messageId: msg.key.id!, additionalNodes: INTERACTIVE_NODES as any });
+  return { key: { id: msg.key.id!, remoteJid: jid, fromMe: true } };
+}
+
 /**
  * Matches an incoming reply against the interested/not_interested buttons of
  * the most recent campaign sent to that phone (via message_logs), and records
@@ -261,7 +306,6 @@ interface WAState {
   socket: ReturnType<typeof makeWASocket> | null;
 }
 
-type ButtonDef    = { text: string; type?: "url" | "call" | "reply" | "interested" | "not_interested"; url?: string; phone?: string };
 type CarouselCard = { title: string; description: string; imageUrl?: string; buttonText?: string; buttonUrl?: string };
 
 // ── Per-user WhatsApp instance ────────────────────────────────────
@@ -2616,13 +2660,22 @@ class WhatsAppInstance {
 
       } else if (messageType === "button" && buttons) {
         const btns: ButtonDef[] = JSON.parse(buttons);
-        const text = formatButtonsAdStyle(uniqueText, btns);
-        result = await withTimeout(this.state.socket.sendMessage(jid, { text }), "button");
+        try {
+          result = await withTimeout(sendNativeButtons(this.state.socket, jid, uniqueText, btns), "button") as any;
+        } catch (err: any) {
+          this.log.warn({ phone, err: String(err?.message ?? err).slice(0, 160) }, "real buttons refused — sending them drawn as text");
+          result = await withTimeout(this.state.socket.sendMessage(jid, { text: formatButtonsAdStyle(uniqueText, btns) }), "button-text");
+        }
 
       } else if (messageType === "image_button" && mediaUrl && buttons) {
         const btns: ButtonDef[] = JSON.parse(buttons);
-        const caption = formatButtonsAdStyle(uniqueText, btns);
-        result = await withTimeout(this.state.socket.sendMessage(jid, { image: await resolveMedia(mediaUrl), caption }), "image_button");
+        const image = await resolveMedia(mediaUrl);
+        try {
+          result = await withTimeout(sendNativeButtons(this.state.socket, jid, uniqueText, btns, image), "image_button") as any;
+        } catch (err: any) {
+          this.log.warn({ phone, err: String(err?.message ?? err).slice(0, 160) }, "real image buttons refused — sending a caption instead");
+          result = await withTimeout(this.state.socket.sendMessage(jid, { image: await resolveMedia(mediaUrl), caption: formatButtonsAdStyle(uniqueText, btns) }), "image_button-text");
+        }
 
       } else if (messageType === "carousel" && carousel) {
         const cards: CarouselCard[] = JSON.parse(carousel);
@@ -3181,6 +3234,7 @@ function extractText(msg: any): string {
     msg.message?.buttonsResponseMessage?.selectedDisplayText ||
     msg.message?.listResponseMessage?.title ||
     msg.message?.templateButtonReplyMessage?.selectedDisplayText ||
+    interactiveReplyText(msg.message?.interactiveResponseMessage) ||
     ""
   ).trim();
 }
