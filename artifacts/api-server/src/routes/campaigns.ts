@@ -1,3 +1,4 @@
+import { displayCompany, fillRecipient, languageOfText, variesPerRecipient } from "../lib/recipient-name";
 import { Router } from "express";
 import { db, campaignsTable, contactGroupsTable, contactsTable, messageLogs, unsubscribedPhonesTable, waSessionEventsTable, campaignButtonResponsesTable } from "@workspace/db";
 import { assessDeliveryHealth, assessAccountHealth, MATURITY_MINUTES, MIN_SAMPLE as DELIVERY_MIN_SAMPLE } from "../lib/delivery-health";
@@ -503,8 +504,14 @@ function personalizeMessage(
   const date = now.toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const seed = hashPhone(contact.phone);
 
-  // 1. Process spintax first: {opt1|opt2|opt3} → pick one
-  let text = processSpintax(template, seed);
+  // 0. The recipient's company, with its fallback — before spintax, which
+  //    would read the bar in {اسم_الشركة|شركتكم} as a choice of two.
+  const lang = languageOfText(template);
+  const recipient = displayCompany(contact.name, lang);
+  let text = fillRecipient(template, contact.name);
+
+  // 1. Process spintax: {opt1|opt2|opt3} → pick one
+  text = processSpintax(text, seed);
 
   // 2. Arabic synonym variation — varies surface form so WA's semantic
   //    similarity classifier scores each message as distinct content.
@@ -519,7 +526,7 @@ function personalizeMessage(
 
   // 3. Standard personalization variables
   return text
-    .replace(/\{الاسم\}|\{name\}|\{اسم\}/gi, contact.name || "")
+    .replace(/\{الاسم\}|\{name\}|\{اسم\}/gi, recipient)
     .replace(/\{الوقت\}|\{time\}|\{وقت\}/gi, time)
     .replace(/\{التاريخ\}|\{date\}|\{تاريخ\}/gi, date)
     .replace(/\{الشركة\}|\{الشركه\}|\{company\}|\{شركة\}|\{شركه\}/gi, companyName || "")
@@ -534,6 +541,24 @@ function hashPhone(phone: string): number {
   }
   return h >>> 0;
 }
+
+/** The message as the first numbers of a list will receive it, and whether it differs per person. */
+router.post("/preview", async (req, res) => {
+  const userId = req.session.userId!;
+  const message = String(req.body?.message ?? "");
+  const groupId = Number(req.body?.groupId) || null;
+  let sample: Array<{ name: string | null; phone: string }> = [];
+  if (groupId) {
+    const [g] = await db.select({ id: contactGroupsTable.id }).from(contactGroupsTable).where(and(eq(contactGroupsTable.id, groupId), eq(contactGroupsTable.userId, userId))).limit(1);
+    if (g) sample = await db.select({ name: contactsTable.name, phone: contactsTable.phone }).from(contactsTable).where(and(eq(contactsTable.groupId, groupId), eq(contactsTable.status, "active"))).limit(3);
+  }
+  if (!sample.length) sample = [{ name: "WEST LEGEND REAL ESTATE BROKERS L.L.C", phone: "971500000001" }, { name: "الاطلالة للمقاولات العامة Al Etlala General Contracting", phone: "971500000002" }, { name: null, phone: "971500000003" }];
+  const companyName = String(req.body?.companyName ?? "") || null;
+  res.json({
+    samples: sample.map((c) => ({ name: c.name, phone: c.phone, text: personalizeMessage(message, c, companyName) })),
+    varies: variesPerRecipient(message),
+  });
+});
 
 // List campaigns
 router.get("/", async (req, res) => {

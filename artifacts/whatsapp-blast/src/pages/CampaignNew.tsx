@@ -75,8 +75,9 @@ function btnPreviewCls(color: ButtonColor | undefined): string {
 }
 
 const VARS = [
-  { tag: "{الاسم}",    desc: "اسم جهة الاتصال" },
-  { tag: "{الشركة}",   desc: "اسم الشركة" },
+  { tag: "{اسم_الشركة|شركتكم}", desc: "شركة العميل — نظيفة ولغة الرسالة، و«شركتكم» إن لم يُحفظ اسم" },
+  { tag: "{الاسم}",    desc: "الاسم المحفوظ للرقم (منظّفاً)" },
+  { tag: "{الشركة}",   desc: "اسم شركتك أنت (المرسل)" },
   { tag: "{الوقت}",    desc: "الوقت الحالي" },
   { tag: "{التاريخ}",  desc: "تاريخ اليوم" },
 ];
@@ -89,7 +90,7 @@ const RANDOM_VARS = [
 ];
 
 const SPINTAX_EXAMPLES = [
-  { label: "تحية مخصصة",   tag: "{مرحباً|هلا|أهلاً} {الاسم}" },
+  { label: "تحية مخصصة",   tag: "{مرحباً|هلا|أهلاً} فريق {اسم_الشركة|شركتكم}" },
   { label: "عرض متنوع",    tag: "{عرض حصري|تخفيض خاص|فرصة مميزة}" },
   { label: "ختام متنوع",   tag: "{تواصل معنا|راسلنا|كلمنا}" },
 ];
@@ -100,7 +101,7 @@ function calcRiskScore(msg: string): { score: number; label: string; color: stri
   let score = 0;
 
   const hasSpintax  = /\{[^{}]*\|[^{}]*\}/.test(msg);
-  const hasName     = /\{الاسم\}|\{name\}|\{اسم\}/i.test(msg);
+  const hasName     = /\{(الاسم|name|اسم)(\|[^{}]*)?\}|\{\s*(اسم_الشركة|اسم الشركة|شركة_العميل|client|company_name)(\|[^{}]*)?\}/i.test(msg);
   const hasRandom   = /\{تحية\}|\{ختام\}|\{cta\}|\{فاصل\}/.test(msg);
   const hasOtherVar = /\{الوقت\}|\{التاريخ\}|\{الشركة\}|\{الرقم\}/.test(msg);
   const isLong      = msg.length > 80;
@@ -111,7 +112,7 @@ function calcRiskScore(msg: string): { score: number; label: string; color: stri
   if (hasOtherVar) score += 10;
   if (isLong)      score += 5;
 
-  if (!hasName)     tips.push("أضف {الاسم} للتخصيص");
+  if (!hasName)     tips.push("أضف {اسم_الشركة|شركتكم} — اسم شركة كل عميل يجعل كل رسالة مختلفة، وهذا أقوى ما يقلّل الحظر");
   if (!hasSpintax)  tips.push("استخدم {خيار1|خيار2} لتنويع النص");
   if (!hasRandom)   tips.push("استخدم {تحية} أو {ختام} للتنوع");
 
@@ -887,6 +888,8 @@ export default function CampaignNew() {
                 </div>
               </div>
 
+              <RecipientPreview message={form.message} groupId={contactGroupId} companyName={form.companyName} />
+
               {showVarsGuide && (
                 <div className="mb-2 p-3 bg-primary/5 border border-primary/20 rounded-xl space-y-4">
 
@@ -1429,6 +1432,34 @@ export default function CampaignNew() {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// ── The message as three real numbers of the chosen list will receive it ──
+function RecipientPreview({ message, groupId, companyName }: { message: string; groupId: string; companyName?: string }) {
+  const [data, setData] = useState<{ samples: Array<{ name: string | null; phone: string; text: string }>; varies: boolean } | null>(null);
+  useEffect(() => {
+    if (!message.trim()) { setData(null); return; }
+    const t = setTimeout(() => {
+      fetch(`${import.meta.env.BASE_URL.replace(/\/$/, "")}/api/campaigns/preview`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, groupId: groupId || null, companyName: companyName || null }) })
+        .then((r) => (r.ok ? r.json() : null)).then(setData).catch(() => {});
+    }, 600);
+    return () => clearTimeout(t);
+  }, [message, groupId, companyName]);
+  if (!data) return null;
+  return (
+    <div className="mb-2 p-3 rounded-xl border border-card-border bg-card/60 space-y-2">
+      <p className="text-xs font-semibold text-muted-foreground">كما تصل إلى {groupId ? "أول ٣ أرقام في القائمة" : "٣ أمثلة"}</p>
+      {!data.varies && <p className="text-xs text-red-400">⚠ الرسالة متطابقة لكل الناس — هذا أول ما يرصده واتساب كرسائل جماعية. أضف {"{اسم_الشركة|شركتكم}"} أو تنويعاً {"{خيار|خيار}"}.</p>}
+      {data.samples.map((s) => (
+        <div key={s.phone} className="rounded-lg bg-primary/5 border border-primary/15 p-2.5">
+          <p className="text-[10px] text-muted-foreground mb-1" dir="ltr">{s.phone}{s.name ? ` · ${s.name}` : " · بلا اسم محفوظ"}</p>
+          <p className="text-xs whitespace-pre-wrap leading-relaxed" dir="auto">{s.text}</p>
+        </div>
+      ))}
     </div>
   );
 }
