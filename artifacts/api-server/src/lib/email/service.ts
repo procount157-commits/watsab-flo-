@@ -374,7 +374,11 @@ async function drainOne(userId: number) {
   // clears slowly must not deliver step two the day after step one.
   const [m] = await db.select().from(emailMessagesTable)
     .where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.status, "queued"),
-      sql`(${emailMessagesTable.campaignId} is null or ${emailMessagesTable.campaignId} in (${sending}))`,
+      // A message of no campaign is a sequence's rung — or the leftover of a
+      // deleted campaign, which has no words to send. Those were picked first,
+      // failed «بلا محتوى» one per round, and took the round with them: 1,486
+      // rounds in three days that should have been real emails.
+      sql`((${emailMessagesTable.campaignId} is null and ${emailMessagesTable.sequenceJobId} is not null) or ${emailMessagesTable.campaignId} in (${sending}))`,
       sql`(${emailMessagesTable.sequenceJobId} is null or (
         not exists (select 1 from email_sequence_jobs j join email_sequences q on q.id = j.sequence_id where j.id = ${emailMessagesTable.sequenceJobId} and not q.is_active)
         and not exists (select 1 from email_contacts c where c.id = ${emailMessagesTable.contactId} and c.last_sent_at > now() - interval '48 hours')))`))

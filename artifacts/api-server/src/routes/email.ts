@@ -56,6 +56,11 @@ router.use(requireAuth);
  * wrong password and a sleeping laptop fail identically from the outside.
  */
 router.get("/diagnose", async (req, res) => res.json(await diagnose(req.session.userId!)));
+// ماجد's round now: check the domains, clean the lists, read the DNS, report.
+router.post("/caretaker/run", async (req, res) => {
+  const { caretakerRound } = await import("../lib/email/caretaker");
+  res.json(await caretakerRound(req.session.userId!));
+});
 
 /**
  * Whether this campaign can be published, and what happens if it is.
@@ -894,7 +899,15 @@ router.post("/campaigns/:id/duplicate", async (req, res) => {
 
 router.post("/campaigns/:id/pause", async (req, res) => { await pauseCampaign(req.session.userId!, Number(req.params.id), "إيقاف يدوي"); res.json({ ok: true }); });
 router.delete("/campaigns/:id", async (req, res) => {
-  await db.delete(emailCampaignsTable).where(and(eq(emailCampaignsTable.id, Number(req.params.id)), eq(emailCampaignsTable.userId, req.session.userId!)));
+  const userId = req.session.userId!, id = Number(req.params.id);
+  // What it had not sent yet goes with it, and its mission ends: left behind,
+  // the messages were picked by the sender and failed one a round, and the
+  // mission kept its list «busy» so no new wave could ever start there.
+  await db.update(emailMessagesTable).set({ status: "cancelled", error: "ألغيت: حُذفت الحملة" })
+    .where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.campaignId, id), inArray(emailMessagesTable.status, ["queued", "ab_hold"])));
+  await db.update(emailMissionsTable).set({ stage: "done" })
+    .where(and(eq(emailMissionsTable.userId, userId), eq(emailMissionsTable.campaignId, id)));
+  await db.delete(emailCampaignsTable).where(and(eq(emailCampaignsTable.id, id), eq(emailCampaignsTable.userId, userId)));
   res.json({ ok: true });
 });
 router.get("/campaigns/:id", async (req, res) => {

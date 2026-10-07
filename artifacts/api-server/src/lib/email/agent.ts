@@ -184,6 +184,13 @@ export function toHtml(text: string): string {
       // "[زر] Book a call" — the call to action as a button; its link is filled in by whoever sends.
       const button = /^\[(?:زر|button)\]\s*(.+)$/i.exec(l);
       if (button) { flushText(); flushList(); out.push(`<p class="cta"><a href="#cta">${button[1]!.trim()}</a></p>`); continue; }
+      // A line that is nothing but [Book a call] is a button written without its mark —
+      // it went out as bracketed text in one campaign.
+      const bare = /^\[([^\]\[]{3,40})\]$/.exec(l);
+      if (bare && !/^(ملخص|تفاصيل|summary|details)$/i.test(bare[1]!.trim())) { flushText(); flushList(); out.push(`<p class="cta"><a href="#cta">${bare[1]!.trim()}</a></p>`); continue; }
+      const lead = /^\[(?:ملخص|summary)\]\s*(.*)$/i.exec(l);
+      if (lead) { flushText(); flushList(); if (lead[1]!.trim()) out.push(`<p class="lead">${lead[1]!.trim()}</p>`); continue; }
+      if (/^\[(?:تفاصيل|details)\]\s*$/i.test(l)) { flushText(); flushList(); out.push(`<hr class="more">`); continue; }
       if (/^[-•]\s+/.test(l)) { flushText(); items.push(l.replace(/^[-•]\s+/, "")); }
       else { flushList(); text.push(l); }
     }
@@ -246,12 +253,26 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       "[عنوان] <العنوان الأول>",
       "[عنوان] <عنوان ثانٍ بزاوية مختلفة تماماً — سنختبرهما على شريحة>",
       "[الرسالة]",
-      "<the email: short paragraphs separated by a blank line, opening «Hello {{first_name|there}},» or a greeting naming the company, ending with ONE request, then the button line, then «Best regards,» and «The Pro Count team»>",
-      "[زر] <the call-to-action button: 2 to 5 English words, e.g. «Review your AML readiness», «Book a free consultation»> — its own line before the sign-off, in the email and in every follow-up",
+      "Hello {{first_name|there}},",
+      "",
+      "[ملخص] <THE WHOLE EMAIL IN 2–3 LINES, at most 45 words: their situation (name {{company|your company}}), why it matters now, and the ONE thing we offer. Someone who reads only this line must know what we want and why it is worth their time.>",
+      "",
+      "[زر] <the call-to-action button: 2 to 5 English words, e.g. «Review your AML readiness», «Book a free consultation»>",
+      "",
+      "[تفاصيل]",
+      "- <point 1: what the requirement or problem actually is — from the knowledge only>",
+      "- <point 2: what we would check or do for them>",
+      "- <point 3 (optional): what they get out of it>",
+      "",
+      "<ONE short paragraph, max 2 sentences: the reference (law/regulator) or a concrete example — only if it is in the knowledge>",
+      "",
+      "Best regards,",
+      "The Pro Count team",
       "[/الرسالة]",
+      "Structure rules: summary first and complete on its own; the button straight after it; everything else under [تفاصيل]; the whole email at most 160 words; no paragraph longer than 2 sentences.",
       "[متابعة بعد=72 جمهور=دافئ]",
       "عنوان: <for those who OPENED and did not reply — a new pain point from their sector and ONE easy qualification question>",
-      "<short body, new angle, not a repeat>",
+      "<[ملخص] one or two lines with the new angle, then [زر] the button — at most 70 words, no [تفاصيل] section>",
       "[/متابعة]",
       "[متابعة بعد=72 جمهور=بارد]",
       "عنوان: <for those who did NOT open — a completely different, shorter subject; the body is the first email's core message, shortened>",

@@ -81,7 +81,7 @@ export function DashboardTab({ goMissions }: { goMissions: () => void }) {
         </button>
       </div>
 
-      {showSettings && <AutopilotSettings ap={ap} onSave={(b) => save.mutate(b)} saving={save.isPending} onClose={() => setShowSettings(false)} />}
+      {showSettings && <AutopilotSettings ap={ap} sectors={d.sectors ?? []} onSave={(b) => save.mutate(b)} saving={save.isPending} onClose={() => setShowSettings(false)} />}
 
       <details className={cn(card, "p-4 group")} open={!d.campaigns?.length}>
         <summary className="cursor-pointer text-sm font-semibold flex items-center gap-2 list-none"><Rocket className="w-4 h-4 text-primary" /> مسار كل حملة — ماذا يحدث بعد الإرسال <span className="text-[11px] font-normal text-muted-foreground mr-auto">{({ light: "٣ رسائل", normal: "٤ رسائل", intense: "٦ رسائل خلال ٢١ يوماً" } as Record<string, string>)[d.path?.intensity] ?? ""} · {d.language === "ar" ? "بالعربية" : d.language === "both" ? "بالعربية والإنجليزية" : "بالإنجليزية"} — تُغيَّران من الإعدادات</span></summary>
@@ -398,11 +398,12 @@ function ActivityFeed({ rows }: { rows: any[] }) {
 }
 
 // ── Settings ─────────────────────────────────────────────────────
-function AutopilotSettings({ ap, onSave, saving, onClose }: { ap: any; onSave: (b: any) => void; saving: boolean; onClose: () => void }) {
+function AutopilotSettings({ ap, sectors = [], onSave, saving, onClose }: { ap: any; sectors?: Array<{ sector: string; n: number; unsent: number }>; onSave: (b: any) => void; saving: boolean; onClose: () => void }) {
   const { data: lists = [] } = useEmailLists();
   const { data: fd } = useFolders("email");
   const folders: any[] = fd?.folders ?? [];
-  const [f, setF] = useState({ ...ap, listIds: [...(ap.listIds ?? [])], folderIds: [...(ap.folderIds ?? [])] });
+  const [f, setF] = useState({ ...ap, listIds: [...(ap.listIds ?? [])], folderIds: [...(ap.folderIds ?? [])], sectors: [...(ap.sectors ?? [])] as string[] });
+  const toggleSector = (s: string) => setF({ ...f, sectors: f.sectors.includes(s) ? f.sectors.filter((x: string) => x !== s) : [...f.sectors, s] });
   const own = useMemo(() => lists.filter((l: any) => !l.parentListId && !(l as any).stage), [lists]);
   const toggle = (k: "listIds" | "folderIds", id: number) => setF({ ...f, [k]: f[k].includes(id) ? f[k].filter((x: number) => x !== id) : [...f[k], id] });
   const num = (k: string, lo: number, hi: number) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: Math.min(hi, Math.max(lo, Number(e.target.value) || lo)) });
@@ -425,6 +426,19 @@ function AutopilotSettings({ ap, onSave, saving, onClose }: { ap: any; onSave: (
         </div>
       </div>
       <div>
+        <p className="text-sm font-semibold mb-1">أي قطاعات؟</p>
+        <p className="text-[11px] text-muted-foreground mb-2">سلمى تقسّم كل قائمة حسب القطاع، ولكل قطاع حملته الخاصة — حتى ٣ موجات معاً لكل قائمة. بلا اختيار = كل القطاعات.</p>
+        <div className="flex flex-wrap gap-1.5">
+          {sectors.length === 0 && <p className="text-[11px] text-muted-foreground">لا قطاعات بعد — تُصنّف العناوين عند رفع القائمة.</p>}
+          {sectors.map((s) => (
+            <button key={s.sector} type="button" onClick={() => toggleSector(s.sector)}
+              className={cn("text-xs px-2.5 py-1 rounded-full border transition-colors", f.sectors.includes(s.sector) ? "bg-primary/15 border-primary/40 text-primary font-medium" : "border-card-border text-muted-foreground hover:border-primary/30")}>
+              {s.sector} <span className="opacity-70">· {n(s.unsent)} لم يُراسَلوا</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
         <p className="text-sm font-semibold mb-2">كم تتحكم أنت؟</p>
         <div className="grid md:grid-cols-2 gap-2">
           {[["approve", "كل حملة تنتظر موافقتي", "نورة تكتب، وأنت تراجع وتوافق قبل أي إرسال. موصى به في البداية."], ["auto", "تلقائي بالكامل", "يُرسل ما يكتبه الفريق بعد أن يراجعه ماجد. ما يجد فيه ماجد رقماً أو مبالغة يُحوَّل إليك."]].map(([k, t, s]) => (
@@ -442,7 +456,7 @@ function AutopilotSettings({ ap, onSave, saving, onClose }: { ap: any; onSave: (
 <label className="text-[11px] text-muted-foreground">لغة الإيميلات<select className={cn(input, "mt-1")} value={f.language ?? "en"} onChange={(e) => setF({ ...f, language: e.target.value })}><option value="en">🇬🇧 الإنجليزية (افتراضي)</option><option value="ar">العربية</option><option value="both">الاثنتان</option></select></label>
       </div>
       <div className="flex gap-2">
-        <button onClick={() => { onSave({ listIds: f.listIds, folderIds: f.folderIds, mode: f.mode, waveSize: f.waveSize, quietDays: f.quietDays, maxTouches: f.maxTouches, followAfterHours: f.followAfterHours, language: f.language ?? "en" }); onClose(); }} disabled={saving} className={primary}><CheckCircle2 className="w-3.5 h-3.5" /> احفظ</button>
+        <button onClick={() => { onSave({ listIds: f.listIds, folderIds: f.folderIds, sectors: f.sectors, mode: f.mode, waveSize: f.waveSize, quietDays: f.quietDays, maxTouches: f.maxTouches, followAfterHours: f.followAfterHours, language: f.language ?? "en" }); onClose(); }} disabled={saving} className={primary}><CheckCircle2 className="w-3.5 h-3.5" /> احفظ</button>
         <button onClick={onClose} className={ghost}>إغلاق</button>
       </div>
     </div>

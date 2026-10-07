@@ -6,9 +6,16 @@
 // sized for a phone first.
 //
 // The message itself stays simple HTML (paragraphs, lists, links), so the
-// owner and the agents write content, not layout. Two marks give it shape:
+// owner and the agents write content, not layout. Four marks give it shape:
+//   <p class="lead">…</p>                            → the summary: the whole point in 2–3 lines
 //   <p class="cta"><a href="…">Book a call</a></p>   → a button
+//   <hr class="more">                                → "in more detail", for whoever reads on
 //   <div class="note">…</div>                        → a highlighted box
+//
+// Read first, detail after: a busy manager reads the summary and the button
+// and decides; the details are there for the one who wants them. The order
+// is enforced here, so a button written at the bottom still sits under the
+// summary.
 // and the layout styles every paragraph, list, heading and link inline.
 
 export interface Brand {
@@ -51,8 +58,26 @@ export function directionOf(html: string): "rtl" | "ltr" {
 }
 
 /** Inline styles on the message's own elements, and the two marks turned into a button and a box. */
+/**
+ * Summary, then the button, then the details: when the message has a summary
+ * and a button but the button sits below the details, the first button moves
+ * up to just after the summary. Pure.
+ */
+export function skimFirst(html: string): string {
+  if (!/class="lead"/.test(html)) return html;
+  const cta = /<p[^>]*class="cta"[^>]*>[\s\S]*?<\/p>/i.exec(html);
+  const more = /<hr[^>]*class="more"[^>]*\/?>/i.exec(html);
+  if (!cta || !more || cta.index < more.index) return html;
+  const without = html.slice(0, cta.index) + html.slice(cta.index + cta[0].length);
+  const leads = [...without.matchAll(/<p[^>]*class="lead"[^>]*>[\s\S]*?<\/p>/gi)];
+  const last = leads[leads.length - 1]!;
+  const at = last.index! + last[0].length;
+  return without.slice(0, at) + cta[0] + without.slice(at);
+}
+
 export function styleBody(html: string, brand: Brand, dir: "rtl" | "ltr"): string {
   const align = dir === "rtl" ? "right" : "left";
+  html = skimFirst(html);
   const addStyle = (tag: string, style: string) => (s: string) =>
     s.replace(new RegExp(`<${tag}(?![^>]*\\bstyle=)(\\s[^>]*)?>`, "gi"), (_m, attrs = "") => `<${tag}${attrs} style="${style}">`);
   let out = html;
@@ -60,6 +85,14 @@ export function styleBody(html: string, brand: Brand, dir: "rtl" | "ltr"): strin
   out = out.replace(/<p[^>]*class="cta"[^>]*>\s*<a\s+([^>]*?)href="([^"]+)"([^>]*)>([\s\S]*?)<\/a>\s*<\/p>/gi, (_m, _a, href, _b, label) =>
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0"><tr><td style="border-radius:8px;background:${brand.accent}">` +
     `<a href="${href}" style="display:inline-block;padding:13px 26px;font:600 15px/1 ${FONT};color:#ffffff;text-decoration:none;border-radius:8px">${label.replace(/<[^>]+>/g, "")}</a></td></tr></table>`);
+  // The summary: larger, darker — it is the message for most readers.
+  out = out.replace(/<p([^>]*)class="lead"([^>]*)>/gi, (_m, a, b) => `<p${a}${b} style="margin:0 0 12px;font:500 17px/1.6 ${dir === "rtl" ? FONT_AR : FONT};color:#0f172a;text-align:${align}">`);
+  // The line between the summary and the detail, labelled for whoever reads on.
+  out = out.replace(/<hr[^>]*class="more"[^>]*\/?>/gi, () =>
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 16px"><tr>` +
+    `<td width="50%" style="vertical-align:middle"><div style="border-top:1px solid #dbe2ea;height:1px;line-height:1px;font-size:0">&nbsp;</div></td>` +
+    `<td style="white-space:nowrap;vertical-align:middle;padding:0 12px;font:600 11px/1 ${dir === "rtl" ? FONT_AR : FONT};letter-spacing:${dir === "rtl" ? "0" : "1.2px"};text-transform:uppercase;color:#94a3b8">${dir === "rtl" ? "التفاصيل لمن يرغب" : "In more detail"}</td>` +
+    `<td width="50%" style="vertical-align:middle"><div style="border-top:1px solid #dbe2ea;height:1px;line-height:1px;font-size:0">&nbsp;</div></td></tr></table>`);
   // The box.
   out = out.replace(/<div[^>]*class="note"[^>]*>([\s\S]*?)<\/div>/gi, (_m, inner) =>
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0"><tr><td style="background:#f1f5f9;border-${dir === "rtl" ? "right" : "left"}:4px solid ${brand.accent};border-radius:6px;padding:14px 16px;font:14px/1.65 ${dir === "rtl" ? FONT_AR : FONT};color:#1e293b">${inner}</td></tr></table>`);

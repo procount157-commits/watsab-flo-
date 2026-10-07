@@ -30,7 +30,7 @@ import { count, describe } from "./segments";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { INTENSITY, asIntensity } from "./intensity";
 import { trackingActive, retestHeld, getSettings } from "./service";
-import { activity, guardCheck, onDuty, type EmailRole } from "./team";
+import { activity, guardCheck, formatIssues, onDuty, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
 
 async function log(missionId: number, text: string, kind = "note") {
@@ -143,7 +143,10 @@ export async function runMission(m: EmailMission): Promise<void> {
     }
     if (!m.requireApproval && (await onDuty(m.userId, "email_guard"))) {
       const knowledge = await knowledgeText(m.userId);
-      const issues = guardCheck([...w.draft.subjects, w.draft.html, ...w.draft.followups.flatMap((f) => [f.subject, f.html])], knowledge);
+      const issues = [
+        ...guardCheck([...w.draft.subjects, w.draft.html, ...w.draft.followups.flatMap((f) => [f.subject, f.html])], knowledge),
+        ...formatIssues(w.draft.html, "first"),
+      ];
       if (issues.length) {
         await set(m.id, { stage: "awaiting_approval", pending: w.draft as any });
         await log(m.id, `أوقفها حارس الجودة قبل الإرسال: ${issues.join(" · ")}`, "error");
@@ -155,6 +158,9 @@ export async function runMission(m: EmailMission): Promise<void> {
     }
     if (m.requireApproval) {
       await set(m.id, { stage: "awaiting_approval", pending: w.draft as any });
+      // The owner reviews it anyway; what ماجد would have said goes with it.
+      const shape = formatIssues(w.draft.html, "first");
+      if (shape.length) await log(m.id, `ملاحظات ماجد على الشكل: ${shape.join(" · ")}`, "error");
       await notify(m.userId, `<b>📧 نورة كتبت حملة «${esc(m.name)}» وتنتظر موافقتك</b>\n${esc(w.audience.description)} — ${w.audience.count} شركة\nالعنوان: ${esc(w.draft.subjects[0]!)}\nافتح البريد → المهام.`).catch(() => {});
     } else {
       await launch({ ...m, pending: w.draft as any }, w.draft);
@@ -164,7 +170,13 @@ export async function runMission(m: EmailMission): Promise<void> {
 
   if (m.stage === "sending" && m.campaignId) {
     const [c] = await db.select().from(emailCampaignsTable).where(eq(emailCampaignsTable.id, m.campaignId)).limit(1);
-    if (!c) return;
+    // Its campaign was deleted: the mission is over. Left «sending», it held
+    // its list busy and سلمى could never start the next wave there.
+    if (!c) {
+      await set(m.id, { stage: "done" });
+      await log(m.id, "انتهت المهمة: حُذفت حملتها.", "done");
+      return;
+    }
     // Almost nobody opened the test slice: the rest was held. New subjects, a fresh slice — twice at most.
     if (c.status === "paused" && c.lowOpenAt) { await rescueSubjects(m, c); return; }
     // The subject test, once decided, is a lesson for this sector.

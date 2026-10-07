@@ -34,6 +34,7 @@ import http from "http";
 import { execSync } from "child_process";
 import { startOptOutSweep } from "./lib/opt-out";
 import { startSmartFollowUps } from "./lib/smart-followup";
+import { startCaretaker } from "./lib/email/caretaker";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -149,6 +150,7 @@ function startListening() {
     startMissionWorker();
     startOptOutSweep();
     startSmartFollowUps();
+    startCaretaker();
     startAutopilotWorker();
     // نورة joins every team that exists, so she appears beside the others.
     setTimeout(async () => {

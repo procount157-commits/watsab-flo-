@@ -347,6 +347,8 @@ export const emailAutopilotTable = pgTable("email_autopilot", {
   mode:             varchar("mode", { length: 10 }).notNull().default("approve"),
   listIds:          jsonb("list_ids").$type<number[]>().notNull().default([]),
   folderIds:        jsonb("folder_ids").$type<number[]>().notNull().default([]),
+  /** The sectors worked — empty for every sector. */
+  sectors:          jsonb("sectors").$type<string[]>().notNull().default([]),
   waveSize:         integer("wave_size").notNull().default(150),
   followAfterHours: integer("follow_after_hours").notNull().default(48),
   maxTouches:       integer("max_touches").notNull().default(3),

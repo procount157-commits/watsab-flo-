@@ -38,7 +38,7 @@ export const STAGES = {
 } as const;
 export type Stage = keyof typeof STAGES;
 
-const DEFAULTS = { enabled: false, mode: "approve", listIds: [] as number[], folderIds: [] as number[], waveSize: 150, followAfterHours: 72, maxTouches: 4, quietDays: 3, language: "en", lastRunAt: null };
+const DEFAULTS = { enabled: false, mode: "approve", listIds: [] as number[], folderIds: [] as number[], sectors: [] as string[], waveSize: 150, followAfterHours: 72, maxTouches: 4, quietDays: 3, language: "en", lastRunAt: null };
 
 export async function getAutopilot(userId: number): Promise<EmailAutopilot> {
   const [row] = await db.select().from(emailAutopilotTable).where(eq(emailAutopilotTable.userId, userId)).limit(1);
@@ -55,6 +55,7 @@ export async function saveAutopilot(userId: number, b: any): Promise<EmailAutopi
     mode: b.mode === "auto" || b.mode === "approve" ? b.mode : cur.mode,
     listIds: ids(b.listIds, cur.listIds as number[]),
     folderIds: ids(b.folderIds, cur.folderIds as number[]),
+    sectors: Array.isArray(b.sectors) ? b.sectors.map((x: unknown) => String(x).trim()).filter(Boolean).slice(0, 40) : (cur.sectors as string[] ?? []),
     waveSize: clamp(b.waveSize, 10, 2000, cur.waveSize),
     followAfterHours: clamp(b.followAfterHours, 24, 24 * 14, cur.followAfterHours),
     maxTouches: clamp(b.maxTouches, 1, 6, cur.maxTouches),
@@ -154,11 +155,38 @@ export async function campaignFor(listId: number): Promise<{ sector: string | nu
   return { sector, goal: hit?.goal ?? DEFAULT_GOAL };
 }
 
-/** Is a mission for this list (or stage list) still in its first send? Then the next wave waits. */
-async function busy(listId: number): Promise<boolean> {
+/** The campaign for one sector — or the default when the library has none for it. Pure. */
+export function campaignForSector(sector: string | null): string {
+  const hit = sector ? CAMPAIGNS.find((c) => c.sectors.includes(sector)) : null;
+  return hit?.goal ?? DEFAULT_GOAL;
+}
+
+/**
+ * Is a mission for this list (or stage list) still in its first send? Then
+ * the next wave waits. With a sector, only that sector's mission counts —
+ * real estate waiting for approval does not stop the tourism wave.
+ */
+async function busy(listId: number, sector?: string | null): Promise<boolean> {
   const [r] = await db.select({ n: sql<number>`count(*)` }).from(emailMissionsTable)
-    .where(and(eq(emailMissionsTable.sourceListId, listId), eq(emailMissionsTable.status, "active"), inArray(emailMissionsTable.stage, ["draft", "awaiting_approval", "sending"])));
+    .where(and(
+      eq(emailMissionsTable.sourceListId, listId), eq(emailMissionsTable.status, "active"),
+      inArray(emailMissionsTable.stage, ["draft", "awaiting_approval", "sending"]),
+      sector ? sql`${emailMissionsTable.filter}->'sectors' @> ${JSON.stringify([sector])}::jsonb` : sql`true`,
+    ));
   return Number(r?.n ?? 0) > 0;
+}
+
+/** At most this many sector waves running per list at once, and none for a sector too small to be worth a campaign. */
+export const MAX_SECTOR_WAVES = 3;
+export const MIN_SECTOR = 15;
+
+/** Who in the list has not been written to yet, by sector — biggest first. */
+async function unsentBySector(listId: number): Promise<Array<{ sector: string; n: number }>> {
+  const r = await db.execute<{ sector: string; n: number }>(sql`
+    SELECT c.sector, count(*)::int AS n FROM email_list_members lm JOIN email_contacts c ON c.id = lm.contact_id
+    WHERE lm.list_id = ${listId} AND c.status = 'active' AND coalesce(c.mx_ok, true) AND c.last_sent_at IS NULL AND c.sector IS NOT NULL
+    GROUP BY c.sector ORDER BY count(*) DESC`);
+  return r.rows.map((x) => ({ sector: x.sector, n: Number(x.n) }));
 }
 
 // ── One round ────────────────────────────────────────────────────
@@ -178,7 +206,11 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
   const health = await verdictFor(userId).catch(() => null);
   const healthy = health?.level !== "critical";
   if (!healthy && (await onDuty(userId, "email_guard"))) {
-    await activity(userId, "email_guard", "hold", `أوقف الموجات الجديدة: ${(health?.reasons ?? []).slice(0, 2).join(" · ") || "صحة الإرسال حرجة"}`);
+    // Once while it lasts, not every quarter of an hour: the same line 22 times
+    // in a row was all the owner ever saw of the team.
+    const text = `أوقف الموجات الجديدة: ${(health?.reasons ?? []).slice(0, 2).join(" · ") || "صحة الإرسال حرجة"}`;
+    const [again] = (await db.execute(sql`SELECT 1 FROM email_agent_activity WHERE user_id = ${userId} AND role = 'email_guard' AND text = ${text} AND created_at > now() - interval '6 hours' LIMIT 1`)).rows;
+    if (!again) await activity(userId, "email_guard", "hold", text);
   }
 
   const lists = await targetLists(userId, cfg);
@@ -203,19 +235,30 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
     }
     if (!healthy) continue;
 
-    // سلمى: the next wave of people not yet written to.
-    if (strategist && !(await busy(list.id))) {
-      const filter: SegmentFilter = { listIds: [list.id], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take: cfg.waveSize };
-      const n = await count(userId, filter, true);
-      if (n > 0) {
-        const plan = await campaignFor(list.id);
+    // سلمى: the next wave of people not yet written to — one per sector, each
+    // with its own sector's campaign. A list is rarely one sector, and one
+    // campaign written for the biggest sector reached everyone else in it with
+    // the wrong pain. Only the sectors the owner picked, when they picked any.
+    if (strategist) {
+      const wanted = (cfg.sectors as string[] | null) ?? [];
+      const sectors = (await unsentBySector(list.id))
+        .filter((s) => s.n >= MIN_SECTOR && (!wanted.length || wanted.includes(s.sector)));
+      let running = 0;
+      for (const s of sectors) if (await busy(list.id, s.sector)) running++;
+      for (const s of sectors) {
+        if (running >= MAX_SECTOR_WAVES) break;
+        if (await busy(list.id, s.sector)) continue;
+        const filter: SegmentFilter = { listIds: [list.id], sectors: [s.sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take: cfg.waveSize };
+        const n = await count(userId, filter, true);
+        if (!n) continue;
+        const goal = campaignForSector(s.sector);
         const m = await createMission(userId, {
-          name: `${list.name} — موجة ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
-          goal: plan.goal, filter, language: cfg.language, requireApproval,
+          name: `${s.sector} — ${list.name} — موجة ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
+          goal, filter, language: cfg.language, requireApproval,
           followAfterHours: cfg.followAfterHours, agentRole: "email", sourceListId: list.id,
         });
-        done.waves++;
-        await activity(userId, "email_strategist", "wave", `خطّطت موجة لـ ${n} شركة من «${list.name}»${plan.sector ? ` (قطاع ${plan.sector})` : ""} — ${plan.goal.split(":")[0]}. سلّمتها لنورة لتكتبها.`, { listId: list.id, missionId: m.id });
+        done.waves++; running++;
+        await activity(userId, "email_strategist", "wave", `قسّمت «${list.name}» حسب القطاع: موجة لـ ${n} من «${s.sector}» (من ${s.n} لم يُراسَلوا بعد) — ${goal.split(":")[0]}. سلّمتها لنورة لتكتبها.`, { listId: list.id, missionId: m.id, sector: s.sector });
       }
     }
 

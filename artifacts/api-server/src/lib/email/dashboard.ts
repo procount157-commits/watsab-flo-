@@ -90,8 +90,14 @@ export async function dashboard(userId: number, days = 14) {
       .from(emailMissionsTable).where(and(eq(emailMissionsTable.userId, userId), eq(emailMissionsTable.stage, "awaiting_approval"), eq(emailMissionsTable.status, "active"))).orderBy(desc(emailMissionsTable.createdAt)).limit(10),
   ]);
 
+  // The sectors in the account's addresses, for choosing which the team works.
+  const sectorRows = await db.execute(sql`SELECT sector, count(*)::int AS n,
+      count(*) FILTER (WHERE last_sent_at IS NULL AND status = 'active')::int AS unsent
+    FROM email_contacts WHERE user_id = ${userId} AND sector IS NOT NULL GROUP BY sector ORDER BY count(*) DESC`).catch(() => ({ rows: [] as any[] }));
+
   return {
     days, kpi, daily, autopilot: cfg, team, activity: act,
+    sectors: sectorRows.rows as Array<{ sector: string; n: number; unsent: number }>,
     lists: lists.map((l: any) => ({ ...l, stages: Object.fromEntries((Object.keys(STAGES) as Array<keyof typeof STAGES>).map((s) => {
       const r = stageRows.find((x: any) => x.parent === l.id && x.stage === s); return [s, r ? { id: r.id, n: r.n } : null];
     })) })),
