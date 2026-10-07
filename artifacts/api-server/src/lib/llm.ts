@@ -20,6 +20,8 @@ import { and, eq } from "drizzle-orm";
 import { db, llmSettingsTable } from "@workspace/db";
 import { logger } from "./logger";
 import { rank, recordOk, recordFail, type Candidate } from "./llm-health";
+import { receipt, tokensOf, noteUnattributedCall } from "./graph/receipts";
+import { offDuty } from "./graph/switch";
 
 export type Provider =
   | "anthropic" | "gemini" | "groq" | "openrouter"
@@ -360,7 +362,21 @@ const EXTRA_MODELS: Record<string, string[]> = {
 export async function complete(messages: LlmMessage[], timeoutMs = 20_000): Promise<LlmResult | null> {
   // Counted against the employee whose work this is, when it runs inside asAgent().
   const who = currentAgent(), t0 = Date.now();
+  const charsIn = messages.reduce((a, m) => a + m.content.length, 0);
+  if (who) {
+    // Switched off — the employee, or the whole team — means no thinking at all.
+    const off = await offDuty(who.userId, who.role);
+    if (off) {
+      receipt({ userId: who.userId, node: who.role, action: "llm.call", status: "blocked", why: off });
+      return null;
+    }
+  } else noteUnattributedCall();
   const out = await completeInner(messages, timeoutMs);
+  if (who) receipt({
+    userId: who.userId, node: who.role, action: "llm.call", status: out ? "ok" : "failed",
+    model: out?.provider ?? null, tokensIn: tokensOf(charsIn), tokensOut: tokensOf(out?.text.length ?? 0), durationMs: Date.now() - t0,
+    why: out ? null : "لم يرد أي مزوّد",
+  });
   // Imported late: feedback reads the knowledge module, which calls back into this one.
   if (who) void import("./feedback").then((f) => f.recordUsage(who.userId, who.role, { ok: !!out, charsIn: messages.reduce((a, m) => a + m.content.length, 0), charsOut: out?.text.length ?? 0, ms: Date.now() - t0 })).catch(() => {});
   return out;

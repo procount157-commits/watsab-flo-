@@ -16,6 +16,7 @@ import { skillsFor, skillsPreamble } from "../agent-skills";
 import { logger } from "../logger";
 import { corePrompt } from "../prompt-core";
 import { PLATFORM, type SocialPlatform } from "./platforms";
+import { receipt } from "../graph/receipts";
 
 export const JOBS = ["manager", "watcher", "triage", "writer", "inviter", "dm", "prospector", "qualify", "followup", "creator", "guard", "analyst"] as const;
 export type Job = typeof JOBS[number];
@@ -151,6 +152,7 @@ export async function voiceFor(userId: number, platform: SocialPlatform, job: Jo
 
 // ── What the team did ────────────────────────────────────────────
 export async function activity(userId: number, platform: SocialPlatform, job: Job, action: string, text: string, ref: Record<string, unknown> | null = null) {
+  receipt({ userId, node: roleOf(platform, job), graph: "social", action: `social.${action}`.slice(0, 40), evidence: ref, why: text.slice(0, 1000) });
   await db.insert(socialActivityTable).values({ userId, platform, role: roleOf(platform, job), action: action.slice(0, 30), text: text.slice(0, 2000), ref })
     .catch((err) => logger.warn({ err: String(err) }, "social activity log failed"));
 }

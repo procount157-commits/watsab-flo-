@@ -11,6 +11,7 @@ import { Building2, Loader2, Play, X, AlertTriangle, Gauge, Cpu, Users } from "l
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
 import { MorningBrief } from "@/components/MorningBrief";
+import { GraphPanel } from "@/components/GraphPanel";
 
 const card = "bg-card border border-card-border rounded-xl";
 const ghost = "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] border border-card-border hover:border-primary/50 transition-colors disabled:opacity-40";
@@ -46,6 +47,7 @@ export default function Team() {
           <div key={l} className={cn(card, "p-3")}><p className="text-[10px] text-muted-foreground flex items-center gap-1"><Icon className="w-3 h-3" /> {l}</p><p className="text-lg font-bold mt-1">{v}</p></div>
         ))}
       </div>
+      <GraphPanel names={Object.fromEntries(data.people.map((p: any) => [p.role, p.name]))} />
       <MorningBrief />
       {!!dupes.length && <div className={cn(card, "p-3 text-xs text-yellow-400 border-yellow-500/40 flex gap-2")}><AlertTriangle className="w-4 h-4 shrink-0" /> اسم مكرر بين موظفين: {dupes.map((d: any) => `${d.name} (${d.title})`).join("، ")} — غيّر أحدهما من «فريق البوتات» حتى لا تختلط السجلات.</div>}
 

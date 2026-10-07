@@ -23,6 +23,7 @@ import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
 import { byRisk, domainSignals, verifyDomains, holdRiskyQueued } from "./hygiene";
 import { activity } from "./team";
+import { receipt } from "../graph/receipts";
 
 const SITE_URL = () => (process.env["SITE_URL"] ?? "").replace(/\/+$/, "");
 const SECRET   = () => process.env["SESSION_SECRET"] ?? "wam";
@@ -426,6 +427,7 @@ async function drainOne(userId: number) {
     if (contact) await db.update(emailContactsTable).set({ lastSentAt: new Date() }).where(eq(emailContactsTable.id, contact.id));
     if (m.campaignId) await db.update(emailCampaignsTable).set({ sentCount: sql`${emailCampaignsTable.sentCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
     await recordEvent(userId, m.id, "sent");
+    receipt({ userId, node: "sender", graph: "email", action: "send.email", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : m.sequenceJobId ? `sequence-job:${m.sequenceJobId}` : null, outputRef: `email-message:${m.id}` });
   } catch (err) {
     const e = err as SendError;
     await db.update(emailMessagesTable).set({ status: "failed", error: String(e?.message ?? err).slice(0, 400) }).where(eq(emailMessagesTable.id, m.id));
@@ -436,6 +438,7 @@ async function drainOne(userId: number) {
     // The provider itself refusing us (auth, rate) — stop hammering.
     if (!e?.permanent) heldUntil.set(userId, now + 10 * 60_000);
     logger.warn({ userId, messageId: m.id, err: String(e?.message ?? err) }, "email send failed");
+    receipt({ userId, node: "sender", graph: "email", action: "send.email", status: "failed", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : null, outputRef: `email-message:${m.id}`, why: String(e?.message ?? err).slice(0, 300) });
   }
 }
 

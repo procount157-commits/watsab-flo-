@@ -13,6 +13,7 @@ import {
 } from "@workspace/db";
 import { complete } from "./llm";
 import { logger } from "./logger";
+import { receipt } from "./graph/receipts";
 
 export type MessageKind = "handoff" | "directive" | "alert" | "report" | "question" | "answer";
 
@@ -22,6 +23,7 @@ export async function say(row: {
 }): Promise<void> {
   const body = row.body.trim().slice(0, 2_000);
   if (!body) return;
+  receipt({ userId: row.userId, node: row.fromRole, action: `edge.${row.kind ?? "report"}`, subject: row.phone ?? null, edge: row.toRole ?? "all", why: body.slice(0, 300) });
   await db.insert(agentMessagesTable).values({
     userId: row.userId, fromRole: row.fromRole, toRole: row.toRole ?? null,
     kind: row.kind ?? "report", body, phone: row.phone ?? null,

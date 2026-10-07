@@ -21,6 +21,7 @@ import { memoryPreamble } from "../agent-memory";
 import { skillsFor, skillsPreamble } from "../agent-skills";
 import { logger } from "../logger";
 import { corePrompt } from "../prompt-core";
+import { receipt } from "../graph/receipts";
 
 export const EMAIL_TEAM = ["email", "email_strategist", "email_followup", "email_replies", "email_guard", "email_creator"] as const;
 export type EmailRole = typeof EMAIL_TEAM[number];
@@ -220,6 +221,7 @@ export async function teamVoice(userId: number, role: EmailRole): Promise<string
 
 /** What an agent did, for the dashboard's feed. */
 export async function activity(userId: number, role: EmailRole, action: string, text: string, ref: Record<string, unknown> | null = null) {
+  receipt({ userId, node: role, graph: "email", action: `email.${action}`.slice(0, 40), status: /hold|blocked/.test(action) ? "blocked" : "ok", evidence: ref, why: text.slice(0, 1000) });
   await db.insert(emailAgentActivityTable).values({ userId, role, action: action.slice(0, 30), text: text.slice(0, 2000), ref }).catch((err) => logger.warn({ err: String(err) }, "activity log failed"));
 }
 

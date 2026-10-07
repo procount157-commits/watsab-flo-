@@ -15,6 +15,7 @@ import { complete, resolveProvider } from "./llm";
 import { logger } from "./logger";
 import { WORK_PROTOCOL, MIRROR, NEVER, channelExamples, finalCheck as coreCheck } from "./prompt-core";
 import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
+import { receipt } from "./graph/receipts";
 
 // Words too common to tell entries apart; matching on them makes everything
 // look equally relevant.
@@ -557,6 +558,12 @@ export async function logAutoReply(row: {
   agentRole?: string | null;
   quality?: AnswerResult["quality"];
 }) {
+  receipt({
+    userId: row.userId, node: row.agentRole ?? (row.reply ? "sales" : "router"), graph: "whatsapp",
+    action: row.reply ? "reply" : "decide", status: row.reply ? "ok" : "blocked", subject: row.phone,
+    evidence: { intent: row.intent ?? null, kb: row.kbIds ?? [], quality: row.quality?.score ?? null, rewritten: !!row.quality?.rewritten },
+    why: row.skipped ?? (row.quality?.issues?.length ? row.quality.issues.join(" · ") : null),
+  });
   await db.insert(autoReplyLogTable).values({
     userId: row.userId, phone: row.phone,
     incoming: row.incoming.slice(0, 2_000),

@@ -27,6 +27,8 @@ import { getObjectBuffer, objectNameFromUrl } from "./storage";
 
 import { captureGroupMessage, captureGroupHistory } from "./groups/store";
 import { onGroupMessage } from "./groups/assistant";
+import { receipt } from "./graph/receipts";
+import { currentAgent } from "./agent-context";
 export const BASE_SESSION_DIR = path.resolve(process.cwd(), "whatsapp-session");
 
 
@@ -2269,6 +2271,7 @@ class WhatsAppInstance {
         if (isStopTap(tappedButtonId(msg.message)) || buttonMatch?.action === "stop" || /^\s*[0٠]\s*$/.test(text ?? "")) {
           try {
             const until = await stopForMonths(this.userId, phone);
+            receipt({ userId: this.userId, node: "gate", graph: "whatsapp", action: "optout.stop", subject: phone, why: `زر إيقاف الرسائل — لا مراسلة حتى ${until.toISOString().slice(0, 10)}`, metric: { counter: "stops", delta: 1 } });
             this.log.info({ phone, until, campaign: buttonMatch?.campaignName }, "stop button — no messages to this number for five months");
             this.sendMessage(phone, STOP_ACK).catch(() => {});
           } catch (err) {
@@ -2763,6 +2766,8 @@ class WhatsAppInstance {
       // read the thread to answer the reply saw nothing of the campaign the
       // customer was replying to — and asked "what does your company do?".
       this.recordOutbound(phone, sentMsgId, uniqueText, messageType, buttons);
+      receipt({ userId: this.userId, node: currentAgent()?.role ?? (messageType === "voice" ? "sales" : "sender"), graph: "whatsapp",
+        action: "send.whatsapp", subject: phone, outputRef: sentMsgId ?? null, evidence: { type: messageType, chars: uniqueText.length } });
 
       // ── Diagnostic log: what did Baileys return? ─────────────────────────
       this.log.info(
