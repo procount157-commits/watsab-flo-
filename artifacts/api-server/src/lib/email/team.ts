@@ -203,6 +203,7 @@ export async function teamVoice(userId: number, role: EmailRole): Promise<string
   const def = EMAIL_TEAM_DEFS.find((d) => d.role === role)!;
   return corePrompt({
     channel: "email",
+    role,
     identity: `اسمك ${me?.name ?? def.name}، ${me?.title ?? def.title} في فريق التسويق بالبريد لدى بروكاونت للمحاسبة.`,
     persona: me?.persona ?? def.persona,
     rules: [EMAIL_DOCTRINE, profile?.guardrails ? `ما لا يُقال أبداً بأمر صاحب العمل: ${profile.guardrails}` : ""],

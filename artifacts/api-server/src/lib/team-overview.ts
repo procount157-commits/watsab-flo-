@@ -71,7 +71,7 @@ export async function tryEmployee(userId: number, role: string, message: string)
   const job = jobOf(role);
   const voice = platform && job ? await voiceFor(userId, platform, job)
     : (EMAIL_TEAM as readonly string[]).includes(role) ? await teamVoice(userId, role as EmailRole)
-    : corePrompt({ channel: "whatsapp", identity: `اسمك ${e.name}، ${e.title ?? ""}.`, persona: e.persona });
+    : corePrompt({ channel: "whatsapp", role, identity: `اسمك ${e.name}، ${e.title ?? ""}.`, persona: e.persona });
   const out = await asAgent(userId, role, () => complete([
     { role: "system", content: `${voice}\n\nهذه تجربة من صاحب العمل ولن تُرسل لأحد. تصرّف بالضبط كما تتصرف في عملك الحقيقي: إن كانت رسالة عميل فاكتب ردك عليها، وإن كانت مهمة فأنجزها، وإن كانت سؤالاً عن طريقة عملك فاشرحها باختصار.` },
     { role: "user", content: message.slice(0, 3_000) },

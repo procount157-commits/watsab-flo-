@@ -36,6 +36,81 @@ const INTENTS: Record<string, string> = {
   not_interested: "غير مهتم", opt_out: "طلب إيقاف", greeting: "تحية", unclear: "غير واضح",
 };
 
+// ── The follow-up خالد writes ─────────────────────────────────────
+type SmartRow = { id: number; phone: string; rung: number; verdict: string; reason: string | null; draft: string | null; executed: boolean; created_at: string };
+const MODES: { val: "off" | "dry" | "live"; label: string; desc: string; cls: string }[] = [
+  { val: "off",  label: "متوقفة", desc: "لا يكتب ولا يرسل",                         cls: "bg-muted text-muted-foreground border-border" },
+  { val: "dry",  label: "تجربة",  desc: "يكتب كل متابعة ويسجّلها لك — لا يرسل شيئاً", cls: "bg-blue-500/15 text-blue-400 border-blue-500/30" },
+  { val: "live", label: "تعمل",   desc: "يرسل المتابعات فعلاً للعملاء",               cls: "bg-green-500/15 text-green-400 border-green-500/30" },
+];
+
+function SmartFollowUps() {
+  const qc = useQueryClient();
+  const { data } = useQuery<{ mode: "off" | "dry" | "live"; recent: SmartRow[] }>({
+    queryKey: ["fu-smart"], queryFn: () => api("/api/follow-ups/smart"), refetchInterval: 60_000,
+  });
+  const setMode = useMutation({
+    mutationFn: (mode: string) => api("/api/follow-ups/smart", { method: "PATCH", body: JSON.stringify({ mode }) }),
+    onSuccess: (d: any) => { qc.invalidateQueries({ queryKey: ["fu-smart"] }); toast.success(d.mode === "live" ? "المتابعة تعمل الآن وترسل" : d.mode === "dry" ? "وضع التجربة: يكتب ولا يرسل" : "أُوقفت المتابعة"); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const run = useMutation({
+    mutationFn: () => api("/api/follow-ups/smart/run", { method: "POST" }),
+    onSuccess: (d: any) => { qc.invalidateQueries({ queryKey: ["fu-smart"] }); toast.success(d.drafted ? `كتب ${d.drafted} متابعة${d.sent ? ` وأرسل ${d.sent}` : ""}` : "لا أحد مستحق للمتابعة الآن"); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const mode = data?.mode ?? "dry";
+  return (
+    <div className={cn(card, "space-y-4")}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="font-semibold">🧠 المتابعة الذكية — يكتبها خالد لكل عميل</p>
+          <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-2xl">
+            يتابع فقط من تكلّم معنا ثم سكت — لا يلاحق من وصلته حملة ولم يرد. كل رسالة مكتوبة له هو من محادثته وما أرسلناه له،
+            بزاوية جديدة في كل مرة: بعد يوم، ٣ أيام، أسبوع، أسبوعين (وأسرع للعميل المهتم)، ثم يتوقف. أي رد منه يعيد العدّ.
+          </p>
+        </div>
+        <button onClick={() => run.mutate()} disabled={run.isPending || mode === "off"}
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50">
+          {run.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} جولة الآن
+        </button>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {MODES.map((m) => (
+          <button key={m.val} onClick={() => setMode.mutate(m.val)} disabled={setMode.isPending}
+            className={cn("rounded-lg border px-3 py-2 text-right transition-colors", mode === m.val ? m.cls + " font-semibold" : "border-border text-muted-foreground hover:border-primary/30")}>
+            <span className="block text-sm">{m.label}</span>
+            <span className="block text-[11px] opacity-80 mt-0.5">{m.desc}</span>
+          </button>
+        ))}
+      </div>
+      {(data?.recent?.length ?? 0) > 0 ? (
+        <div className="divide-y divide-card-border max-h-96 overflow-y-auto">
+          {data!.recent.map((r) => (
+            <div key={r.id} className="py-2.5 text-sm space-y-1">
+              <div className="flex items-center gap-2 text-xs">
+                <span dir="ltr" className="text-muted-foreground">+{r.phone}</span>
+                <span className="text-muted-foreground">· المتابعة {r.rung}</span>
+                <span className={cn("px-1.5 py-0.5 rounded border",
+                  r.executed ? "bg-green-500/15 text-green-400 border-green-500/20"
+                  : r.verdict === "send" ? "bg-blue-500/15 text-blue-400 border-blue-500/20"
+                  : "bg-muted text-muted-foreground border-border")}>
+                  {r.executed ? "أُرسلت" : r.verdict === "send" ? "مسودة" : "لم تُرسل"}
+                </span>
+                <span className="text-muted-foreground mr-auto">{new Date(r.created_at).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" })}</span>
+              </div>
+              {r.draft && <p className="whitespace-pre-wrap text-foreground/90 bg-muted/30 rounded-md px-2.5 py-1.5">{r.draft}</p>}
+              {r.reason && <p className="text-xs text-muted-foreground">{r.reason}</p>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">لا مسودات بعد — يمر خالد على المحادثات كل ٢٠ دقيقة في ساعات الإرسال.</p>
+      )}
+    </div>
+  );
+}
+
 export default function FollowUps() {
   const qc = useQueryClient();
   const [name, setName] = useState("متابعة عملاء الإعلان");
@@ -104,6 +179,8 @@ export default function FollowUps() {
           يتابع مع كل عميل تلقائياً بعد أول تواصل — ويتوقف فور ردّه
         </p>
       </div>
+
+      <SmartFollowUps />
 
       {/* Leads */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

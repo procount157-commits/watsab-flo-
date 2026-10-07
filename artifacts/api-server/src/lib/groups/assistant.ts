@@ -123,6 +123,7 @@ async function voice(userId: number) {
   const [profile] = await db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
   return corePrompt({
     channel: "groups",
+    role: GROUPS_ROLE,
     identity: `اسمك ${agent.name}، ${agent.title ?? AGENT.title}.`,
     persona: agent.persona ?? AGENT.persona,
     firm: profile?.name ? `${profile.name}${profile.industry ? ` — ${profile.industry}` : ""}${profile.description ? `. ${profile.description}` : ""}` : null,

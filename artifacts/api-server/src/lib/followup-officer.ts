@@ -106,7 +106,7 @@ export function hardRules(e: Evidence): { verdict: Verdict; reason: string } | n
   return null;
 }
 
-async function opsVerdict(userId: number): Promise<{ ok: boolean; view: string }> {
+export async function opsVerdict(userId: number): Promise<{ ok: boolean; view: string }> {
   const [controls, signals] = await Promise.all([getControls(userId), gather(userId)]);
   const d = decide(signals);
 

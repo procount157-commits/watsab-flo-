@@ -17,6 +17,8 @@
 // WhatsApp reply or an email or a comment is. What this says is how a
 // competent employee behaves in any of them.
 
+import { charterBlock } from "./roles/charters";
+
 export type Channel = "whatsapp" | "email" | "social" | "groups" | "proposal" | "internal";
 
 /** How to work — the protocol a weak model needs spelled out and a strong one follows anyway. */
@@ -107,6 +109,8 @@ export type CoreInput = {
   channel: Channel;
   /** «اسمك نورة، كاتبة الحملات في فريق البريد لدى بروكاونت.» */
   identity: string;
+  /** The role, for its charter: what it is responsible for and how it is measured. */
+  role?: string;
   persona?: string | null;
   firm?: string | null;
   /** The desk's own rules: doctrine, job, platform voice. */
@@ -131,6 +135,7 @@ export function corePrompt(i: CoreInput): string {
     i.identity,
     i.persona ?? "",
     i.firm ? `الشركة: ${i.firm}` : "",
+    i.role ? `\n${charterBlock(i.role)}` : "",
     "",
     WORK_PROTOCOL,
     "",

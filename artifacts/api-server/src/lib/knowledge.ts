@@ -14,7 +14,7 @@ import { normalizeArabic, type Intent } from "./intent";
 import { complete, resolveProvider } from "./llm";
 import { logger } from "./logger";
 import { WORK_PROTOCOL, MIRROR, NEVER, channelExamples, finalCheck as coreCheck } from "./prompt-core";
-import { checkReply, needsRewrite, rewritePrompt } from "./reply-check";
+import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
 
 // Words too common to tell entries apart; matching on them makes everything
 // look equally relevant.
@@ -174,13 +174,30 @@ const TONES: Record<string, string> = {
 // both and resolved it the only way it could: a question at the end of
 // everything, which is the single clearest sign a human did not write it.
 export const SALES_JOB = [
-  "أنت تبيع، لا تجيب عن أسئلة فقط. لكل رسالة هدف واحد يقرّب الصفقة خطوة:",
-  "- افهم حاجته قبل أن تعرض: رخصته ونشاطه وحجمه ووجعه، سؤالاً واحداً في كل رسالة.",
-  "- اربط ما تعرضه بمشكلته هو وبكلماته هو، لا بقائمة خدمات.",
-  "- الاعتراض سؤال مقنّع: افهم سببه قبل أن تردّ عليه، ولا تدافع.",
-  "- حرّك المحادثة خطوة: سؤال، أو معلومة تستدعي رداً، أو خطوة محددة بزمن. نوّع، ولا تنهِ كل رسالة بسؤال.",
-  "- حين يوافق توقف عن البيع وانتقل للتنفيذ. حين يكتمل ما تستطيعه سلّم لبشري باسم وموعد.",
-  "- لا تنهِ المحادثة عند أول رد، ولا تلاحق من قال لا.",
+  "دليل البيع — حدّد الموقف الذي أمامك ثم اعمل حركته، رسالة واحدة لهدف واحد:",
+  "",
+  "① ردّ على حملتنا (أول رسالة منه، والحملة مذكورة أعلاه):",
+  "   اربط كلامه بموضوع الحملة في جملة تخصه أو تخص قطاعه، ثم سؤال واحد عن وضعه في هذا الموضوع بالذات.",
+  "   الرخصة (مين لاند/فري زون) لا تُسأل إلا إن كان الموضوع ضريبة الشركات أو القيمة المضافة. في AML اسأل عن التسجيل في goAML أو مسؤول الامتثال؛ في المحاسبة عن من يمسك الحسابات الآن.",
+  "② «مهتم» أو ضغط زر الاهتمام:",
+  "   لا تستجوبه. اشكره بكلمة، قل ما الذي يحدث الآن (مختص يكلمه مكالمة قصيرة ويحدد له المطلوب)، واطلب شيئاً واحداً: الوقت المناسب للمكالمة أو اسم المسؤول.",
+  "③ يسأل عن السعر:",
+  "   لا تخترع رقماً. قل إن السعر يُحدد بعد معرفة شيئين، وسمِّهما من المعرفة (حجم المعاملات، عدد الموظفين، نوع الخدمة…)، واسأل عن أهمهما — وقل إنك تجهز له عرضاً مكتوباً.",
+  "④ «عندنا محاسب» أو «مو محتاجين»:",
+  "   لا تهاجم المحاسب ولا تُلحّ. اسأل عن جزء واحد محدد قد لا يغطيه (التقديم في موعده، ملف الامتثال، التقارير الشهرية) — وإن قال لا مرة ثانية فاشكره وتوقف.",
+  "⑤ تحية فقط أو «؟» أو رسالة غامضة:",
+  "   ذكّره في نصف سطر بما أرسلناه («أرسلنا لكم بخصوص …»)، ثم سؤال سهل يجيب عنه بكلمة.",
+  "⑥ من يرد موظف لا صاحب القرار («أنا السكرتيرة»، «أبلغ المدير»):",
+  "   اشكره، واطلب اسم المسؤول عن الحسابات أو الامتثال وأفضل طريقة للوصول إليه.",
+  "⑦ يعرض خدماته هو علينا:",
+  "   سطر لطيف أنها ليست مجالنا، وسطر يعيد موضوعنا بسؤال — أو توقف إن لم يكن عميلاً محتملاً.",
+  "⑧ يطلب عرض سعر أو اجتماعاً أو عقداً:",
+  "   توقف عن البيع. اجمع ما ينقص فقط (الاسم، الشركة، الوقت المناسب)، وقل إن مختصاً من الفريق سيتواصل معه في وقت محدد.",
+  "",
+  "قواعد في كل موقف:",
+  "- رسالة واتساب: سطر إلى ثلاثة، بلا قوائم ولا عناوين، وسؤال واحد على الأكثر.",
+  "- كل رسالة تقدّم البيع مرحلة أو تعرف شيئاً جديداً. إن لم تفعل أياً منهما فلا ترسلها.",
+  "- اذكر اسم شركته أو قطاعه حين تعرفه — الرسالة التي تصلح لأي أحد لا تصلح.",
 ];
 
 export function buildSystemPrompt(
@@ -471,6 +488,12 @@ export async function answerFromKnowledge(
           const q2 = checkReply(candidate, ctx);
           if (q2.score > q.score) { reply = candidate; q = q2; rewritten = true; }
         }
+      }
+      // A blank from a template or a word about being a machine never goes
+      // to a customer, even after the rewrite failed to remove it.
+      if (blocksSend(q)) {
+        logger.warn({ userId, phone, issues: q.issues.map((i) => i.code) }, "reply held back — it still had a template blank or a self-reveal");
+        return { reply: null, provider: out.provider, kbIds, reason: `أُوقف الرد: ${q.issues.find((i) => i.code === "placeholder" || i.code === "reveal")!.note}`.slice(0, 60) };
       }
       return {
         reply, provider: out.provider, kbIds,

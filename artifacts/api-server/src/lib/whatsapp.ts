@@ -399,6 +399,23 @@ class WhatsAppInstance {
    * bot must get out of their way.
    */
   private sentIds = new Set<string>();
+  private recordOutbound(phone: string, messageId: string | undefined, text: string, messageType: string, buttons?: string | null) {
+    if (!messageId || !text?.trim()) return;
+    let full = text;
+    if (buttons) {
+      try {
+        const labels = (JSON.parse(buttons) as ButtonDef[]).map((b) => b.text?.trim()).filter(Boolean);
+        if (labels.length) full += `\n[أزرار: ${labels.join(" | ")}]`;
+      } catch { /* the words alone are enough */ }
+    }
+    const kind = messageType === "voice" ? "voice" : messageType.includes("image") ? "image" : messageType.includes("video") ? "video" : "text";
+    db.execute(sql`
+      INSERT INTO wa_thread_messages (user_id, phone, message_id, text, msg_type, from_me, created_at)
+      VALUES (${this.userId}, ${phone}, ${messageId}, ${full.slice(0, 4000)}, ${kind}, true, now())
+      ON CONFLICT (user_id, message_id) WHERE message_id IS NOT NULL
+      DO UPDATE SET text = EXCLUDED.text WHERE coalesce(wa_thread_messages.text, '') = ''
+    `).catch((err) => this.log.warn({ phone, err: String(err?.message ?? err).slice(0, 120) }, "could not record our message in the thread"));
+  }
   private rememberSent(id?: string | null) {
     if (!id) return;
     this.sentIds.add(id);
@@ -2740,6 +2757,12 @@ class WhatsAppInstance {
       // Capture the Baileys message ID for delivery tracking
       sentMsgId = result?.key?.id ?? undefined;
       this.rememberSent(sentMsgId);
+      // What we said goes into the thread in our own words. The echo WhatsApp
+      // sends back carries no text for a caption or a button message (and a
+      // button message sent by relay has no echo at all), so the employee who
+      // read the thread to answer the reply saw nothing of the campaign the
+      // customer was replying to — and asked "what does your company do?".
+      this.recordOutbound(phone, sentMsgId, uniqueText, messageType, buttons);
 
       // ── Diagnostic log: what did Baileys return? ─────────────────────────
       this.log.info(
@@ -3269,6 +3292,13 @@ function extractText(msg: any): string {
   return (
     msg.message?.conversation ||
     msg.message?.extendedTextMessage?.text ||
+    // A caption is the message when there is a picture: a customer who sends
+    // a photo of their licence with "هذي رخصتنا" said something.
+    msg.message?.imageMessage?.caption ||
+    msg.message?.videoMessage?.caption ||
+    msg.message?.documentMessage?.caption ||
+    msg.message?.viewOnceMessage?.message?.interactiveMessage?.body?.text ||
+    msg.message?.interactiveMessage?.body?.text ||
     msg.message?.buttonsResponseMessage?.selectedDisplayText ||
     msg.message?.listResponseMessage?.title ||
     msg.message?.templateButtonReplyMessage?.selectedDisplayText ||

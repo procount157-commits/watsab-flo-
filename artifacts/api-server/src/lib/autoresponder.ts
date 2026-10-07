@@ -21,6 +21,27 @@ const TEMPLATE_OPENERS = [
   "شكرا لتواصلك", "شكرا لتواصلكم", "شكرا على تواصلك",
   "مرحبا بك في", "اهلا بك في", "تم استلام رسالتك", "وصلتنا رسالتك",
   "لقد قمت بتوصيلك", "سيتواصل معك احد", "سيتم الرد عليك",
+  // Seen on this number and missed: the greeting a business sets once and
+  // forgets — "شكرا لك على تواصلك مع منجرة النقش", "Thank you for reaching
+  // Drill and Hummer", "مرحبًا بكم في ألماس".
+  "شكرا لك على تواصلك", "شكرا لك على التواصل", "شكرا لتواصلك مع", "شكرا على التواصل",
+  "مرحبا بكم في", "اهلا بكم في", "اهلا وسهلا بكم في", "حياكم الله في",
+  "thank you for reaching", "thanks for reaching", "thank you for choosing", "thanks for choosing",
+  "thank you for getting in touch", "welcome to our",
+];
+
+/** The question a greeting template ends on — it asks, but no one is there yet. */
+const TEMPLATE_QUESTIONS = [
+  "how can we help", "how may we help", "how can i help you", "how may i assist", "please let us know how",
+  "please let us know", "let us know how we can",
+  "كيف يمكننا خدمتك", "كيف نقدر نخدمك", "كيف يمكننا مساعدتك", "كيف نخدمك", "اخبرنا كيف",
+  "يسعدنا خدمتكم", "يسرنا خدمتكم", "يسعدنا خدمتك", "يسرنا خدمتك",
+];
+
+/** Broadcast-channel promotion: "subscribe to our channel", "follow us". */
+const PROMO_HINTS = [
+  "subscribe to our channel", "follow our channel", "join our channel", "follow us on",
+  "اشترك في قناتنا", "تابعوا قناتنا", "تابعنا على", "انضم لقناتنا",
 ];
 
 /** Phrases that promise a human will follow — the signature of a holding reply. */
@@ -71,6 +92,12 @@ export function detectAutoresponder(
   const holding = HOLDING_PHRASES.find(has);
   if (holding) { score += 0.35; signals.push(`وعد بالرد: «${holding}»`); }
 
+  const asked = TEMPLATE_QUESTIONS.find(has);
+  if (asked) { score += opener ? 0.2 : 0.3; signals.push(`سؤال القالب: «${asked}»`); }
+
+  const promo = PROMO_HINTS.find(has);
+  if (promo) { score += 0.6; signals.push(`دعوة لقناة: «${promo}»`); }
+
   const menu = MENU_HINTS.find(has);
   // A numbered menu is conclusive on its own, whenever it arrives — no person
   // opens a conversation by offering you options to press.
@@ -91,6 +118,8 @@ export function detectAutoresponder(
   // An autoresponder states; it does not ask. A question mark is the single
   // strongest sign a human is on the other end, so it pulls the score down
   // rather than merely failing to raise it.
+  // The greetings that slipped through on this number asked "how can we
+  // help" without a question mark; the person who types one usually means it.
   if (/[?؟]/.test(raw) && !menu) { score -= 0.35; signals.push("يحتوي سؤالاً"); }
 
   const confidence = Math.max(0, Math.min(1, score));

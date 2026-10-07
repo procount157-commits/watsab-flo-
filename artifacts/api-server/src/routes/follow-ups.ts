@@ -13,6 +13,7 @@ import { requireAuth } from "../lib/auth";
 import { enrolLead, enrolGroup, cancelPendingFollowUps } from "../lib/follow-up-engine";
 import { classify, classifyIntent, INTENT_LABELS_AR, type Intent } from "../lib/intent";
 import { logger } from "../lib/logger";
+import { modeOf, runSmartFollowUps, STEP_BASE } from "../lib/smart-followup";
 
 const router = Router();
 router.use(requireAuth);
@@ -287,3 +288,26 @@ router.get("/jobs", async (req, res) => {
 });
 
 export default router;
+
+
+// ── The follow-up خالد writes ─────────────────────────────────────
+// GET  /smart          → { mode, recent: drafts and decisions }
+// PATCH /smart {mode}  → off | dry | live
+// POST /smart/run      → one round now
+router.get("/smart", async (req, res) => {
+  const userId = req.session.userId!;
+  const recent = await db.execute(sql`SELECT id, phone, step - ${STEP_BASE} + 1 AS rung, verdict, reason, draft, executed, created_at
+    FROM followup_deliberations WHERE user_id = ${userId} AND step >= ${STEP_BASE} ORDER BY created_at DESC LIMIT 40`);
+  res.json({ mode: await modeOf(userId), recent: recent.rows });
+});
+
+router.patch("/smart", async (req, res) => {
+  const userId = req.session.userId!;
+  const mode = String((req.body as any)?.mode ?? "");
+  if (!["off", "dry", "live"].includes(mode)) return res.status(400).json({ error: "الوضع: off أو dry أو live" });
+  await db.execute(sql`UPDATE business_profile SET smart_followup = ${mode} WHERE user_id = ${userId}`);
+  logger.info({ userId, mode }, "smart follow-up mode changed");
+  res.json({ mode });
+});
+
+router.post("/smart/run", async (req, res) => res.json(await runSmartFollowUps(req.session.userId!)));

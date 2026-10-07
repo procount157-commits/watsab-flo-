@@ -93,6 +93,13 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "reask", note: "يسأل عن الحجم وهو معروف", fix: `الحجم معروف (${k.size}) — لا تسأل عنه.` });
   }
 
+  // A template's blank that was never filled: "Hi, this is [Name] from the
+  // sales team" went to a customer on this number.
+  const blank = /\[[^\]\n]{1,30}\]|\{[^}\n]{1,30}\}|<[^>\n]{1,20}>|\bX{3,}\b|_{3,}/.exec(text);
+  if (blank) {
+    issues.push({ code: "placeholder", note: `خانة قالب لم تُملأ: ${blank[0]}`, fix: `احذف «${blank[0]}» واكتب الكلام نفسه — اسمك الحقيقي أو اترك الجملة بدونها.` });
+  }
+
   // Numbers the company never gave it.
   const allowed = new Set([...claims(ctx.facts ?? ""), ...claims(ctx.customer)]);
   const invented = claims(text).filter((c) => !allowed.has(c));
@@ -116,9 +123,14 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "oversell", note: "يعرض من جديد بعد أن وافق العميل", fix: "العميل وافق — انتقل للتنفيذ: الخطوة التالية وموعدها فقط." });
   }
 
-  const weights: Record<string, number> = { long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
+  const weights: Record<string, number> = { placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (weights[i.code] ?? 10), 0));
   return { score, issues };
+}
+
+/** Must not be sent as it is, rewritten or not. */
+export function blocksSend(r: CheckResult): boolean {
+  return r.issues.some((i) => i.code === "placeholder" || i.code === "reveal");
 }
 
 /** Worth a rewrite: anything but a cosmetic same-opening. */

@@ -140,6 +140,7 @@ export async function voiceFor(userId: number, platform: SocialPlatform, job: Jo
   const [profile] = await db.select({ guardrails: businessProfileTable.guardrails }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
   return corePrompt({
     channel: "social",
+    role,
     identity: `اسمك ${me?.name ?? def.name}، ${me?.title ?? def.title} في فريق ${PLATFORM[platform].labelAr}.`,
     persona: me?.persona ?? def.persona,
     rules: [doc, profile?.guardrails ? `ما لا يُقال أبداً بأمر صاحب العمل: ${profile.guardrails}` : ""],

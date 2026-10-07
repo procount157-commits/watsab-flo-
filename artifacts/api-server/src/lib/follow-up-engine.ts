@@ -40,6 +40,7 @@ import { notify, esc } from "./telegram";
 import { say } from "./agent-comms";
 import { assertCanSend } from "./plans";
 import { provisionOnConnect } from "./provision";
+import { lastOutreach, outreachPreamble, savedName } from "./outreach-context";
 
 // How often the worker looks for due jobs.
 const TICK_MS = 60_000;
@@ -419,7 +420,11 @@ async function autoReplyIfAppropriate(
   // What the team knows about this lead and where the sale is — told to the
   // employee outright, so it is not inferred from the transcript and asked
   // about again.
-  const card = await cardPreamble(userId, phone).catch(() => "");
+  const card0 = await cardPreamble(userId, phone).catch(() => "");
+  // What this conversation is a reply to — the campaign they received.
+  const company = await savedName(userId, phone).catch(() => null);
+  const outreach = outreachPreamble(await lastOutreach(userId, phone, company).catch(() => null), company);
+  const card = [outreach, card0].filter(Boolean).join("\n\n");
 
   // Pass the phone so the reply sees the conversation, not just this line.
   const leadCard = await getCard(userId, phone).catch(() => null);
