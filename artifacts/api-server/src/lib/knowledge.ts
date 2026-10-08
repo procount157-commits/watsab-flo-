@@ -16,6 +16,7 @@ import { logger } from "./logger";
 import { WORK_PROTOCOL, MIRROR, NEVER, channelExamples, finalCheck as coreCheck } from "./prompt-core";
 import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
 import { receipt } from "./graph/receipts";
+import { read, replyPrompt, englishName, type Reading } from "./reply-brain";
 
 // Words too common to tell entries apart; matching on them makes everything
 // look equally relevant.
@@ -334,6 +335,8 @@ export interface AnswerResult {
   quality?: { score: number; issues: string[]; rewritten: boolean; firstDraft?: string };
   /** For the training arena: what went into the reply. */
   debug?: { promptChars: number; kbTitles: string[] };
+  /** How the message was read, when it was read first. */
+  reading?: Reading | null;
 }
 
 /**
@@ -400,6 +403,13 @@ export async function answerFromKnowledge(
     card?: LeadCard | null;
     /** A conversation to answer instead of the stored one — the training arena. */
     history?: Array<{ role: "user" | "assistant"; content: string }>;
+    /**
+     * Who is replying. Given, the reply is made the short way: the message is
+     * read first (reply-brain) and the prompt is only what this reply needs.
+     */
+    speaker?: { name: string; title?: string | null };
+    /** What we sent this customer before they wrote. */
+    outreach?: { campaign: string; text: string } | null;
   } = {},
 ): Promise<AnswerResult> {
   const [profile, history, memory] = await Promise.all([
@@ -460,7 +470,19 @@ export async function answerFromKnowledge(
       : [...history, { role: "user" as const, content: question }];
 
     const customerTurns = turns.filter((t) => t.role === "user").length;
-    const system = buildSystemPrompt(profile, found, memory, persona, job, finalCheck, customerTurns, leadCard);
+    const ourLast = [...turns].reverse().find((t) => t.role === "assistant")?.content ?? null;
+    const reading = opts.speaker
+      ? read(question, { campaignTopic: opts.outreach ? `${opts.outreach.campaign}: ${opts.outreach.text.split("\n").find((l) => l.trim().length > 25) ?? ""}` : null, ourLast, known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity } : undefined })
+      : null;
+    const knownLines = opts.card ? [opts.card.licence && `الرخصة: ${opts.card.licence}`, opts.card.activity && `النشاط: ${opts.card.activity}`, opts.card.size && `الحجم: ${opts.card.size}`, opts.card.pain && `ما يقلقه: ${opts.card.pain}`].filter(Boolean) as string[] : [];
+    const system = reading && opts.speaker
+      ? replyPrompt({
+          name: opts.speaker.name, title: opts.speaker.title, firm: profile?.name ?? "الشركة", firmLine: profile?.description ?? null,
+          outreach: opts.outreach ? `حملة «${opts.outreach.campaign}»:\n«${opts.outreach.text}»` : (ourLast ? `آخر رسالة منا: «${ourLast.slice(0, 500)}»` : null),
+          known: knownLines, reading, guardrails: profile?.guardrails ?? null,
+          facts: found.slice(0, 3).map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 450)}`).join("\n"),
+        })
+      : buildSystemPrompt(profile, found, memory, persona, job, finalCheck, customerTurns, leadCard);
     const out = await complete([
       { role: "system", content: system },
       ...turns,
@@ -472,6 +494,7 @@ export async function answerFromKnowledge(
       const previous = [...turns].reverse().find((t) => t.role === "assistant")?.content ?? null;
       const ctx = {
         customer: question, previous, stage: opts.card?.stage,
+        reading, names: opts.speaker ? [opts.speaker.name, englishName(opts.speaker.name)] : undefined,
         known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity, size: opts.card.size, staff: opts.card.staff } : undefined,
         facts: [found.map((f) => `${f.entry.title}\n${f.entry.content}`).join("\n"), profile?.description ?? ""].join("\n"),
       };
@@ -500,6 +523,7 @@ export async function answerFromKnowledge(
         reply, provider: out.provider, kbIds,
         quality: { score: q.score, issues: q.issues.map((i) => i.note), rewritten, firstDraft: rewritten ? firstDraft : undefined },
         debug: { promptChars: system.length, kbTitles: found.map((f) => f.entry.title) },
+        reading,
       };
     }
     logger.info({ userId }, "model unavailable — answering from the knowledge base directly");
@@ -557,11 +581,12 @@ export async function logAutoReply(row: {
   provider?: string; kbIds?: number[]; intent?: string; skipped?: string;
   agentRole?: string | null;
   quality?: AnswerResult["quality"];
+  reading?: Reading | null;
 }) {
   receipt({
     userId: row.userId, node: row.agentRole ?? (row.reply ? "sales" : "router"), graph: "whatsapp",
     action: row.reply ? "reply" : "decide", status: row.reply ? "ok" : "blocked", subject: row.phone,
-    evidence: { intent: row.intent ?? null, kb: row.kbIds ?? [], quality: row.quality?.score ?? null, rewritten: !!row.quality?.rewritten },
+    evidence: { intent: row.intent ?? null, situation: row.reading?.situation ?? null, goal: row.reading?.goal ?? null, kb: row.kbIds ?? [], quality: row.quality?.score ?? null, rewritten: !!row.quality?.rewritten },
     why: row.skipped ?? (row.quality?.issues?.length ? row.quality.issues.join(" · ") : null),
   });
   await db.insert(autoReplyLogTable).values({
@@ -574,7 +599,7 @@ export async function logAutoReply(row: {
     skipped: row.skipped?.slice(0, 60) ?? null,
     agentRole: row.agentRole ?? null,
     qualityScore: row.quality?.score ?? null,
-    qualityNotes: row.quality?.issues.length ? row.quality.issues.join(" · ").slice(0, 1_000) : null,
+    qualityNotes: [row.reading ? `قراءة: ${row.reading.meaning} ← ${row.reading.goal}` : "", ...(row.quality?.issues ?? [])].filter(Boolean).join(" · ").slice(0, 1_000) || null,
     rewritten: !!row.quality?.rewritten,
   }).catch(() => {});
 }

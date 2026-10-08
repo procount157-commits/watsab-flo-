@@ -423,7 +423,8 @@ async function autoReplyIfAppropriate(
   const card0 = await cardPreamble(userId, phone).catch(() => "");
   // What this conversation is a reply to — the campaign they received.
   const company = await savedName(userId, phone).catch(() => null);
-  const outreach = outreachPreamble(await lastOutreach(userId, phone, company).catch(() => null), company);
+  const sent = await lastOutreach(userId, phone, company).catch(() => null);
+  const outreach = outreachPreamble(sent, company);
   const card = [outreach, card0].filter(Boolean).join("\n\n");
 
   // Pass the phone so the reply sees the conversation, not just this line.
@@ -433,7 +434,12 @@ async function autoReplyIfAppropriate(
     routing ? agentJob(routing) : undefined,
     finalCheck,
     card || undefined,
-    { card: leadCard },
+    {
+      card: leadCard,
+      // Read the message first and write the short way, as this employee.
+      speaker: { name: routing?.agent.name ?? "هال", title: routing?.agent.title ?? null },
+      outreach: sent ? { campaign: sent.campaign, text: sent.text } : null,
+    },
   ));
   if (!answer.reply) {
     if (answer.retryable && attempt < REPLY_RETRIES) {
@@ -497,7 +503,12 @@ async function autoReplyIfAppropriate(
     const asVoice = theyspoke && (await voiceRepliesOn(userId)) && sayable(answer.reply).ok;
     if (asVoice) await sendVoiceNote(userId, phone, answer.reply);
     else await sendMessage(userId, phone, answer.reply);
-    await logAutoReply({ userId, phone, incoming: text, reply: answer.reply, provider: answer.provider, kbIds: answer.kbIds, intent, agentRole: routing?.agent.role, quality: answer.quality });
+    await logAutoReply({ userId, phone, incoming: text, reply: answer.reply, provider: answer.provider, kbIds: answer.kbIds, intent, agentRole: routing?.agent.role, quality: answer.quality, reading: answer.reading });
+    // They declined and we closed politely: nobody follows them up after this.
+    if (answer.reading?.closes) {
+      await db.update(leadSourcesTable).set({ lastIntent: "not_interested", lastIntentAt: new Date() })
+        .where(and(eq(leadSourcesTable.userId, userId), eq(leadSourcesTable.phone, phone))).catch(() => {});
+    }
     logger.info({ userId, phone, provider: answer.provider, kb: answer.kbIds }, "auto-reply sent");
   } catch (err: any) {
     await logAutoReply({ userId, phone, incoming: text, intent, skipped: `فشل الإرسال: ${String(err?.message).slice(0, 40)}`, agentRole: routing?.agent.role });

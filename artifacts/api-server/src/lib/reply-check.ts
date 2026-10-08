@@ -21,6 +21,10 @@ export interface CheckContext {
   stage?: number;
   /** Everything the reply may state as fact — the knowledge entries used. */
   facts?: string;
+  /** What the message was read as (reply-brain): what this reply must do and must not. */
+  reading?: { situation: string; mayAsk: boolean; forbid: string[] } | null;
+  /** The names the employee may call themselves. */
+  names?: string[];
 }
 
 export interface Issue { code: string; note: string; fix: string }
@@ -33,6 +37,7 @@ const ROBOTIC = [
   "يسعدني", "يسرني", "لا تتردد", "نحن هنا لخدمتك", "سأكون سعيدا", "شكرا لتواصلك", "نتشرف",
   "في انتظار ردكم", "اتمني ان يكون ذلك واضحا", "دعني اوضح لك", "بناء علي ما ذكرت", "هل هناك اي شيء اخر",
   "لا تتردد في التواصل", "بكل سرور", "عزيزي العميل",
+  "just checking in", "i hope this finds you well", "hope you are doing well", "feel free to", "touching base", "thanks for reaching out",
 ];
 const SELF_REVEAL = /(ذكاء اصطناعي|نموذج لغوي|كبوت|انا بوت|as an ai|language model|chatgpt|openai)/i;
 
@@ -100,6 +105,31 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "placeholder", note: `خانة قالب لم تُملأ: ${blank[0]}`, fix: `احذف «${blank[0]}» واكتب الكلام نفسه — اسمك الحقيقي أو اترك الجملة بدونها.` });
   }
 
+  // The reading said what this reply is for; hold it to that.
+  const r = ctx.reading;
+  if (r) {
+    const licenceAsked = asks(/(مين ?لاند|فري ?زون|mainland|free ?zone|نوع الرخصه|licen[cs]e type)/i);
+    if (licenceAsked && r.forbid.some((f) => f.includes("الرخصة"))) {
+      issues.push({ code: "licence", note: "يسأل عن الرخصة والموقف لا يسمح", fix: "احذف سؤال الرخصة. افعل ما طلبته القراءة فقط." });
+    }
+    if (!r.mayAsk && /[?؟]/.test(text)) {
+      issues.push({ code: "asked", note: "يسأل بعد أن رفض العميل", fix: "احذف السؤال: اشكره واترك الباب مفتوحاً بجملة، وانتهِ." });
+    }
+    if ((r.situation === "who" || r.situation === "confused" || r.situation === "language") && !/(pro ?count|بروكاونت|برو كاونت)/i.test(text)) {
+      issues.push({ code: "unanswered", note: "لم يقل من نحن ولماذا راسلناه، والعميل سأل أو لم يفهم", fix: "ابدأ بمن نحن (الاسم وبروكاونت للمحاسبة) ولماذا راسلناه في نصف سطر." });
+    }
+    if (r.situation === "counter_pitch" && /(how can (we|i) (help|assist)|your .* needs|كيف نقدر نساعدك في)/i.test(text)) {
+      issues.push({ code: "role", note: "يتصرف كأنه عميل للشركة التي تعرض خدماتها", fix: "قل بلطف إننا لا نحتاج خدمته الآن، ثم سبب رسالتنا." });
+    }
+  }
+  // The name it calls itself must be its own.
+  if (ctx.names?.length) {
+    const said = /(?:\bI'?m|\bI am|\bthis is|معك|أنا|انا)\s+([A-Za-z\u0600-\u06FF]{2,})/i.exec(text)?.[1];
+    if (said && !ctx.names.some((n) => n.toLowerCase() === said.toLowerCase()) && !/^(from|with|the|من|مع|فريق|team|here|هنا)$/i.test(said)) {
+      issues.push({ code: "name", note: `سمّى نفسه «${said}»`, fix: `اسمك ${ctx.names[0]} — صحّحه.` });
+    }
+  }
+
   // Numbers the company never gave it.
   const allowed = new Set([...claims(ctx.facts ?? ""), ...claims(ctx.customer)]);
   const invented = claims(text).filter((c) => !allowed.has(c));
@@ -123,14 +153,14 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "oversell", note: "يعرض من جديد بعد أن وافق العميل", fix: "العميل وافق — انتقل للتنفيذ: الخطوة التالية وموعدها فقط." });
   }
 
-  const weights: Record<string, number> = { placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
+  const weights: Record<string, number> = { licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (weights[i.code] ?? 10), 0));
   return { score, issues };
 }
 
 /** Must not be sent as it is, rewritten or not. */
 export function blocksSend(r: CheckResult): boolean {
-  return r.issues.some((i) => i.code === "placeholder" || i.code === "reveal");
+  return r.issues.some((i) => i.code === "placeholder" || i.code === "reveal" || i.code === "name" || i.code === "asked");
 }
 
 /** Worth a rewrite: anything but a cosmetic same-opening. */
