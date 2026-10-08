@@ -42,6 +42,7 @@ import { seedEmailDefaults, DEFAULT_SEQUENCE_NAME } from "../lib/email/seed";
 import { newToken, renderEmail, personalize } from "../lib/email/tracking";
 import { brandOf, directionOf } from "../lib/email/layout";
 import { logger } from "../lib/logger";
+import { runPipeline } from "../lib/email/pipeline";
 
 const router = Router();
 router.use(requireAuth);
@@ -482,6 +483,21 @@ router.patch("/lists/:id", async (req, res) => {
 });
 
 /** Take contacts out of a list; they stay in the audience and in other lists. */
+// سلمى's reading of a list, and the chain run again on demand.
+router.get("/lists/:id/analysis", async (req, res) => {
+  const [l] = await db.select({ analysis: emailListsTable.analysis, analyzedAt: emailListsTable.analyzedAt }).from(emailListsTable)
+    .where(and(eq(emailListsTable.id, Number(req.params.id)), eq(emailListsTable.userId, req.session.userId!))).limit(1);
+  if (!l) return res.status(404).json({ error: "القائمة غير موجودة" });
+  const missions = await db.select({ id: emailMissionsTable.id, name: emailMissionsTable.name, stage: emailMissionsTable.stage, status: emailMissionsTable.status, createdAt: emailMissionsTable.createdAt })
+    .from(emailMissionsTable).where(and(eq(emailMissionsTable.userId, req.session.userId!), eq(emailMissionsTable.sourceListId, Number(req.params.id)))).orderBy(desc(emailMissionsTable.createdAt)).limit(10);
+  res.json({ ...l, missions });
+});
+router.post("/lists/:id/pipeline", async (req, res) => {
+  const userId = req.session.userId!, id = Number(req.params.id);
+  setImmediate(() => { runPipeline(userId, id).catch((err) => logger.warn({ userId, listId: id, err: String(err?.message ?? err) }, "list pipeline failed")); });
+  res.json({ started: true });
+});
+
 router.post("/lists/:id/remove", async (req, res) => {
   const userId = req.session.userId!;
   const listId = Number(req.params.id);
@@ -675,6 +691,14 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
   }
 
   logger.info({ userId, file: fileName, total: report.total, kept: report.kept, inserted, mxBad, listId, sub: subLists.length, enrolled, whatsapp: whatsapp?.added ?? 0 }, "استيراد بريد");
+  // The team takes it from here: cleaned, read, recommended, written, prepared
+  // for approval — without the owner choosing anything. In the background:
+  // the upload answers now, the chain reports in the team's feed.
+  const pipeline = body.auto !== "false" && body.auto !== false && report.rows.length > 0;
+  if (pipeline) {
+    const lid = listId;
+    setImmediate(() => { runPipeline(userId, lid).catch((err) => logger.warn({ userId, listId: lid, err: String(err?.message ?? err) }, "list pipeline failed")); });
+  }
   res.json({
     file: fileName || null, columns, total: report.total, kept: report.kept, inserted, alreadyKnown: report.kept - inserted,
     invalid: report.invalid, duplicates: report.duplicates, roleAddresses: report.roleAddresses, mxBad,
@@ -683,7 +707,7 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
     extraAddresses: report.extraAddresses ?? 0,
     phoneOnly: phoneOnly.length,
     phoneOnlySample: phoneOnly.slice(0, 5),
-    list: { id: listId, name: listName }, addedTo: reused, folder: folder?.name || null, subLists, enrolled, sample: report.sample,
+    list: { id: listId, name: listName }, addedTo: reused, pipeline, folder: folder?.name || null, subLists, enrolled, sample: report.sample,
     whatsapp, sheets: parsed?.sheets ?? null, byCountry: parsed?.byCountry ?? null,
   });
 });

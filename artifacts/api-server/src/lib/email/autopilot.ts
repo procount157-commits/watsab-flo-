@@ -166,7 +166,7 @@ export function campaignForSector(sector: string | null): string {
  * the next wave waits. With a sector, only that sector's mission counts —
  * real estate waiting for approval does not stop the tourism wave.
  */
-async function busy(listId: number, sector?: string | null): Promise<boolean> {
+export async function busy(listId: number, sector?: string | null): Promise<boolean> {
   const [r] = await db.select({ n: sql<number>`count(*)` }).from(emailMissionsTable)
     .where(and(
       eq(emailMissionsTable.sourceListId, listId), eq(emailMissionsTable.status, "active"),
@@ -181,7 +181,7 @@ export const MAX_SECTOR_WAVES = 3;
 export const MIN_SECTOR = 15;
 
 /** Who in the list has not been written to yet, by sector — biggest first. */
-async function unsentBySector(listId: number): Promise<Array<{ sector: string; n: number }>> {
+export async function unsentBySector(listId: number): Promise<Array<{ sector: string; n: number }>> {
   const r = await db.execute<{ sector: string; n: number }>(sql`
     SELECT c.sector, count(*)::int AS n FROM email_list_members lm JOIN email_contacts c ON c.id = lm.contact_id
     WHERE lm.list_id = ${listId} AND c.status = 'active' AND coalesce(c.mx_ok, true) AND c.last_sent_at IS NULL AND c.sector IS NOT NULL

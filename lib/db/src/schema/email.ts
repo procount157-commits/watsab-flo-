@@ -81,6 +81,9 @@ export const emailContactsTable = pgTable("email_contacts", {
 }, (t) => [index("idx_email_contacts_user").on(t.userId, t.status), unique().on(t.userId, t.email)]);
 
 export const emailListsTable = pgTable("email_lists", {
+  /** سلمى's reading of the list: segments, problems, recommended campaigns. */
+  analysis:     jsonb("analysis"),
+  analyzedAt:   timestamp("analyzed_at", { withTimezone: true }),
   id:          serial("id").primaryKey(),
   userId:      integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   name:        varchar("name", { length: 160 }).notNull(),

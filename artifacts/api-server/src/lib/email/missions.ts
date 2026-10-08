@@ -29,7 +29,8 @@ import { writeCampaign, rememberLesson, learnFrom, type EmailDraft } from "./age
 import { count, describe } from "./segments";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { INTENSITY, asIntensity } from "./intensity";
-import { trackingActive, retestHeld, getSettings } from "./service";
+import { trackingActive, retestHeld, getSettings, signals } from "./service";
+import { warmupCap } from "./health";
 import { activity, guardCheck, formatIssues, onDuty, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
 
@@ -123,6 +124,27 @@ export async function setAudience(userId: number, id: number, filter: SegmentFil
   await log(id, `غيّر صاحب العمل الجمهور: ${describe(filter)} — ${await count(userId, filter, true)} يمكن مراسلتهم.`, "note");
 }
 
+/**
+ * طارق's card: what the owner approves, in numbers. Pure apart from reading
+ * today's sending allowance.
+ */
+export async function campaignCard(userId: number, audience: number, draft: EmailDraft, shapeNotes: string[]) {
+  const s = await getSettings(userId);
+  const sig = await signals(userId).catch(() => null);
+  const perDay = s ? Math.max(1, warmupCap(s.dailyCap, sig?.senderAgeDays ?? 0, s.warmup)) : 50;
+  const days = Math.max(1, Math.ceil(audience / perDay));
+  const follow = draft.followups.length;
+  const lastFollow = follow ? Math.round(Math.max(...draft.followups.map((f) => f.afterHours)) / 24) : 0;
+  const line = `${audience.toLocaleString("en")} شركة، تُرسل خلال ${days} ${days === 1 ? "يوم" : "أيام"} (${perDay.toLocaleString("en")} يومياً بحسب إحماء العنوان)، ${follow ? `و${follow} متابعات حتى اليوم ${lastFollow}` : "بلا متابعات"}.`;
+  const text = [
+    `العنوان المقترح: «${draft.subjects[0] ?? ""}»${draft.subjects[1] ? ` — ويُختبر معه «${draft.subjects[1]}»` : ""}`,
+    `الجمهور: ${line}`,
+    draft.why ? `لماذا هذه الزاوية: ${draft.why}` : "",
+    shapeNotes.length ? `ملاحظات ماجد: ${shapeNotes.join(" · ")}` : "ماجد: الشكل والأرقام سليمة.",
+  ].filter(Boolean).join("\n");
+  return { line, text, perDay, days };
+}
+
 /** One step for one mission. Safe to call at any time; each stage checks its own evidence. */
 export async function runMission(m: EmailMission): Promise<void> {
   if (m.status !== "active") return;
@@ -161,7 +183,12 @@ export async function runMission(m: EmailMission): Promise<void> {
       // The owner reviews it anyway; what ماجد would have said goes with it.
       const shape = formatIssues(w.draft.html, "first");
       if (shape.length) await log(m.id, `ملاحظات ماجد على الشكل: ${shape.join(" · ")}`, "error");
-      await notify(m.userId, `<b>📧 نورة كتبت حملة «${esc(m.name)}» وتنتظر موافقتك</b>\n${esc(w.audience.description)} — ${w.audience.count} شركة\nالعنوان: ${esc(w.draft.subjects[0]!)}\nافتح البريد → المهام.`).catch(() => {});
+      // طارق: the campaign as the owner will judge it — who, how many, how
+      // long it takes at today's allowance, what follows — and the question.
+      const card = await campaignCard(m.userId, w.audience.count, w.draft, shape);
+      await log(m.id, card.text, "write");
+      await activity(m.userId, "email_creator", "ready", `جهّزت حملة «${m.name}» وأرسلتها لك للموافقة: ${card.line}`, { missionId: m.id });
+      await notify(m.userId, `<b>📧 طارق جهّز حملة «${esc(m.name)}» — تنتظر موافقتك</b>\n${esc(card.text)}\nافتح البريد → المهام.`).catch(() => {});
     } else {
       await launch({ ...m, pending: w.draft as any }, w.draft);
     }

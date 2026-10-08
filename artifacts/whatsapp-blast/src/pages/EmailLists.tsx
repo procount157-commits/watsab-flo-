@@ -18,6 +18,7 @@ import { api, input } from "@/components/AgentPanel";
 import { FolderSidebar, MoveToFolder, inFolder, type FolderSel } from "@/components/Folders";
 import { ContactDrawer, type Filter } from "./EmailAgent";
 import { ListHygiene } from "@/components/EmailHygiene";
+import { ListPipeline } from "@/components/ListPipeline";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const card = "bg-card border border-card-border rounded-xl";
@@ -109,6 +110,7 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
       if (!r.ok) throw new Error(d.error ?? "تعذّر الاستيراد");
       inv();
       toast.success(`${d.addedTo ? `أُضيف إلى «${d.addedTo}»` : `قائمة «${d.list?.name}»`}: ${n(d.kept)} بريد (${n(d.inserted)} جديد)${d.folder ? ` · في مجلد «${d.folder}»` : ""}${d.mxBad ? ` · ${n(d.mxBad)} نطاق لا يستقبل` : ""}${d.whatsapp?.added ? ` · ${n(d.whatsapp.added)} رقم واتساب` : ""}`);
+      if (d.pipeline) toast.info("الفريق استلم القائمة: ماجد ينظّف، سلمى تحلل وتوصي، نورة تكتب، وطارق يعرضها عليك للموافقة.");
       if (d.list?.id) navigate(`/email/lists/${d.list.id}`);
     } catch (e: any) { toast.error(e.message); }
     finally { setUploading(false); }
@@ -325,6 +327,7 @@ export function ListDetail({ id, onCampaign, onWrite }: { id: number; onCampaign
         ))}
       </div>
       <HealthBar l={l} />
+      <ListPipeline listId={l.id} />
       <ListHygiene listId={l.id} />
 
       <div className="grid lg:grid-cols-[1fr_17rem] gap-4 items-start">
