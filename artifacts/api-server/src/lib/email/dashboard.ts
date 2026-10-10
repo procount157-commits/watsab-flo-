@@ -4,6 +4,7 @@
 // is moving through its stages, who is hot, what each agent did, and what is
 // waiting for the owner's yes. One call, so the page is one request.
 
+import { trackingState } from "./public-url";
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, emailMissionsTable, emailCampaignsTable } from "@workspace/db";
 import { getAutopilot, targetLists, STAGES } from "./autopilot";
@@ -103,7 +104,7 @@ export async function dashboard(userId: number, days = 14) {
     })) })),
     hot, campaigns: campaigns.map((c) => ({ ...c, openRate: rate(c.opened, c.sent), clickRate: rate(c.clicked, c.sent), replyRate: rate(c.replied, c.sent) })),
     approvals: approvals.map((a) => ({ id: a.id, name: a.name, agentRole: a.agentRole, subject: (a.pending as any)?.subjects?.[0] ?? null, createdAt: a.createdAt })),
-    configured: isConfigured(settings), tracking: !!(process.env["SITE_URL"] ?? "") && !!settings?.tracking,
+    configured: isConfigured(settings), tracking: (await trackingState(userId)).can,
     language: settings?.defaultLanguage ?? "en",
     path: { intensity: asIntensity(settings?.followIntensity), steps: INTENSITY[asIntensity(settings?.followIntensity)].steps, firstAfterHours: INTENSITY[asIntensity(settings?.followIntensity)].firstAfterHours },
     stageNames: STAGES,

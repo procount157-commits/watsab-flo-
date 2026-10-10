@@ -81,7 +81,8 @@ export function cleanFilter(raw: any): SegmentFilter {
 /** The contacts a filter selects. `sendable` adds what sending always requires. */
 export async function resolve(userId: number, f: SegmentFilter, opts: { sendable?: boolean; limit?: number } = {}) {
   const conds = conditions(userId, f);
-  if (opts.sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`);
+  // الهدنة: من طلب أن نمهله لا يُختار، ولو كانت حالته «نشط».
+  if (opts.sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`, sql`(${c.quietUntil} is null or ${c.quietUntil} < now())`);
   const q = db.select().from(c).where(and(...conds)).orderBy(c.id);
   const lim = Math.min(opts.limit ?? Infinity, f.take ?? Infinity);
   return Number.isFinite(lim) ? q.limit(lim) : q;
@@ -89,7 +90,7 @@ export async function resolve(userId: number, f: SegmentFilter, opts: { sendable
 
 export async function count(userId: number, f: SegmentFilter, sendable = false): Promise<number> {
   const conds = conditions(userId, f);
-  if (sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`);
+  if (sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`, sql`(${c.quietUntil} is null or ${c.quietUntil} < now())`);
   const [r] = await db.select({ n: sql<number>`count(*)` }).from(c).where(and(...conds));
   return Math.min(Number(r?.n ?? 0), f.take ?? Infinity);
 }

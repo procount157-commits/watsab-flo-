@@ -27,3 +27,6 @@ artifacts/api-server/uploads-tmp/
 # per-user Baileys session dirs and the last confirmed WA Web version
 whatsapp-session/
 settings.json
+
+# نسخ احتياطية محلية من بيانات الحملات — لا تُرفع
+deploy/backups/

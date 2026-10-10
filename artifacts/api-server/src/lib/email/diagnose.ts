@@ -16,6 +16,7 @@ import {
 } from "@workspace/db";
 import { count as countSegment, describe as describeSegment } from "./segments";
 import { outboxState } from "../telegram";
+import { trackingState, probePublicUrl } from "./public-url";
 import type { SegmentFilter } from "@workspace/db";
 
 export type Check = {
@@ -171,7 +172,32 @@ export async function diagnose(userId: number): Promise<{ checks: Check[]; verdi
     : ok("telegram", "تقارير تليجرام", `مربوط بـ${tg.chatTitle ?? "محادثتك"}${out.sent ? ` · ${out.sent} أُرسل بعد تأخير` : ""}`),
   );
 
+  // ── قياس الفتح: يُفحَص فحصاً حقيقياً لا يُفترض ──
+  // هذا الفحص هو ما كان ينقص التشخيص كله: النظام كان يقول «أُرسلت ٥٦٠»
+  // و«فُتحت ٠» في سطرين متجاورين، كأن الثاني نتيجة الأول. ليس كذلك —
+  // لم يُقَس شيء. فإن كان العنوان مضبوطاً نطلب البكسل منه كما يطلبه
+  // بريد المستلم، وإن لم يكن فالسبب يُقال كما هو.
+  const tr = await trackingState(userId);
+  if (!tr.can) {
+    const [{ n: everSent }] = (await db.select({ n: sql<number>`count(*)` }).from(emailMessagesTable)
+      .where(and(eq(emailMessagesTable.userId, userId), isNotNull(emailMessagesTable.sentAt))));
+    checks.push({
+      id: "tracking", title: "قياس الفتح والنقر",
+      state: Number(everSent) > 0 ? "fail" : "warn",
+      detail: `${tr.why}${Number(everSent) > 0 ? ` — و${Number(everSent)} رسالة خرجت بالفعل بلا قياس` : ""}`,
+      fix: tr.howTo.join(" "),
+    });
+  } else {
+    const probe = await probePublicUrl(tr.base!);
+    checks.push(probe.ok
+      ? { id: "tracking", title: "قياس الفتح والنقر", state: "ok", detail: `العنوان ${tr.base} يستجيب في ${probe.ms}ms — البكسل يصل` }
+      : { id: "tracking", title: "قياس الفتح والنقر", state: "fail",
+          detail: `العنوان ${tr.base} مضبوط لكنه لا يستجيب: ${probe.why}`,
+          fix: "الرسائل ستُرسل وتصل، لكن الفتحات ستبقى صفراً. صحّح العنوان من: البريد → الإعدادات." });
+  }
+
   const bad = checks.filter((c) => c.state === "fail");
+  // قياس الفتح لا يمنع الإرسال — يمنع معرفة نتيجته.
   const canSend = !bad.some((c) => ["smtp", "from", "audience", "settings"].includes(c.id));
   const verdict = bad.length === 0
     ? "كل شيء جاهز للإرسال."

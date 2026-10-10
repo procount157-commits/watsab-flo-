@@ -22,6 +22,7 @@ import { EmailEditor, EmailPreviewModal } from "@/components/EmailEditor";
 import { KnowledgeTab } from "./EmailKnowledge";
 import { DashboardTab } from "./EmailDashboard";
 import { RegisterTab } from "./EmailRegister";
+import { SentTab } from "./EmailSent";
 import { WarmupCard } from "@/components/EmailHygiene";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -43,6 +44,7 @@ const TABS = [
   { key: "lists",     label: "القوائم",        icon: FolderOpen },
   { key: "contacts",  label: "الجمهور",        icon: Users },
   { key: "campaigns", label: "الحملات",         icon: Megaphone },
+  { key: "sent",      label: "المُرسَل",        icon: Send },
   { key: "register",  label: "سجل الإرسال",    icon: ListChecks },
   { key: "import",    label: "رفع Excel",      icon: Upload },
   { key: "agent",     label: "نورة",           icon: Sparkles },
@@ -107,6 +109,7 @@ export default function EmailMarketing() {
       {tab === "agent"     && <AgentTab initialFilter={writeFor} onMissionCreated={() => navigate("/email/missions")} />}
       {tab === "knowledge" && <KnowledgeTab />}
       {tab === "missions"  && <MissionsTab />}
+      {tab === "sent"      && <SentTab />}
       {tab === "register"  && <RegisterTab />}
       {tab === "campaigns" && <Campaigns initialListId={campaignFor} onUsedInitial={() => setCampaignFor(null)} />}
       {tab === "sequences" && <Sequences />}
@@ -135,9 +138,13 @@ function Overview({ ov }: { ov: any }) {
   return (
     <div className="space-y-4">
       {!ov.trackingBase && (
-        <div className={cn(card, "p-3 border-yellow-500/30 text-xs text-muted-foreground")}>
-          <AlertTriangle className="w-3.5 h-3.5 inline text-yellow-400 ml-1" />
-          لم يُضبط <code>SITE_URL</code> في الإعدادات — بدونه لا يمكن قياس الفتح والنقر ولا يعمل رابط إلغاء الاشتراك (تُرسل الرسائل بإلغاء اشتراك عبر البريد فقط).
+        <div className={cn(card, "p-3 border-yellow-500/30 text-xs text-muted-foreground space-y-1")}>
+          <p>
+            <AlertTriangle className="w-3.5 h-3.5 inline text-yellow-400 ml-1" />
+            <b className="text-yellow-400">لا عنوان عام مضبوط، فلا قياس فتحٍ ولا نقر.</b> الرقم الذي تراه صفراً ليس نتيجةً — لم يُقَس شيء:
+            كل رسالة خرجت حتى الآن خرجت بلا بكسل فتحٍ وبروابط غير متتبَّعة، ورابط إلغاء الاشتراك يعمل بالبريد فقط.
+          </p>
+          <p>اضبطه في <Link href="/email/settings" className="text-primary underline">الإعدادات → العنوان العام</Link> — ويكفي نفقٌ مجاني (Cloudflare Tunnel، ngrok) للتجربة.</p>
         </div>
       )}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
@@ -461,7 +468,13 @@ function TemplateView({ t, onClose }: { t: any; onClose: () => void }) {
 // ── Inbox ─────────────────────────────────────────────────────────
 function InboxTab() {
   const qc = useQueryClient();
-  const { data: rows = [] } = useQuery<any[]>({ queryKey: ["email-inbound"], queryFn: () => api("/api/email/inbound"), refetchInterval: 15_000 });
+  // الوارد يأتي مقسوماً بنوعه: الردود الحقيقية وحدها افتراضاً. صندوقٌ
+  // فيه أربعة عشر إعلاناً وردّان حقيقيان كان يُخفي الردّين.
+  const [view, setView] = useState<"replies" | "noise" | "all">("replies");
+  const { data: box } = useQuery<any>({ queryKey: ["email-inbound", view], queryFn: () => api(`/api/email/inbound?view=${view}`), refetchInterval: 15_000 });
+  const rows: any[] = box?.rows ?? [];
+  const counts: Record<string, number> = box?.counts ?? {};
+  const noise = Object.entries(counts).filter(([k]) => k !== "reply").reduce((n, [, v]) => n + v, 0);
   const [open, setOpen] = useState<number | null>(null);
   const [draft, setDraft] = useState<{ subject: string; body: string }>({ subject: "", body: "" });
   const inv = () => qc.invalidateQueries({ queryKey: ["email-inbound"] });
@@ -470,18 +483,35 @@ function InboxTab() {
   const ignore = useMutation({ mutationFn: (id: number) => api(`/api/email/inbound/${id}/ignore`, { method: "POST" }), onSuccess: inv });
   const hold = useMutation({ mutationFn: (id: number) => api(`/api/email/inbound/${id}/hold`, { method: "POST" }), onSuccess: () => { inv(); toast.success("لن يُرسل تلقائياً — ينتظرك"); } });
   const poll = useMutation({ mutationFn: () => api("/api/email/settings/poll", { method: "POST" }), onSuccess: (d: any) => { inv(); toast.success(d.lastError ? `خطأ: ${d.lastError}` : `قُرئت ${d.handled} رسالة`); }, onError: (e: Error) => toast.error(e.message) });
-  const INTENT: Record<string, string> = { interested: "مهتم", question: "سؤال", not_interested: "غير مهتم", complaint: "شكوى", opt_out: "إيقاف", greeting: "تحية", unclear: "غير واضح" };
+  const reclassify = useMutation({ mutationFn: () => api("/api/email/inbox/reclassify", { method: "POST" }), onSuccess: (d: any) => { inv(); toast.success(`أُعيد تصنيف ${d.changed} من ${d.scanned} رسالة`); }, onError: (e: Error) => toast.error(e.message) });
   const cur = rows.find((r) => r.id === open);
   useEffect(() => { if (cur) setDraft({ subject: cur.draftSubject ?? `Re: ${cur.subject ?? ""}`, body: cur.draftReply ?? "" }); }, [open]);
 
   return (
     <div className="grid lg:grid-cols-[22rem_1fr] gap-4">
       <div className={cn(card, "max-h-[40rem] overflow-y-auto")}>
-        <div className="p-3 border-b border-card-border flex items-center justify-between"><p className="text-sm font-semibold">الردود الواردة</p><button onClick={() => poll.mutate()} disabled={poll.isPending} className={ghost}>{poll.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} اقرأ الآن</button></div>
-        {rows.length === 0 && <p className="p-6 text-xs text-muted-foreground text-center">لا ردود بعد. تُقرأ من صندوق IMAP كل دقيقتين، أو تصل عبر webhook المزوّد.</p>}
+        <div className="p-3 border-b border-card-border space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold">الوارد</p>
+            <button onClick={() => poll.mutate()} disabled={poll.isPending} className={ghost}>{poll.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} اقرأ الآن</button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {([["replies", `ردود (${counts["reply"] ?? 0})`], ["noise", `ليست ردوداً (${noise})`], ["all", "الكل"]] as const).map(([k, l]) => (
+              <button key={k} onClick={() => setView(k as any)}
+                className={cn("px-2 py-1 rounded-lg text-[11px] border", view === k ? "bg-primary/15 text-primary border-primary/30" : "border-card-border hover:border-primary/40")}>{l}</button>
+            ))}
+            <button onClick={() => reclassify.mutate()} disabled={reclassify.isPending} className={cn(ghost, "mr-auto py-1 px-2")} title="يُعيد الحكم على الوارد القديم بالمصنّف الحالي">
+              {reclassify.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+            </button>
+          </div>
+          {view === "noise" && noise > 0 && (
+            <p className="text-[10px] text-muted-foreground leading-relaxed">إعلاناتٌ تُباع لنا، وردودٌ آلية، ونشرات، وطلبات وظائف. لا تُنشأ لها جهات اتصال ولا تُفتح لها صفقات.</p>
+          )}
+        </div>
+        {rows.length === 0 && <p className="p-6 text-xs text-muted-foreground text-center">{view === "replies" ? "لا ردود حقيقية بعد. تُقرأ من صندوق IMAP كل دقيقتين، أو تصل عبر webhook المزوّد." : "لا شيء هنا."}</p>}
         {rows.map((r) => (
           <button key={r.id} onClick={() => setOpen(r.id)} className={cn("w-full text-right p-3 border-b border-card-border hover:bg-muted/40", open === r.id && "bg-muted/60", r.state === "ignored" && "opacity-50")}>
-            <div className="flex items-center gap-2"><span className="text-xs font-semibold truncate">{r.company ?? r.fromName ?? r.fromEmail}</span><span className={cn("text-[10px] px-1.5 rounded", r.intent === "interested" ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>{INTENT[r.intent] ?? r.intent ?? ""}</span><span className="text-[10px] text-muted-foreground mr-auto">{ago(r.receivedAt)}</span></div>
+            <div className="flex items-center gap-2"><span className="text-xs font-semibold truncate">{r.company ?? r.fromName ?? r.fromEmail}</span><span className={cn("text-[10px] px-1.5 rounded", r.intent === "interested" ? "bg-primary/15 text-primary" : r.kind && r.kind !== "reply" ? "bg-muted/60 text-muted-foreground" : "bg-muted text-muted-foreground")}>{r.kind && r.kind !== "reply" ? r.kindLabel : (r.intentLabel ?? r.intent ?? "")}</span><span className="text-[10px] text-muted-foreground mr-auto">{ago(r.receivedAt)}</span></div>
             <p className="text-[11px] text-muted-foreground truncate mt-0.5">{r.summary ?? r.subject ?? ""}</p>
             <p className="text-[10px] mt-0.5">{r.state === "sent" ? <span className="text-green-400">رُدّ عليه</span> : r.state === "drafted" ? <span className="text-blue-400">مسودة جاهزة</span> : r.state === "ignored" ? "متجاهَل" : <span className="text-yellow-400">جديد</span>}</p>
           </button>
@@ -491,6 +521,16 @@ function InboxTab() {
         {!cur ? <p className="text-sm text-muted-foreground text-center py-10">اختر رداً.</p> : <>
           <div><p className="text-sm font-semibold">{cur.fromName ?? ""} <span className="font-mono text-xs text-muted-foreground" dir="ltr">&lt;{cur.fromEmail}&gt;</span>{cur.company ? ` — ${cur.company}` : ""}</p>
             <p className="text-[11px] text-muted-foreground">{cur.subject}{cur.ourSubject ? ` · ردّاً على «${cur.ourSubject}»` : ""}</p></div>
+          {cur.kind && cur.kind !== "reply" && (
+            <div className="rounded-lg border border-card-border bg-muted/30 p-2.5 space-y-1">
+              <p className="text-xs font-semibold">هذه ليست رداً علينا — {cur.kindLabel}</p>
+              {(cur.reasons ?? []).map((x: string, i: number) => <p key={i} className="text-[11px] text-muted-foreground">• {x}</p>)}
+            </div>
+          )}
+          {cur.kind === "reply" && cur.solicited === false && (
+            <p className="text-[11px] text-yellow-400">⚠️ لا سجلَّ إرسالٍ لهذا العنوان عندنا — يرجَّح أن العرض أُرسل بيدك من خارج النظام.</p>
+          )}
+          {cur.nextStep && <p className="text-xs rounded-lg bg-primary/10 text-primary p-2.5"><span className="opacity-70">الخطوة: </span>{cur.nextStep}</p>}
           {cur.summary && <p className="text-xs rounded-lg bg-muted/50 p-2.5"><span className="text-muted-foreground">ماذا يريد: </span>{cur.summary}</p>}
           <pre className="text-xs whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto rounded-lg border border-card-border p-3" dir="auto">{cur.text}</pre>
           <div className="flex items-center gap-2"><p className="text-xs font-semibold">ردّ هال</p><button onClick={() => redraft.mutate(cur.id)} disabled={redraft.isPending} className={ghost}>{redraft.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} {cur.draftReply ? "أعد الصياغة" : "اكتب مسودة"}</button></div>
@@ -502,6 +542,50 @@ function InboxTab() {
           <div className="flex gap-2"><button onClick={() => send.mutate(cur.id)} disabled={send.isPending || !draft.body.trim() || cur.state === "sent"} className={primary}><Send className="w-3.5 h-3.5" /> أرسل الرد</button><button onClick={() => ignore.mutate(cur.id)} className={ghost}>تجاهل</button></div>
         </>}
       </div>
+    </div>
+  );
+}
+
+/**
+ * العنوان العام — الحقل الذي لم يكن موجوداً، فبقي `SITE_URL` فارغاً في
+ * ملفٍ على القرص، وخرجت ٥٦٠ رسالة بلا قياس، وقُرئ «٠ فتحات» نتيجةً.
+ * والفحص هنا حقيقي: نطلب بكسل التتبّع من العنوان كما يطلبه بريد
+ * المستلم — فلا يُحفظ عنوانٌ يبدو صحيحاً ولا يصل منه شيء.
+ */
+function PublicUrlField({ value, onChange, state }: { value: string; onChange: (v: string) => void; state?: any }) {
+  const [res, setRes] = useState<any>(null);
+  const check = useMutation({
+    mutationFn: () => api("/api/email/settings/public-url/check", { method: "POST", body: JSON.stringify({ url: value }) }),
+    onSuccess: setRes, onError: (e: Error) => toast.error(e.message),
+  });
+  const live = state?.can;
+  return (
+    <div className="rounded-xl border border-card-border p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs font-semibold">العنوان العام — شرط قياس الفتح والنقر</label>
+        <span className={cn("text-[10px] px-1.5 py-0.5 rounded", live ? "bg-green-500/15 text-green-400" : "bg-yellow-500/15 text-yellow-400")}>
+          {live ? "القياس يعمل" : "لا قياس"}
+        </span>
+      </div>
+      <div className="flex gap-2">
+        <input className={cn(input, "flex-1")} dir="ltr" placeholder="https://app.pro-count.ae" value={value} onChange={(e) => { onChange(e.target.value); setRes(null); }} />
+        <button onClick={() => check.mutate()} disabled={check.isPending || !value.trim()} className={ghost}>
+          {check.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Stethoscope className="w-3 h-3" />} افحص
+        </button>
+      </div>
+      {res && (
+        <p className={cn("text-[11px] leading-relaxed", res.ok ? "text-green-400" : "text-red-400")}>
+          {res.ok ? `${res.note} (${res.ms}ms)` : res.why}
+          {res.warn && <span className="block text-yellow-400">{res.warn}</span>}
+        </p>
+      )}
+      {!live && !res && state?.why && <p className="text-[11px] text-muted-foreground leading-relaxed">{state.why}</p>}
+      {!live && (
+        <ul className="text-[11px] text-muted-foreground space-y-0.5 pr-4">
+          {(state?.howTo ?? []).map((h: string, i: number) => <li key={i} className="list-disc">{h}</li>)}
+        </ul>
+      )}
+      <p className="text-[10px] text-muted-foreground">لا يُحفظ عنوانٌ داخلي (localhost أو شبكة محلية): بريد المستلم لا يصله، وقبوله يُعيد الصفر نفسه.</p>
     </div>
   );
 }
@@ -538,6 +622,7 @@ function SettingsTab() {
           : <L l="API key" k="apiKey" type="password" />}
         <div className="grid md:grid-cols-4 gap-3"><L l="Reply-To (اختياري)" k="replyTo" /><L l="حصة الساعة" k="hourlyCap" type="number" /><L l="حصة اليوم" k="dailyCap" type="number" />
           <label className="text-xs flex items-center gap-2 pt-6"><input type="checkbox" checked={!!f.tracking} onChange={(e) => setF({ ...f, tracking: e.target.checked })} /> تتبّع الفتح والنقر</label></div>
+        <PublicUrlField value={f.publicUrl ?? ""} onChange={(v) => setF({ ...f, publicUrl: v })} state={data?.tracking} />
         <div><label className="text-xs font-semibold block mb-1.5">التوقيع (HTML)</label><textarea className={cn(input, "min-h-[5rem] text-xs")} value={f.signature ?? ""} onChange={(e) => setF({ ...f, signature: e.target.value })} placeholder="{{sender}}<br>بروكاونت للمحاسبة<br>+971 …" /></div>
         <p className="text-[11px] text-muted-foreground">ابدأ بحصة صغيرة (٤٠ في الساعة، ٣٠٠ في اليوم) لعنوان جديد وارفعها بعد أسبوعين من ارتداد منخفض. الإرسال داخل ساعات العمل فقط.</p>
       </div>

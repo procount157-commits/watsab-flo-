@@ -17,6 +17,7 @@ import {
 } from "@workspace/db";
 import { resolve as resolveSegment, describe as describeSegment } from "./segments";
 import { asLanguage, matchesLanguage, wrongLanguage, LANGUAGE_AR } from "./language";
+import { trackingState } from "./public-url";
 import type { SegmentFilter } from "@workspace/db";
 
 export type ReadyCheck = {
@@ -147,6 +148,15 @@ export async function campaignReadiness(userId: number, campaignId: number): Pro
   }
 
   // ── The status it is in ──
+  // ── هل يمكن أن نعرف ما يحدث بعد الإرسال أصلاً ──
+  // لا يمنع النشر، لكن صاحب العمل يجب أن يعلم قبل أن يضغط أن الرقم
+  // الذي سيراه بعد أسبوع صفرٌ لأن لا شيء يُقاس — لا لأن لا أحد فتح.
+  const tr = await trackingState(userId);
+  checks.push(tr.can
+    ? ok("tracking", "قياس الفتح", `يعمل عبر ${tr.base}`)
+    : warn("tracking", "قياس الفتح", tr.why ?? "غير مفعّل",
+        `${tr.howTo[0] ?? ""} ستُرسل الحملة وتصل، لكن «الفتحات» و«النقرات» ستبقى صفراً بلا معنى.`, "/email/settings"));
+
   if (c.status === "sending") {
     checks.push(warn("status", "الحالة", "هذه الحملة تُرسل الآن", "لا حاجة لنشرها مرة أخرى."));
   } else if (c.status === "completed") {

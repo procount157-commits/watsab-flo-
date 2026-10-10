@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, index, primaryKey, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, real, index, primaryKey, unique } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
 
 // ── Email marketing ───────────────────────────────────────────────
@@ -29,6 +29,8 @@ export const emailSettingsTable = pgTable("email_settings", {
   /** the guard's current hold: when it began and when it lifts */
   guardHeldAt:   timestamp("guard_held_at", { withTimezone: true }),
   guardHoldUntil: timestamp("guard_hold_until", { withTimezone: true }),
+  /** العنوان العام الذي يصل إليه بريد المستلم — بدونه لا تتبّع فتح ولا نقر. */
+  publicUrl:    varchar("public_url", { length: 300 }),
   /** branded (header, card, footer) | plain */
   layout:       varchar("layout", { length: 10 }).notNull().default("branded"),
   brandName:    varchar("brand_name", { length: 80 }),
@@ -76,6 +78,9 @@ export const emailContactsTable = pgTable("email_contacts", {
   mxCheckedAt:   timestamp("mx_checked_at", { withTimezone: true }),
   lastSentAt:    timestamp("last_sent_at", { withTimezone: true }),
   lastOpenedAt:  timestamp("last_opened_at", { withTimezone: true }),
+  /** هدنة: لا تُراسَل هذه الجهة قبل هذا التاريخ — طلبها ردُّها نفسه. */
+  quietUntil:   timestamp("quiet_until", { withTimezone: true }),
+  quietReason:  varchar("quiet_reason", { length: 200 }),
   lastRepliedAt: timestamp("last_replied_at", { withTimezone: true }),
   createdAt:     timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_email_contacts_user").on(t.userId, t.status), unique().on(t.userId, t.email)]);
@@ -241,6 +246,13 @@ export const emailInboundTable = pgTable("email_inbound", {
   messageIdHdr: varchar("message_id_hdr", { length: 300 }),
   inReplyTo:    varchar("in_reply_to", { length: 300 }),
   intent:       varchar("intent", { length: 20 }),
+  /** نوع الرسالة لا نيّتها: reply | auto_reply | bounce | cold_pitch | newsletter | spam */
+  kind:         varchar("kind", { length: 20 }),
+  /** هل أرسلنا لهذا العنوان رسالة قبل أن يكتب. الإشارة الوحيدة التي تميّز الرد من الإعلان. */
+  solicited:    boolean("solicited"),
+  confidence:   real("confidence"),
+  reasons:      jsonb("reasons"),
+  classifier:   varchar("classifier", { length: 20 }),
   summary:      text("summary"),
   draftReply:   text("draft_reply"),
   draftSubject: varchar("draft_subject", { length: 300 }),
@@ -249,7 +261,10 @@ export const emailInboundTable = pgTable("email_inbound", {
   /** When the draft goes out on its own; null waits for a person. */
   autoSendAt:   timestamp("auto_send_at", { withTimezone: true }),
   receivedAt:   timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
-}, (t) => [index("idx_email_inbound_user").on(t.userId, t.receivedAt)]);
+}, (t) => [
+  index("idx_email_inbound_user").on(t.userId, t.receivedAt),
+  index("idx_email_inbound_kind").on(t.userId, t.kind),
+]);
 
 export type EmailSettings   = typeof emailSettingsTable.$inferSelect;
 export type EmailContact    = typeof emailContactsTable.$inferSelect;

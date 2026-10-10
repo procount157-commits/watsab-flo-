@@ -98,7 +98,10 @@ check("...and the contact's pending rungs are cancelled", cancelled.length >= 1)
 await handleInbound(USER, { from: "MAILER-DAEMON@mx.invalid", subject: "Delivery Status Notification (Failure)", text: `Your message to ${contacts[4]!.email} could not be delivered.` });
 const [bounced] = await db.select().from(emailContactsTable).where(eq(emailContactsTable.id, contacts[4]!.id));
 check("a daemon bounce marks the contact bounced", bounced?.status === "bounced");
-check("...and is not filed as a reply", (await db.select().from(emailInboundTable).where(eq(emailInboundTable.fromEmail, "mailer-daemon@mx.invalid"))).length === 0);
+// الارتداد يُسجَّل الآن بنوعه بدل أن يُهدَر: صاحب العمل يرى ما وصل،
+// ويبقى خارج صندوق الردود لأن `state` = ignored و`kind` = bounce.
+const bRows = await db.select().from(emailInboundTable).where(eq(emailInboundTable.fromEmail, "mailer-daemon@mx.invalid"));
+check("...and is filed as a bounce, not a reply", bRows.length === 1 && bRows[0]!.kind === "bounce" && bRows[0]!.state === "ignored", `${bRows.length} · ${bRows[0]?.kind}`);
 
 // An unsubscribe reply.
 await handleInbound(USER, { from: contacts[5]!.email, subject: "Re: x", text: "الغاء الاشتراك" });
@@ -107,7 +110,10 @@ check("'إلغاء الاشتراك' by reply unsubscribes", unsub?.status === "
 
 // An auto-reply is not a reply.
 const auto = await handleInbound(USER, { from: contacts[6]!.email, subject: "Automatic reply: العنوان", text: "I am out of office" });
-check("an out-of-office is ignored", auto === null);
+check("an out-of-office is not a reply", auto?.isReply === false && auto?.kind === "auto_reply", `${auto?.kind}`);
+const [autoRow] = await db.select().from(emailInboundTable).where(eq(emailInboundTable.id, auto!.id));
+check("...and is filed out of the inbox, with its reason", autoRow?.state === "ignored" && ((autoRow?.reasons as string[] | null) ?? []).length > 0);
+check("...and no draft is written for a machine", !autoRow?.draftReply);
 
 await clean();
 console.log(`\n${pass}/${total} مرّ`);

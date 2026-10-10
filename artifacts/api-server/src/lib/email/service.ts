@@ -18,6 +18,7 @@ import { logger } from "../logger";
 import { notify, esc } from "../telegram";
 import { sendEmail, SendError, isConfigured, messageIdFor } from "./provider";
 import { newToken, renderEmail, firstName, companyName, personalize, unsubscribeUrl } from "./tracking";
+import { publicBase } from "./public-url";
 import { brandOf } from "./layout";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
@@ -25,7 +26,11 @@ import { byRisk, domainSignals, verifyDomains, holdRiskyQueued } from "./hygiene
 import { activity } from "./team";
 import { receipt } from "../graph/receipts";
 
-const SITE_URL = () => (process.env["SITE_URL"] ?? "").replace(/\/+$/, "");
+/**
+ * العنوان العام لم يكن يُقرأ إلا من البيئة، ولم تكن للواجهة سبيلٌ إليه —
+ * فظلّ فارغاً، وخرجت ٥٦٠ رسالةً بلا بكسلٍ ولا رابطٍ متتبَّع، وبقي
+ * «الفتحات: ٠» يُقرأ نتيجةً وهو غياب قياس. الآن الإعداد أولاً.
+ */
 const SECRET   = () => process.env["SESSION_SECRET"] ?? "wam";
 
 // ── Settings ──────────────────────────────────────────────────────
@@ -118,7 +123,7 @@ export async function startCampaign(userId: number, campaignId: number): Promise
   // Every domain is looked up before its first send, not only those imported
   // after the check existed — then the riskiest addresses are held back and
   // the rest go lowest-risk first (see hygiene.ts).
-  const unverified = members.map((m) => m.c).filter((x) => x.status === "active" && x.mxOk == null && !already.has(x.id)).map((x) => x.id);
+  const unverified = members.map((m) => m.c).filter((x) => x.status === "active" && !inTruce(x) && x.mxOk == null && !already.has(x.id)).map((x) => x.id);
   if (unverified.length) {
     await verifyDomains(userId, unverified, { maxDomains: 800 }).catch(() => null);
     const fresh = new Map((await db.select({ id: emailContactsTable.id, mxOk: emailContactsTable.mxOk }).from(emailContactsTable).where(inArray(emailContactsTable.id, unverified))).map((r) => [r.id, r.mxOk]));
@@ -127,7 +132,7 @@ export async function startCampaign(userId: number, campaignId: number): Promise
   let queued = 0, skipped = 0;
   const batch: Array<typeof emailMessagesTable.$inferInsert> = [];
   const sendable = members.map((m) => m.c).filter((contact) => {
-    const ok = contact.status === "active" && contact.mxOk !== false && !already.has(contact.id);
+    const ok = contact.status === "active" && !inTruce(contact) && contact.mxOk !== false && !already.has(contact.id);
     if (!ok) skipped++;
     return ok;
   });
@@ -185,7 +190,7 @@ export async function enrolInSequence(userId: number, sequenceId: number, contac
   // Spread the first rung over an hour so an import of five hundred does not
   // land as one burst; later rungs keep their offsets.
   for (const c of contacts) {
-    if (c.status !== "active" || c.mxOk === false || inFlight.has(c.id)) { skipped++; continue; }
+    if (c.status !== "active" || inTruce(c) || c.mxOk === false || inFlight.has(c.id)) { skipped++; continue; }
     const spread = Math.random() * 60 * 60_000;
     steps.forEach((st, i) => rows.push({
       userId, sequenceId, contactId: c.id, stepIndex: i,
@@ -197,6 +202,8 @@ export async function enrolInSequence(userId: number, sequenceId: number, contac
   logger.info({ userId, sequenceId, enrolled, skipped }, "تسجيل في تسلسل بريد");
   return { enrolled, skipped };
 }
+
+const inTruce = (c: { quietUntil?: Date | null }) => !!c.quietUntil && new Date(c.quietUntil) > new Date();
 
 export async function cancelSequencesFor(userId: number, contactId: number, reason: string): Promise<number> {
   const r = await db.update(emailSequenceJobsTable).set({ status: "cancelled", error: reason })
@@ -231,7 +238,7 @@ export async function enqueueDueSequenceSteps(now = new Date(), onlyUserId?: num
     const [seq] = await db.select().from(emailSequencesTable).where(eq(emailSequencesTable.id, job.sequenceId)).limit(1);
     const step = ((seq?.steps as EmailStep[]) ?? [])[job.stepIndex];
     const [contact] = await db.select().from(emailContactsTable).where(eq(emailContactsTable.id, job.contactId)).limit(1);
-    if (!seq?.isActive || !step || !contact || contact.status !== "active") {
+    if (!seq?.isActive || !step || !contact || contact.status !== "active" || inTruce(contact)) {
       await db.update(emailSequenceJobsTable).set({ status: "skipped", error: !seq?.isActive ? "التسلسل موقوف" : !step ? "خطوة غير موجودة" : "جهة الاتصال غير نشطة" })
         .where(eq(emailSequenceJobsTable.id, job.id));
       continue;
@@ -392,6 +399,10 @@ async function drainOne(userId: number) {
     return;
   }
   const [contact] = await db.select().from(emailContactsTable).where(eq(emailContactsTable.id, m.contactId)).limit(1);
+  if (contact && inTruce(contact)) {
+    await db.update(emailMessagesTable).set({ status: "cancelled", error: `ألغيت: هدنة حتى ${new Date(contact.quietUntil!).toISOString().slice(0, 10)} — ${contact.quietReason ?? "طلبها ردُّه"}` }).where(eq(emailMessagesTable.id, m.id));
+    return;
+  }
   if (contact && contact.status !== "active") {
     await db.update(emailMessagesTable).set({ status: "failed", error: `جهة الاتصال ${contact.status}` }).where(eq(emailMessagesTable.id, m.id));
     return;
@@ -408,12 +419,22 @@ async function drainOne(userId: number) {
     html = ((seq?.steps as EmailStep[]) ?? [])[job?.stepIndex ?? 0]?.html ?? "";
   }
   if (!html) {
-    await db.update(emailMessagesTable).set({ status: "failed", error: "بلا محتوى" }).where(eq(emailMessagesTable.id, m.id));
+    // رسالةٌ بلا جسم خطأُ إعدادٍ لا خطأُ تسليم، و«failed» كانت تحرق
+    // الجهة نهائياً: ١٧٦٢ شركة في هذا الحساب خرجت من الطابور هكذا يوم
+    // ٥ أكتوبر، بعد أن حُذفت حملتها فصار `campaign_id` فارغاً. الإلغاء
+    // يترك الجهة قابلةً للمراسلة في حملةٍ جديدة، والسبب مكتوبٌ صريح.
+    await db.update(emailMessagesTable).set({
+      status: "cancelled",
+      error: m.campaignId || m.sequenceJobId
+        ? "ألغيت: جسم الرسالة فارغ — أضف نصاً للحملة ثم أعد إرسالها"
+        : "ألغيت: حُذفت حملتها أو تتابعها، فلم يبقَ لها نص. الجهة ما زالت قابلة للمراسلة.",
+    }).where(eq(emailMessagesTable.id, m.id));
+    logger.warn({ userId, messageId: m.id, campaignId: m.campaignId, sequenceJobId: m.sequenceJobId }, "رسالة بلا جسم — أُلغيت ولم تُحرق");
     return;
   }
 
   const vars = varsFor(contact, s);
-  const base = SITE_URL();
+  const base = await publicBase(userId);
   const rendered = renderEmail(html + (s!.signature ? `<div style="margin-top:20px">${s!.signature}</div>` : ""), vars,
     { base, token: m.token, secret: SECRET(), pixel: !!s!.tracking, links: !!s!.tracking },
     { base, token: m.token, fromName: s!.fromName ?? s!.fromEmail!, fromEmail: s!.fromEmail! }, brandOf(s));
@@ -503,7 +524,7 @@ export async function overview(userId: number) {
     sender: s ? { provider: s.provider, fromName: s.fromName, fromEmail: s.fromEmail, hourlyCap: s.hourlyCap, dailyCap: s.dailyCap,
       dailyCapToday: warmupCap(s.dailyCap, (await signals(userId)).senderAgeDays, s.warmup), warmup: s.warmup,
       tracking: s.tracking, imap: !!s.imapHost, autoReply: s.autoReply } : null,
-    trackingBase: SITE_URL() || null,
+    trackingBase: (await publicBase(userId)) || null,
     contacts: { total: Number(totals?.contacts ?? 0), active: Number(totals?.active ?? 0), unsubscribed: Number(totals?.unsub ?? 0), bounced: Number(totals?.bounced ?? 0), lists: Number(lists?.n ?? 0) },
     today: { sent: Number(c?.sent ?? 0), opened: Number(c?.opened ?? 0), clicked: Number(c?.clicked ?? 0), replied: Number(c?.replied ?? 0), bounced: Number(c?.bounced ?? 0), failed: Number(c?.failed ?? 0),
       openRate: rate(Number(c?.opened ?? 0), Number(c?.sent ?? 0)), replyRate: rate(Number(c?.replied ?? 0), Number(c?.sent ?? 0)) },
@@ -526,7 +547,7 @@ export const LOW_OPEN_MIN_SAMPLE = 50;
 
 /** Opens can only be measured when the pixel can reach us: a public address and tracking on. */
 export async function trackingActive(userId: number): Promise<boolean> {
-  if (!(process.env["SITE_URL"] ?? "").trim()) return false;
+  if (!(await publicBase(userId))) return false;
   const s = await getSettings(userId);
   return !!s?.tracking;
 }

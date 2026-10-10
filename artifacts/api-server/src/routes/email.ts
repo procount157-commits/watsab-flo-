@@ -27,6 +27,11 @@ import { saveToNewGroup, validateInBackground } from "../lib/contact-save";
 import { folderForSector, listSector } from "../lib/folders";
 import { deleteContacts, deleteList } from "../lib/email/delete";
 import { diagnose } from "../lib/email/diagnose";
+import { sentList, sentSummary, sentPreview, type SentFilter } from "../lib/email/sent";
+import { trackingState, validatePublicUrl, probePublicUrl, publicBase } from "../lib/email/public-url";
+import { reclassifyInbox } from "../lib/email/reclassify";
+import { KIND_AR, INTENT_AR } from "../lib/email/classify";
+import { thread, threadBrief } from "../lib/email/thread";
 import { campaignReadiness } from "../lib/email/readiness";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { register as emailRegister } from "../lib/email/register";
@@ -57,6 +62,69 @@ router.use(requireAuth);
  * wrong password and a sleeping laptop fail identically from the outside.
  */
 router.get("/diagnose", async (req, res) => res.json(await diagnose(req.session.userId!)));
+
+// ── ما أُرسل فعلاً ────────────────────────────────────────────────
+// صفٌّ لكل رسالةٍ خرجت، ومعاينةٌ تُعيد بناء الرسالة بنفس الدوال التي
+// أرسلتها — فما يُعرض هو ما وصل، ومعه ما لم يصل.
+router.get("/sent", async (req, res) => {
+  const userId = req.session.userId!;
+  const filter = String(req.query["filter"] ?? "all") as SentFilter;
+  res.json({
+    ...(await sentList(userId, {
+      filter: ["all", "opened", "clicked", "replied", "bounced", "failed", "unopened"].includes(filter) ? filter : "all",
+      q: req.query["q"] ? String(req.query["q"]) : undefined,
+      campaignId: req.query["campaignId"] ? Number(req.query["campaignId"]) : null,
+      page: Number(req.query["page"]) || 0,
+      limit: Number(req.query["limit"]) || 50,
+    })),
+    summary: await sentSummary(userId),
+    tracking: await trackingState(userId),
+  });
+});
+
+router.get("/sent/:id", async (req, res) => {
+  const p = await sentPreview(req.session.userId!, Number(req.params["id"]));
+  if (!p) return res.status(404).json({ error: "الرسالة غير موجودة" });
+  res.json(p);
+});
+
+/** جسم الرسالة وحده، ليُعرض داخل إطار معزول في المتصفح. */
+router.get("/sent/:id/body", async (req, res) => {
+  const p = await sentPreview(req.session.userId!, Number(req.params["id"]));
+  if (!p) return res.status(404).send("not found");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  // لا نصوص ولا موارد خارجية إلا الصور: هذا نصُّ رسالةٍ يُعرض، لا صفحةٌ تُشغَّل.
+  res.setHeader("Content-Security-Policy", "default-src 'none'; img-src * data:; style-src 'unsafe-inline'; font-src *");
+  res.send(p.html);
+});
+
+/** الخيط كاملاً مع شركة واحدة — ما أرسلناه وما ردّوا، مرتّباً. */
+router.get("/contacts/:id/thread", async (req, res) => {
+  const t = await thread(req.session.userId!, Number(req.params["id"]), 40);
+  res.json({ ...t, brief: threadBrief(t, { turns: 12, chars: 600 }) });
+});
+
+// ── العنوان العام: فحصٌ حقيقي لا تحقّقٌ من الشكل ─────────────────
+router.post("/settings/public-url/check", async (req, res) => {
+  const raw = String(req.body?.url ?? "").trim();
+  const v = validatePublicUrl(raw);
+  if (!v.ok) return res.json({ ok: false, why: v.why });
+  const probe = await probePublicUrl(v.url!);
+  res.json({ ok: probe.ok, url: v.url, warn: v.warn, ms: probe.ms, status: probe.status,
+    why: probe.ok ? null : probe.why,
+    note: probe.ok ? "الطريق مفتوح: بكسل الفتح يصل من هذا العنوان." : null });
+});
+
+router.get("/tracking", async (req, res) => {
+  const userId = req.session.userId!;
+  const st = await trackingState(userId);
+  res.json({ ...st, probe: st.base ? await probePublicUrl(st.base) : null });
+});
+
+// ── إعادة تصنيف الوارد القديم ────────────────────────────────────
+router.post("/inbox/reclassify", async (req, res) => {
+  res.json(await reclassifyInbox(req.session.userId!, { dryRun: req.body?.dryRun === true }));
+});
 // ماجد's round now: check the domains, clean the lists, read the DNS, report.
 router.post("/caretaker/run", async (req, res) => {
   const { caretakerRound } = await import("../lib/email/caretaker");
@@ -96,7 +164,12 @@ const mask = (s: any) => s ? { ...s, smtpPass: s.smtpPass ? "••••••"
 
 router.get("/settings", async (req, res) => {
   const s = await getSettings(req.session.userId!);
-  res.json({ settings: mask(s), configured: isConfigured(s), trackingBase: (process.env["SITE_URL"] ?? "") || null, health: await verdictFor(req.session.userId!), signals: await signals(req.session.userId!) });
+  res.json({
+    settings: mask(s), configured: isConfigured(s),
+    trackingBase: (await publicBase(req.session.userId!)) || null,
+    tracking: await trackingState(req.session.userId!),
+    health: await verdictFor(req.session.userId!), signals: await signals(req.session.userId!),
+  });
 });
 
 router.put("/settings", async (req, res) => {
@@ -121,6 +194,14 @@ router.put("/settings", async (req, res) => {
     hourlyCap: Math.min(500, Math.max(5, Number(b.hourlyCap) || 40)),
     dailyCap: Math.min(5000, Math.max(10, Number(b.dailyCap) || 300)),
     tracking: b.tracking !== false,
+    // العنوان العام: يُطهَّر قبل الحفظ. عنوانٌ داخلي يُرفض بسببه، فقبوله
+    // يُعيد الصفر نفسه الذي عاش معه ٥٦٠ إرسالاً.
+    publicUrl: (() => {
+      if (b.publicUrl === undefined) return cur?.publicUrl ?? null;
+      if (!String(b.publicUrl).trim()) return null;
+      const v = validatePublicUrl(String(b.publicUrl));
+      return v.ok ? v.url! : cur?.publicUrl ?? null;
+    })(),
     imapHost: b.imapHost ?? null, imapPort: Number(b.imapPort) || 993, imapUser: b.imapUser ?? null, imapPass: keep(b.imapPass, cur?.imapPass),
     autoReply: !!b.autoReply,
     autoReplyDelayMin: Math.min(240, Math.max(2, Number(b.autoReplyDelayMin) || 12)),
@@ -994,8 +1075,19 @@ router.patch("/sequences/:id", async (req, res) => {
   res.json(row ?? null);
 });
 router.delete("/sequences/:id", async (req, res) => {
-  await db.delete(emailSequencesTable).where(and(eq(emailSequencesTable.id, Number(req.params.id)), eq(emailSequencesTable.userId, req.session.userId!)));
-  res.json({ ok: true });
+  const userId = req.session.userId!, id = Number(req.params.id);
+  // ما لم يُرسَل بعد يذهب معه. وإلا بقي في الطابور يتيماً: حذف التتابع
+  // يُصفّر `sequence_job_id` بحكم المفتاح الأجنبي، فيلقى المُرسِل رسالةً
+  // بلا جسم ويحرقها — وهكذا احترقت ١٧٦٢ رسالة في هذا الحساب يوم ٥ أكتوبر
+  // من ثغرةٍ مثلها في حذف الحملات، أُصلحت هناك وبقيت هنا.
+  const jobs = await db.select({ id: emailSequenceJobsTable.id }).from(emailSequenceJobsTable)
+    .where(and(eq(emailSequenceJobsTable.userId, userId), eq(emailSequenceJobsTable.sequenceId, id)));
+  if (jobs.length) {
+    await db.update(emailMessagesTable).set({ status: "cancelled", error: "ألغيت: حُذف التتابع" })
+      .where(and(eq(emailMessagesTable.userId, userId), inArray(emailMessagesTable.sequenceJobId, jobs.map((j) => j.id)), inArray(emailMessagesTable.status, ["queued", "ab_hold"])));
+  }
+  await db.delete(emailSequencesTable).where(and(eq(emailSequencesTable.id, id), eq(emailSequencesTable.userId, userId)));
+  res.json({ ok: true, cancelled: jobs.length });
 });
 router.post("/sequences/:id/enrol", async (req, res) => {
   const userId = req.session.userId!;
@@ -1020,12 +1112,34 @@ router.get("/sequences/:id/jobs", async (req, res) => {
 });
 
 // ── Inbound ───────────────────────────────────────────────────────
+// الوارد مقسوماً بنوعه: الردود الحقيقية وحدها افتراضاً، والضجيج
+// محفوظٌ ومعدودٌ لمن أراد أن يراه. فصندوقٌ فيه أربعة عشر إعلاناً
+// وردّان حقيقيان يُخفي الردّين.
 router.get("/inbound", async (req, res) => {
+  const userId = req.session.userId!;
+  const view = String(req.query["view"] ?? "replies");   // replies | noise | all | <kind>
   const rows = await db.select({ i: emailInboundTable, company: emailContactsTable.company, ourSubject: emailMessagesTable.subject })
     .from(emailInboundTable).leftJoin(emailContactsTable, eq(emailContactsTable.id, emailInboundTable.contactId))
     .leftJoin(emailMessagesTable, eq(emailMessagesTable.id, emailInboundTable.messageId))
-    .where(eq(emailInboundTable.userId, req.session.userId!)).orderBy(desc(emailInboundTable.receivedAt)).limit(200);
-  res.json(rows.map((r) => ({ ...r.i, company: r.company, ourSubject: r.ourSubject })));
+    .where(eq(emailInboundTable.userId, userId)).orderBy(desc(emailInboundTable.receivedAt)).limit(400);
+
+  const all = rows.map((r) => ({
+    ...r.i, company: r.company, ourSubject: r.ourSubject,
+    kindLabel: r.i.kind ? KIND_AR[r.i.kind as keyof typeof KIND_AR] ?? r.i.kind : null,
+    intentLabel: r.i.intent ? INTENT_AR[r.i.intent as keyof typeof INTENT_AR]?.label ?? r.i.intent : null,
+    nextStep: r.i.intent ? INTENT_AR[r.i.intent as keyof typeof INTENT_AR]?.next ?? null : null,
+  }));
+  // صفٌّ قديم بلا نوع يُعدّ رداً: هكذا كان يُعرض قبل المصنّف.
+  const isReply = (x: { kind: string | null }) => x.kind === "reply" || x.kind == null;
+  const counts: Record<string, number> = {};
+  for (const x of all) counts[x.kind ?? "reply"] = (counts[x.kind ?? "reply"] ?? 0) + 1;
+
+  const list = view === "all" ? all
+    : view === "replies" ? all.filter(isReply)
+    : view === "noise" ? all.filter((x) => !isReply(x))
+    : all.filter((x) => x.kind === view);
+
+  res.json({ rows: list, counts, view, total: all.length, replies: all.filter(isReply).length });
 });
 router.post("/inbound/:id/draft", async (req, res) => {
   const d = await draftReply(req.session.userId!, Number(req.params.id));
