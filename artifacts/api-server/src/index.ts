@@ -35,6 +35,7 @@ import { execSync } from "child_process";
 import { startOptOutSweep } from "./lib/opt-out";
 import { startSmartFollowUps } from "./lib/smart-followup";
 import { startCaretaker } from "./lib/email/caretaker";
+import { startSpecialistRounds } from "./lib/email/specialists";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -152,6 +153,9 @@ function startListening() {
     startSmartFollowUps();
     startCaretaker();
     startAutopilotWorker();
+    // أربعة محلّلين، جولةٌ يومية بفاصلٍ بينهم: الحساب المجاني يعطي
+    // ٨٠٠٠ رمزاً في الدقيقة، وأربعة نداءاتٍ متلاحقة تضربه.
+    startSpecialistRounds();
     // نورة joins every team that exists, so she appears beside the others.
     setTimeout(async () => {
       const teams = await dbx.selectDistinct({ userId: botEmp.userId }).from(botEmp).catch(() => []);

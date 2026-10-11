@@ -32,6 +32,12 @@ import { trackingState, validatePublicUrl, probePublicUrl, publicBase } from "..
 import { reclassifyInbox } from "../lib/email/reclassify";
 import { KIND_AR, INTENT_AR } from "../lib/email/classify";
 import { thread, threadBrief } from "../lib/email/thread";
+import { dataPicture, cohortMembers, cohortCounts, COHORTS, type Cohort } from "../lib/email/cohorts";
+import { reconcile, repair, sendingRhythm, type LedgerFinding } from "../lib/email/ledger";
+import { retargetPlans } from "../lib/email/retarget";
+import { opensReport } from "../lib/email/opens";
+import { runSpecialist, runSpecialistRound, lastReports, SPECIALISTS, type SpecialistRole } from "../lib/email/specialists";
+import { seedLibrary2 } from "../lib/email/library-2";
 import { campaignReadiness } from "../lib/email/readiness";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { register as emailRegister } from "../lib/email/register";
@@ -119,6 +125,83 @@ router.get("/tracking", async (req, res) => {
   const userId = req.session.userId!;
   const st = await trackingState(userId);
   res.json({ ...st, probe: st.base ? await probePublicUrl(st.base) : null });
+});
+
+// ── الأربعة المتخصّصون ────────────────────────────────────────────
+// كلٌّ يقرأ من محرّكه، والمحرّك يُقرأ وحده أيضاً: الواجهة تعرض الأرقام
+// بلا استدعاء نموذج، والنموذج يُستدعى حين يُطلب حكمٌ عليها.
+
+/** بدور: كل الداتا مُصنَّفة — حالةٌ واحدة لكل جهة، وجودة كل صف. */
+router.get("/data", async (req, res) => {
+  const listId = req.query["listId"] ? Number(req.query["listId"]) : null;
+  res.json(await dataPicture(req.session.userId!, listId));
+});
+
+router.get("/data/:cohort", async (req, res) => {
+  const cohort = String(req.params["cohort"]) as Cohort;
+  if (!(cohort in COHORTS)) return res.status(400).json({ error: "حالة غير معروفة" });
+  res.json({
+    cohort, info: COHORTS[cohort],
+    rows: await cohortMembers(req.session.userId!, cohort, {
+      limit: Number(req.query["limit"]) || 100,
+      page: Number(req.query["page"]) || 0,
+      listId: req.query["listId"] ? Number(req.query["listId"]) : null,
+    }),
+  });
+});
+
+/** مريم: خطّة لكل حالة، بالعدد المؤهّل لا بالعدد الكلي. */
+router.get("/retarget", async (req, res) => {
+  res.json(await retargetPlans(req.session.userId!, {
+    minGapDays: req.query["gap"] ? Math.max(1, Math.min(30, Number(req.query["gap"]))) : undefined,
+  }));
+});
+
+/** حصّة: العنوان والساعة والقطاع — مقارنةً لا مطلقاً. */
+router.get("/opens", async (req, res) => res.json(await opensReport(req.session.userId!)));
+
+/** راشد: هل يطابق المعروضُ ما حدث. */
+router.get("/ledger", async (req, res) => {
+  const userId = req.session.userId!;
+  const [r, rhythm] = await Promise.all([reconcile(userId), sendingRhythm(userId, 14)]);
+  res.json({ ...r, rhythm });
+});
+
+/** الإصلاح بإذنٍ صريح — ولا شيء من تلقاء نفسه. */
+router.post("/ledger/repair", async (req, res) => {
+  const what = String(req.body?.what ?? "") as NonNullable<LedgerFinding["repair"]>;
+  if (!["requeue_stuck", "resync_counters", "mark_bounced", "cancel_orphans"].includes(what)) {
+    return res.status(400).json({ error: "إصلاح غير معروف" });
+  }
+  res.json(await repair(req.session.userId!, what));
+});
+
+/** قوالب المكتبة الثانية لمن زُرع حسابه قبل وجودها. */
+router.post("/templates/library", async (req, res) => {
+  res.json(await seedLibrary2(req.session.userId!));
+});
+
+/** آخر تقرير لكل أخصائي — بلا استدعاء نموذج. */
+router.get("/specialists", async (req, res) => {
+  res.json({ specialists: await lastReports(req.session.userId!) });
+});
+
+/** حكمٌ جديد: يُستدعى النموذج الآن. */
+router.post("/specialists/:role/run", async (req, res) => {
+  const role = String(req.params["role"]) as SpecialistRole;
+  if (!(role in SPECIALISTS)) return res.status(400).json({ error: "أخصائي غير معروف" });
+  try {
+    const r = await runSpecialist(req.session.userId!, role, { notifyOwner: req.body?.notify === true });
+    if (!r) return res.status(503).json({ error: "الأخصائي موقوف أو النموذج لم يستجب" });
+    res.json(r);
+  } catch (err: any) { res.status(500).json({ error: String(err?.message ?? err) }); }
+});
+
+/** الجولة كاملةً — في الخلفية، فهي تأخذ دقائق بفاصل المزوّد. */
+router.post("/specialists/round", async (req, res) => {
+  const userId = req.session.userId!;
+  void runSpecialistRound(userId, { notifyOwner: true }).catch(() => {});
+  res.json({ started: true, order: ["بدور", "مريم", "حصّة", "راشد"], note: "تصل التقارير على تليجرام وتظهر هنا تباعاً — بفاصل دقيقة بين كل واحد (حدّ المزوّد المجاني)." });
 });
 
 // ── إعادة تصنيف الوارد القديم ────────────────────────────────────

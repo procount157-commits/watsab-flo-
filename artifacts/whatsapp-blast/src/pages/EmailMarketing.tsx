@@ -10,7 +10,7 @@ import { Link, useRoute, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Mail, Upload, Users, Megaphone, ListOrdered, FileText, Inbox, Settings2, Loader2, Play, Pause,
-  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, ListChecks, Stethoscope,
+  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, ListChecks, Stethoscope, Users2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
@@ -23,6 +23,7 @@ import { KnowledgeTab } from "./EmailKnowledge";
 import { DashboardTab } from "./EmailDashboard";
 import { RegisterTab } from "./EmailRegister";
 import { SentTab } from "./EmailSent";
+import { EmailTeamDesk } from "./EmailTeamDesk";
 import { WarmupCard } from "@/components/EmailHygiene";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -48,6 +49,7 @@ const TABS = [
   { key: "register",  label: "سجل الإرسال",    icon: ListChecks },
   { key: "import",    label: "رفع Excel",      icon: Upload },
   { key: "agent",     label: "نورة",           icon: Sparkles },
+  { key: "desk",      label: "المتخصّصون",      icon: Users2 },
   { key: "knowledge", label: "المعرفة",        icon: BookOpen },
   { key: "missions",  label: "المهام",         icon: Rocket },
   { key: "sequences", label: "المتابعة",        icon: ListOrdered },
@@ -109,6 +111,7 @@ export default function EmailMarketing() {
       {tab === "agent"     && <AgentTab initialFilter={writeFor} onMissionCreated={() => navigate("/email/missions")} />}
       {tab === "knowledge" && <KnowledgeTab />}
       {tab === "missions"  && <MissionsTab />}
+      {tab === "desk"      && <EmailTeamDesk />}
       {tab === "sent"      && <SentTab />}
       {tab === "register"  && <RegisterTab />}
       {tab === "campaigns" && <Campaigns initialListId={campaignFor} onUsedInitial={() => setCampaignFor(null)} />}

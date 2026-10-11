@@ -12,6 +12,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { db, emailSequencesTable, emailTemplatesTable, type EmailStep } from "@workspace/db";
+import { seedLibrary2 } from "./library-2";
 import { logger } from "../logger";
 
 export const DEFAULT_SEQUENCE_NAME = "الامتثال لمكافحة غسل الأموال — تعريف ومتابعة";
@@ -95,6 +96,10 @@ const TEMPLATES: Array<{ name: string; subject: string; html: string; category: 
 /** Install the sequence and the templates. `force` re-adds anything missing; nothing edited is touched. */
 export async function seedEmailDefaults(userId: number, force = false): Promise<{ sequence: boolean; templates: number }> {
   let sequence = false, templates = 0;
+  // المكتبة الثانية تُزرع دائماً بالاسم: قوالبها جديدة، ومن زُرع حسابه
+  // قبل وجودها يأخذها الآن — ولا تُكرَّر ولا تمسّ ما عدّله صاحب العمل.
+  const lib2 = await seedLibrary2(userId).catch(() => ({ added: 0 }));
+  templates += lib2.added;
   const [existing] = await db.select({ id: emailSequencesTable.id }).from(emailSequencesTable)
     .where(and(eq(emailSequencesTable.userId, userId), eq(emailSequencesTable.name, DEFAULT_SEQUENCE_NAME))).limit(1);
   if (!existing) {

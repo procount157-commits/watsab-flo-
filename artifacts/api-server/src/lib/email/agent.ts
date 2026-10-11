@@ -24,6 +24,7 @@ import { seedSkills } from "../skills";
 import { logger } from "../logger";
 import { count, describe, resolve } from "./segments";
 import { passages } from "./knowledge-docs";
+import { COLD_CRAFT } from "./prompts";
 import { getSettings } from "./service";
 import { teamVoice, onDuty, type EmailRole } from "./team";
 import { asLanguage, languageRule } from "./language";
@@ -248,6 +249,9 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       knowledgeLines(more, "ومما علّمه صاحب العمل في تدريب القروبات:"),
       facts.length ? `من قاعدة معرفة الشركة:\n${facts.map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 400)}`).join("\n")}` : "",
       docs.length ? `من مستندات الشركة التي رفعها صاحب العمل:\n${docs.map((d) => `[${d.title}]\n${d.text}`).join("\n\n")}` : "",
+      "",
+      // الشكل كان موجوداً والصنعة ناقصة: بنيةٌ صحيحة بأثرٍ بارد.
+      COLD_CRAFT,
       "",
       "المطلوب: حملة بريد لجمهور محدد. اكتبي بهذا الشكل بالضبط ولا شيء خارجه:",
       "[عنوان] <العنوان الأول>",
