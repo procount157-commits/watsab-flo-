@@ -14,6 +14,7 @@ let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(60)} ${d}`); };
 
 // تنظيف ما تملكه هذه المجموعة
+
 await db.delete(emailMessagesTable).where(eq(emailMessagesTable.userId, USER));
 await db.delete(emailCampaignsTable).where(eq(emailCampaignsTable.userId, USER));
 await db.delete(emailContactsTable).where(eq(emailContactsTable.userId, USER));
@@ -98,6 +99,31 @@ check("عنوان · شبكةٌ محلية تُرفض", !validatePublicUrl("http
 check("عنوان · نطاقٌ عام يُقبل ويُطهَّر", validatePublicUrl("app.pro-count.ae/").url === "https://app.pro-count.ae");
 check("عنوان · مسارٌ زائد يُرفض بسببٍ واضح", (validatePublicUrl("https://x.ngrok-free.app/hook").why ?? "").includes("أصل العنوان"));
 check("عنوان · http يُقبل بتحذير", (() => { const v = validatePublicUrl("http://app.pro-count.ae"); return v.ok && !!v.warn; })());
+
+// ── عنوانٌ عام مات ────────────────────────────────────────────────
+// النفق المؤقّت بلا ضمان بقاء، وهذا هو السلوك الذي يحمي العميل: إن
+// مات العنوان فالروابط تُترك كما هي. غياب القياس أهون من رابطٍ يضغطه
+// عميلك فلا يصل إلى شيء.
+const { publicBase, configuredBase, setTrackingHealth, trackingState } = await import("../email/public-url");
+
+await db.update(emailSettingsTable).set({ publicUrl: "https://dead.procount.invalid" }).where(eq(emailSettingsTable.userId, USER));
+setTrackingHealth(USER, false, "تعذّر الوصول");
+
+check("عنوان ميت · المضبوط يبقى مقروءاً للعرض", (await configuredBase(USER)) === "https://dead.procount.invalid");
+check("عنوان ميت · لا يُستعمل في الإرسال", (await publicBase(USER)) === "");
+const pDead = await sentPreview(USER, first.id);
+check("عنوان ميت · لا بكسل في الجسم", pDead?.hadPixel === false && !/\/t\/e\/[^"']+\.gif/.test(pDead?.html ?? ""));
+check("عنوان ميت · والروابط تبقى سليمة غير ملفوفة",
+  !!pDead?.html.includes("https://procount.invalid/aml") && !pDead.html.includes("/t/e/"),
+  /href="([^"]+)"/.exec(pDead?.html ?? "")?.[1]?.slice(0, 48));
+const stDead = await trackingState(USER);
+check("عنوان ميت · الحالة تقول لا قياس وتفسّر", stDead.can === false && /لا يستجيب/.test(stDead.why ?? ""));
+check("عنوان ميت · وتدلّ على النفق المتغيّر", (stDead.howTo[0] ?? "").includes("نفقاً مؤقّتاً"));
+
+setTrackingHealth(USER, true);
+const pAlive = await sentPreview(USER, first.id);
+check("عنوان عاد · البكسل يرجع", pAlive?.hadPixel === true && /dead\.procount\.invalid\/t\/e\/[^"']+\.gif/.test(pAlive?.html ?? ""));
+check("عنوان عاد · والروابط تُلفّ من جديد", !!pAlive?.html.includes("/t/e/") && pAlive.html.includes("/c?u="));
 
 await db.delete(emailMessagesTable).where(eq(emailMessagesTable.userId, USER));
 await db.delete(emailCampaignsTable).where(eq(emailCampaignsTable.userId, USER));

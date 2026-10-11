@@ -16,11 +16,49 @@
 
 import { eq } from "drizzle-orm";
 import { db, emailSettingsTable } from "@workspace/db";
+import { logger } from "../logger";
 
 const clean = (u: string | null | undefined): string => (u ?? "").trim().replace(/\/+$/, "");
 
+// ── حين يموت العنوان العام ────────────────────────────────────────
+// النفق المؤقّت (trycloudflare) بلا ضمان بقاء: يتوقّف فيتغيّر العنوان.
+// وغياب القياس حينها أهون المشكلتين — الأسوأ أن الروابط تُلفّ عبر عنوانٍ
+// ميت، فيضغط عميلك الرابط فلا يصل إلى شيء. رسالةٌ بلا قياس تعمل؛
+// رسالةٌ بروابط مكسورة تُخسر العميل.
+//
+// فتُحفظ نتيجة آخر فحصٍ هنا، و`publicBase` تُرجع نصاً فارغاً لعنوانٍ
+// ثبت موته: فلا بكسل، ولا لفّ روابط، ورابط إلغاء الاشتراك يعود بريداً —
+// وكلها مسالك مُعدَّة أصلاً لغياب العنوان.
+type Health = { ok: boolean; at: number; why: string | null; failures: number };
+const health = new Map<number, Health>();
+
+/** يُعدّ ميتاً بعد فشلين متتابعين: فشلةٌ واحدة قد تكون الشبكة. */
+const DEAD_AFTER = 2;
+const isDead = (userId: number): boolean => (health.get(userId)?.failures ?? 0) >= DEAD_AFTER;
+
+export function trackingHealth(userId: number): Health | null { return health.get(userId) ?? null; }
+
+/**
+ * يُعلَّم العنوان ميتاً أو حياً مباشرةً. للاختبار وللفحص اليدوي من
+ * الواجهة: السلوك عند الموت — ترك الروابط بلا لفّ — أهم من أن يُترك
+ * بلا اختبار حتى يموت نفقٌ حقيقي.
+ */
+export function setTrackingHealth(userId: number, ok: boolean, why: string | null = null): void {
+  health.set(userId, { ok, at: Date.now(), why, failures: ok ? 0 : DEAD_AFTER });
+}
+
 /** الإعداد أولاً، ثم متغيّر البيئة — فمن ضبطه من الواجهة قصد ذلك. */
 export async function publicBase(userId: number): Promise<string> {
+  const [s] = await db.select({ publicUrl: emailSettingsTable.publicUrl })
+    .from(emailSettingsTable).where(eq(emailSettingsTable.userId, userId)).limit(1);
+  const base = clean(s?.publicUrl) || clean(process.env["SITE_URL"]);
+  // عنوانٌ ثبت موته لا يُستعمل: أن تخرج الرسالة بلا قياس أهون من أن
+  // تخرج بروابط لا تفتح.
+  return base && isDead(userId) ? "" : base;
+}
+
+/** العنوان المضبوط كما هو، حياً كان أو ميتاً — للعرض والفحص. */
+export async function configuredBase(userId: number): Promise<string> {
   const [s] = await db.select({ publicUrl: emailSettingsTable.publicUrl })
     .from(emailSettingsTable).where(eq(emailSettingsTable.userId, userId)).limit(1);
   return clean(s?.publicUrl) || clean(process.env["SITE_URL"]);
@@ -81,6 +119,57 @@ export interface TrackingState {
   howTo: string[];
 }
 
+/**
+ * الحارس: يطلب البكسل من الخارج كل ربع ساعة.
+ *
+ * ولماذا حارسٌ لهذا بالذات: الفشل هنا صامتٌ تماماً. خمس مئة وستون
+ * رسالة خرجت بلا قياس ولم يُقَل لأحد، وقُرئ «٠ فتحات» نتيجةً لسنة.
+ * ونفقٌ مؤقّت يجعل هذا الصمت احتمالاً يوميّاً لا حادثةً واحدة.
+ *
+ * ويُنبّه مرةً عند الموت ومرةً عند العودة — لا كل ربع ساعة: ذاك درسُ
+ * حارس الجودة الذي قال «١٧٪ ارتداد» اثنتين وعشرين مرة ولم يُصلح شيئاً.
+ */
+export function startTrackingWatch(): void {
+  const EVERY = 15 * 60_000;
+  const round = async () => {
+    const rows = await db.select({ userId: emailSettingsTable.userId, publicUrl: emailSettingsTable.publicUrl, tracking: emailSettingsTable.tracking })
+      .from(emailSettingsTable);
+    for (const s of rows) {
+      const base = clean(s.publicUrl) || clean(process.env["SITE_URL"]);
+      if (!base || !s.tracking) { health.delete(s.userId); continue; }
+      const probe = await probePublicUrl(base, 8_000);
+      const prev = health.get(s.userId);
+      const failures = probe.ok ? 0 : (prev?.failures ?? 0) + 1;
+      health.set(s.userId, { ok: probe.ok, at: Date.now(), why: probe.why ?? null, failures });
+
+      const wasDead = (prev?.failures ?? 0) >= DEAD_AFTER;
+      const nowDead = failures >= DEAD_AFTER;
+      if (nowDead && !wasDead) {
+        const { notify, esc } = await import("../telegram");
+        await notify(s.userId, [
+          "<b>⚠️ العنوان العام توقّف — قياس الفتح معطَّل</b>",
+          esc(`${base} لم يستجب: ${probe.why ?? "تعذّر الوصول"}`),
+          "",
+          "الرسائل تُرسل وتصل كما هي، لكن:",
+          "• لا بكسل فتحٍ فيها — الفتحات ستبقى صفراً.",
+          "• الروابط لم تُلفّ، فلن تُكسر في بريد العميل.",
+          "",
+          "إن كان نفقاً مؤقّتاً فقد تغيّر عنوانه: شغّله وضع العنوان الجديد في البريد → الإعدادات.",
+        ].join("\n")).catch(() => {});
+        logger.warn({ userId: s.userId, base, why: probe.why }, "العنوان العام مات — تُركت الروابط بلا لفّ");
+      }
+      if (probe.ok && wasDead) {
+        const { notify, esc } = await import("../telegram");
+        await notify(s.userId, `<b>✅ العنوان العام عاد</b>\n${esc(base)} يستجيب في ${probe.ms}ms — قياس الفتح يعمل من الآن.`).catch(() => {});
+        logger.info({ userId: s.userId, base, ms: probe.ms }, "العنوان العام عاد");
+      }
+    }
+  };
+  // أول فحصٍ بعد دقيقة من الإقلاع، ثم كل ربع ساعة.
+  setTimeout(() => { void round(); setInterval(() => void round(), EVERY); }, 60_000);
+  logger.info("حارس العنوان العام بدأ");
+}
+
 export async function trackingState(userId: number): Promise<TrackingState> {
   const [s] = await db.select({ publicUrl: emailSettingsTable.publicUrl, tracking: emailSettingsTable.tracking })
     .from(emailSettingsTable).where(eq(emailSettingsTable.userId, userId)).limit(1);
@@ -105,6 +194,12 @@ export async function trackingState(userId: number): Promise<TrackingState> {
   if (!trackingOn) {
     return { can: false, base: v.url!, source, trackingOn, howTo: ["شغّل «التتبّع» في: البريد → الإعدادات."],
       why: "العنوان العام مضبوط، لكن التتبّع مُطفأ في الإعدادات." };
+  }
+  const h = health.get(userId);
+  if (h && h.failures >= DEAD_AFTER) {
+    return { can: false, base: v.url!, source, trackingOn,
+      why: `العنوان العام ${v.url} لا يستجيب (${h.why ?? "تعذّر الوصول"}). الرسائل تُرسل وتصل، والروابط تُترك بلا لفّ كي لا تُكسر في بريد العميل — لكن الفتح لا يُقاس.`,
+      howTo: ["إن كان نفقاً مؤقّتاً فقد تغيّر عنوانه: شغّله من جديد وضع العنوان الجديد هنا.", ...howTo.slice(1)] };
   }
   return { can: true, base: v.url!, source, trackingOn, why: null, howTo: [] };
 }
