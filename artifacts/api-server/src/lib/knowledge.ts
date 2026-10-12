@@ -410,6 +410,8 @@ export async function answerFromKnowledge(
     speaker?: { name: string; title?: string | null };
     /** What we sent this customer before they wrote. */
     outreach?: { campaign: string; text: string } | null;
+    /** A shop's extras: what it sells, its register, the ad she came from, the piece she named, computed facts. */
+    shop?: { vertical?: "accounting" | "jewelry"; dialect?: string | null; ad?: { title: string | null } | null; piece?: string | null; facts?: string[] } | null;
   } = {},
 ): Promise<AnswerResult> {
   const [profile, history, memory] = await Promise.all([
@@ -472,7 +474,8 @@ export async function answerFromKnowledge(
     const customerTurns = turns.filter((t) => t.role === "user").length;
     const ourLast = [...turns].reverse().find((t) => t.role === "assistant")?.content ?? null;
     const reading = opts.speaker
-      ? read(question, { campaignTopic: opts.outreach ? `${opts.outreach.campaign}: ${opts.outreach.text.split("\n").find((l) => l.trim().length > 25) ?? ""}` : null, ourLast, known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity } : undefined })
+      ? read(question, { campaignTopic: opts.outreach ? `${opts.outreach.campaign}: ${opts.outreach.text.split("\n").find((l) => l.trim().length > 25) ?? ""}` : null, ourLast, known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity } : undefined,
+          vertical: opts.shop?.vertical, ad: opts.shop?.ad ?? null, piece: opts.shop?.piece ?? null })
       : null;
     const knownLines = opts.card ? [opts.card.licence && `الرخصة: ${opts.card.licence}`, opts.card.activity && `النشاط: ${opts.card.activity}`, opts.card.size && `الحجم: ${opts.card.size}`, opts.card.pain && `ما يقلقه: ${opts.card.pain}`].filter(Boolean) as string[] : [];
     const system = reading && opts.speaker
@@ -480,7 +483,8 @@ export async function answerFromKnowledge(
           name: opts.speaker.name, title: opts.speaker.title, firm: profile?.name ?? "الشركة", firmLine: profile?.description ?? null,
           outreach: opts.outreach ? `حملة «${opts.outreach.campaign}»:\n«${opts.outreach.text}»` : (ourLast ? `آخر رسالة منا: «${ourLast.slice(0, 500)}»` : null),
           known: knownLines, reading, guardrails: profile?.guardrails ?? null,
-          facts: found.slice(0, 3).map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 450)}`).join("\n"),
+          vertical: opts.shop?.vertical, dialect: opts.shop?.dialect ?? null,
+          facts: [...(opts.shop?.facts ?? []).map((f) => `- ${f}`), ...found.slice(0, 3).map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 450)}`)].join("\n"),
         })
       : buildSystemPrompt(profile, found, memory, persona, job, finalCheck, customerTurns, leadCard);
     const out = await complete([
@@ -496,7 +500,7 @@ export async function answerFromKnowledge(
         customer: question, previous, stage: opts.card?.stage,
         reading, names: opts.speaker ? [opts.speaker.name, englishName(opts.speaker.name)] : undefined,
         known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity, size: opts.card.size, staff: opts.card.staff } : undefined,
-        facts: [found.map((f) => `${f.entry.title}\n${f.entry.content}`).join("\n"), profile?.description ?? ""].join("\n"),
+        facts: [found.map((f) => `${f.entry.title}\n${f.entry.content}`).join("\n"), profile?.description ?? "", ...(opts.shop?.facts ?? [])].join("\n"),
       };
       let reply = out.text.trim();
       let q = checkReply(reply, ctx);

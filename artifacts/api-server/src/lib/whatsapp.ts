@@ -29,6 +29,7 @@ import { captureGroupMessage, captureGroupHistory } from "./groups/store";
 import { onGroupMessage } from "./groups/assistant";
 import { receipt } from "./graph/receipts";
 import { currentAgent } from "./agent-context";
+import { describeImage, photoAsText } from "./vision";
 export const BASE_SESSION_DIR = path.resolve(process.cwd(), "whatsapp-session");
 
 
@@ -2208,6 +2209,25 @@ class WhatsAppInstance {
           }
         }
 
+        // ── الصور ──────────────────────────────────────────────────────
+        // A photo is the first thing a jewellery customer sends. Described
+        // in words and folded into the message, so the reply can answer it.
+        const image = msg.message?.imageMessage;
+        let wasPhoto = false;
+        if (image && !msg.key.fromMe) {
+          try {
+            const buf = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
+            const seen = await describeImage(buf, image.mimetype ?? "image/jpeg", text);
+            if (seen) {
+              text = photoAsText(seen.text, text);
+              wasPhoto = true;
+              this.log.info({ phone, chars: seen.text.length, model: seen.model, ms: seen.ms }, "وُصفت صورة من العميل");
+            }
+          } catch (err) {
+            this.log.warn({ phone, err: String((err as any)?.message ?? err).slice(0, 160) }, "تعذّر تحميل الصورة");
+          }
+        }
+
         // ── تسجيل المحادثة (صادرة + واردة) ────────────────────────────
         this.upsertConversation(phone, { lastMsgAt: ts, lastText: text ?? undefined });
 
@@ -2220,7 +2240,7 @@ class WhatsAppInstance {
             text:      text ?? null,
             // Marked, so a transcription error reads as one when the owner
             // looks at the thread rather than as a customer writing nonsense.
-            msgType:   wasVoice ? "voice" : "text",
+            msgType:   wasVoice ? "voice" : wasPhoto ? "image" : "text",
             fromMe:    !!msg.key.fromMe,
             createdAt: new Date(ts * 1000),
           })

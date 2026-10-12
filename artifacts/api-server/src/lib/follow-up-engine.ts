@@ -41,6 +41,7 @@ import { say } from "./agent-comms";
 import { assertCanSend } from "./plans";
 import { provisionOnConnect } from "./provision";
 import { lastOutreach, outreachPreamble, savedName } from "./outreach-context";
+import { shopContext } from "./catalog/shop-context";
 
 // How often the worker looks for due jobs.
 const TICK_MS = 60_000;
@@ -427,6 +428,8 @@ async function autoReplyIfAppropriate(
   const outreach = outreachPreamble(sent, company);
   const card = [outreach, card0].filter(Boolean).join("\n\n");
 
+  // A shop's extras: the piece named, the ad she came from, today's quote, the photo to send.
+  const shop = await shopContext(userId, phone, text).catch((err) => { logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "سياق المتجر غير متاح"); return null; });
   // Pass the phone so the reply sees the conversation, not just this line.
   const leadCard = await getCard(userId, phone).catch(() => null);
   const answer = await asAgent(userId, routing?.agent.role ?? "sales", () => answerFromKnowledge(
@@ -439,6 +442,7 @@ async function autoReplyIfAppropriate(
       // Read the message first and write the short way, as this employee.
       speaker: { name: routing?.agent.name ?? "هال", title: routing?.agent.title ?? null },
       outreach: sent ? { campaign: sent.campaign, text: sent.text } : null,
+      shop: shop ? { vertical: shop.vertical, dialect: shop.dialect, ad: shop.ad, piece: shop.piece?.name ?? null, facts: shop.facts } : null,
     },
   ));
   if (!answer.reply) {
@@ -503,6 +507,10 @@ async function autoReplyIfAppropriate(
     const asVoice = theyspoke && (await voiceRepliesOn(userId)) && sayable(answer.reply).ok;
     if (asVoice) await sendVoiceNote(userId, phone, answer.reply);
     else await sendMessage(userId, phone, answer.reply);
+    // The piece's photo follows the words, when there is one and the reply is about it.
+    if (shop?.photo && shop.piece && ["piece", "ad_lead", "photo", "interested", "weight_price"].includes(answer.reading?.situation ?? "")) {
+      await sendMessage(userId, phone, shop.photo.caption, "image", shop.photo.path).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "تعذّر إرسال صورة القطعة"));
+    }
     await logAutoReply({ userId, phone, incoming: text, reply: answer.reply, provider: answer.provider, kbIds: answer.kbIds, intent, agentRole: routing?.agent.role, quality: answer.quality, reading: answer.reading });
     // They declined and we closed politely: nobody follows them up after this.
     if (answer.reading?.closes) {

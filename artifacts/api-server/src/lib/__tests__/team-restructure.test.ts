@@ -52,7 +52,7 @@ const older = [{ fromMe: false, text: "كم السعر؟", at: at(150) }, { from
 check("rung 2 waits three days after rung 1", dueRung(older, [at(40)], false, now) === null && dueRung(older, [at(100)], false, now)?.rung === 1);
 check("four at most, then silence", dueRung(spoke, [at(48), at(47), at(46), at(45)], false, now) === null && MAX_RUNGS === 4 && LADDER.cold.length === 4);
 check("their reply resets the ladder", dueRung([...spoke, { fromMe: false, text: "تمام", at: at(30) }, { fromMe: true, text: "…", at: at(29) }], [at(45), at(44)], false, now)?.rung === 0);
-check("four rungs, four different angles", new Set(RUNG_ANGLE).size === 4);
+check("every rung has its own angle", new Set(RUNG_ANGLE).size === RUNG_ANGLE.length && RUNG_ANGLE.length >= 4);
 check("a near-copy of an earlier follow-up is recognised", overlap("هل تحب نرتب لك مكالمة قصيرة مع المختص بخصوص goAML", "تحب نرتب لك مكالمة قصيرة مع المختص بخصوص goAML؟") > 0.6 && overlap("مكالمة قصيرة", "ملخص مكتوب عن الضريبة") < 0.3);
 
 console.log(`\n${pass}/${total} مرّ`);

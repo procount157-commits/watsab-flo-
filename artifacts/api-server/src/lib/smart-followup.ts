@@ -51,17 +51,24 @@ const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
 export const LADDER = { cold: [24, 72, 168, 336], warm: [4, 24, 72, 168] } as const;
 export const MAX_RUNGS = 4;
+/** The shop's ladder: 1h · 6h · 1d · 3d · 1w · 2w · 1mo — seven rungs, the owner's own cadence. */
+export const SHOP_LADDER = [1, 6, 24, 72, 168, 336, 720] as const;
 /** Smart follow-ups are recorded with step 100+rung, apart from the old ladder's 0–6. */
 export const STEP_BASE = 100;
 const MAX_PER_RUN = 8;
 
 /** What each rung is for — so the four messages are four different messages. */
-export const RUNG_ANGLE = [
+export const RUNG_ANGLE: string[] = [
   "المتابعة ١ — أكمل من حيث توقفت المحادثة: أجب عن آخر نقطة بقيت مفتوحة، أو أضف معلومة واحدة من المعرفة تخص ما سأل عنه هو. لا تقل «أتابع» ولا «هل وصلتك رسالتي».",
   "المتابعة ٢ — زاوية جديدة لم تُذكر: خطر أو موعد أو فائدة واحدة من المعرفة تخص قطاعه أو وضعه، في جملتين، ثم سؤال يجيب عنه بنعم أو لا.",
   "المتابعة ٣ — خطوة سهلة جداً: اعرض مكالمة قصيرة مع مختص، أو أن ترسل له ملخصاً مكتوباً يخص وضعه — اختر ما يناسب ما قاله.",
-  "المتابعة ٤ والأخيرة — ختام لطيف: قل إنك لن تزعجه بعدها وإن الباب مفتوح متى احتاج، في سطر أو سطرين، بلا ضغط ولا سؤال.",
+  "المتابعة ٤ — خطوة سهلة جداً من زاوية ثانية: صورة أو قطعة مشابهة، أو عرض يناسب مناسبته، في سطرين.",
+  "المتابعة ٥ — تذكير قصير بما يخصه هو (ما سأل عنه)، مع معلومة جديدة واحدة، في سطر أو سطرين.",
+  "المتابعة ٦ — قبل الختام: اعرض أن ترسل له ما يحتاج (صورة، سعر محدث، تفاصيل) متى شاء، في سطر، بلا ضغط.",
+  "المتابعة الأخيرة — ختام لطيف: قل إنك لن تزعجه بعدها وإن الباب مفتوح متى احتاج، في سطر أو سطرين، بلا ضغط ولا سؤال.",
 ];
+/** The angle for a rung on any ladder: the last angle is always the farewell. Pure. */
+export const angleFor = (rung: number, rungs: number) => (rung >= rungs - 1 ? RUNG_ANGLE[RUNG_ANGLE.length - 1]! : RUNG_ANGLE[Math.min(rung, RUNG_ANGLE.length - 2)]!);
 
 export type Mode = "off" | "dry" | "live";
 
@@ -86,17 +93,28 @@ export function overlap(a: string, b: string): number {
  * Who is due, and at which rung. Pure: the thread, the rungs already taken
  * since their last message, and the time.
  */
-export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.now()): { rung: number; dueAt: number } | null {
+export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.now(), opts: { ladder?: readonly number[]; scope?: "spoke" | "all" } = {}): { rung: number; dueAt: number } | null {
   const lastIn = [...turns].reverse().find((t) => !t.fromMe);
-  if (!lastIn) return null;                                  // never spoke — not ours to chase
   const lastOut = [...turns].reverse().find((t) => t.fromMe);
-  if (!lastOut || lastOut.at.getTime() < lastIn.at.getTime()) return null; // their turn is unanswered: the reply path's job
-  const since = taken.filter((d) => d.getTime() > lastIn.at.getTime());
+  if (!lastOut) return null;
+  // Only those who wrote to us — unless the account follows everyone it reached.
+  if (!lastIn && opts.scope !== "all") return null;
+  if (lastIn && lastOut.at.getTime() < lastIn.at.getTime()) return null; // their turn is unanswered: the reply path's job
+  const from = lastIn?.at.getTime() ?? 0;
+  const since = taken.filter((d) => d.getTime() > from);
   const rung = since.length;
-  if (rung >= MAX_RUNGS) return null;
+  const ladder = opts.ladder?.length ? opts.ladder : (warm ? LADDER.warm : LADDER.cold);
+  if (rung >= ladder.length) return null;
   const base = Math.max(lastOut.at.getTime(), ...since.map((d) => d.getTime()));
-  const dueAt = base + (warm ? LADDER.warm : LADDER.cold)[rung]! * H;
+  const dueAt = base + ladder[rung]! * H;
   return dueAt <= now ? { rung, dueAt } : null;
+}
+
+/** The account's ladder and scope. */
+async function ladderOf(userId: number): Promise<{ ladder: number[] | null; scope: "spoke" | "all" }> {
+  const [p] = await db.select({ l: businessProfileTable.followupLadder, s: businessProfileTable.followupScope }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
+  const l = Array.isArray(p?.l) ? p!.l.map(Number).filter((h) => h > 0).slice(0, 10) : null;
+  return { ladder: l?.length ? l : null, scope: p?.s === "all" ? "all" : "spoke" };
 }
 
 async function thread(userId: number, phone: string, limit = 14): Promise<Turn[]> {
@@ -108,23 +126,24 @@ async function thread(userId: number, phone: string, limit = 14): Promise<Turn[]
 }
 
 /** Conversations where we spoke last, they had spoken in the last month, and the quiet has lasted at least four hours. */
-async function candidates(userId: number): Promise<string[]> {
+async function candidates(userId: number, scope: "spoke" | "all"): Promise<string[]> {
   const r = await db.execute(sql`
     SELECT phone FROM wa_thread_messages
     WHERE user_id = ${userId} AND created_at > now() - interval '35 days'
     GROUP BY phone
-    HAVING max(created_at) FILTER (WHERE NOT from_me) > now() - interval '30 days'
-       AND max(created_at) FILTER (WHERE from_me) > max(created_at) FILTER (WHERE NOT from_me)
-       AND max(created_at) < now() - interval '4 hours'
+    HAVING ${scope === "all" ? sql`true` : sql`max(created_at) FILTER (WHERE NOT from_me) > now() - interval '30 days'`}
+       AND max(created_at) FILTER (WHERE from_me) > coalesce(max(created_at) FILTER (WHERE NOT from_me), '-infinity')
+       AND max(created_at) < now() - interval '1 hour'
     ORDER BY max(created_at) DESC
-    LIMIT 200`);
+    LIMIT 300`);
   return (r.rows as Array<{ phone: string }>).map((x) => x.phone);
 }
 
 type Draft = { send: boolean; text: string | null; reason: string };
 
 /** خالد writes the rung, or declines. */
-async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[]): Promise<Draft> {
+async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS): Promise<Draft> {
+  const angle = angleFor(rung, rungs);
   const [[me], [profile], card, company] = await Promise.all([
     db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
     db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
@@ -143,7 +162,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     persona: me?.persona ?? null,
     firm: profile?.description ?? null,
     rules: [
-      RUNG_ANGLE[rung]!,
+      angle,
       "اكتب الرسالة نفسها فقط، بلغة العميل ولهجته، سطر إلى ثلاثة.",
       "إن لم يكن عندك شيء جديد يستحق رسالة — أو كان آخر ما قاله يعني أنه لا يريد — فاكتب بالضبط: «لا ترسل: <السبب في سطر>».",
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
@@ -159,7 +178,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   const transcript = turns.map((t) => `${t.fromMe ? "نحن" : "العميل"}: ${t.text.slice(0, 500)}`).join("\n");
   const out = await complete([
     { role: "system", content: system },
-    { role: "user", content: `المحادثة حتى الآن:\n${transcript}\n\nسكت العميل منذ آخر رسالة منا. اكتب ${RUNG_ANGLE[rung]!.split(" — ")[0]}.` },
+    { role: "user", content: `المحادثة حتى الآن:\n${transcript}\n\nسكت العميل منذ آخر رسالة منا. اكتب ${angle.split(" — ")[0]}.` },
   ], 30_000);
   const raw = out?.text?.trim().replace(/^["«“]+|["»”]+$/g, "").trim();
   if (!raw) return { send: false, text: null, reason: "تعذّر الوصول للنموذج" };
@@ -206,7 +225,8 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
   if (!isWithinSendingHours(new Date(now))) return result;
   if (mode === "live" && !getStatus(userId).connected) return result;
 
-  const phones = await candidates(userId);
+  const { ladder, scope } = await ladderOf(userId);
+  const phones = await candidates(userId, scope);
   if (!phones.length) return result;
 
   // Who is not to be followed at all.
@@ -234,11 +254,12 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
     const turns = await thread(userId, phone);
     // A thread whose every word from them is a machine's is not a conversation.
     const fromThem = turns.filter((t) => !t.fromMe);
-    if (!fromThem.length || fromThem.every((t) => detectAutoresponder(t.text).isAuto)) continue;
+    if (fromThem.length && fromThem.every((t) => detectAutoresponder(t.text).isAuto)) continue;
+    if (!fromThem.length && scope !== "all") continue;
 
     const mine = takenRows.filter((r) => r.phone === phone && (r.verdict === "send" || r.verdict === "drop"));
     const card = await getCard(userId, phone).catch(() => null);
-    const due = dueRung(turns, mine.map((r) => new Date(r.at)), (card?.stage ?? 1) >= 5, now);
+    const due = dueRung(turns, mine.map((r) => new Date(r.at)), (card?.stage ?? 1) >= 5, now, { ladder: ladder ?? undefined, scope });
     if (!due) continue;
     result.considered++;
     if (await isHumanHeld(userId, phone)) continue;
@@ -248,9 +269,9 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
     if (!ops.ok) { logger.info({ userId, why: ops.view }, "smart follow-ups held by operations"); break; }
     if (left <= 0) break;
 
-    const lastIn = [...turns].reverse().find((t) => !t.fromMe)!.at.getTime();
+    const lastIn = [...turns].reverse().find((t) => !t.fromMe)?.at.getTime() ?? 0;
     const earlier = mine.filter((r) => new Date(r.at).getTime() > lastIn && r.draft).map((r) => r.draft!);
-    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier));
+    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length));
     result.drafted++;
     if (!d.send || !d.text) {
       // Declined: the ladder ends for this person until they speak again.

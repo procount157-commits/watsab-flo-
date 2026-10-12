@@ -33,6 +33,18 @@ export const businessProfileTable = pgTable("business_profile", {
   voiceReplies: varchar("voice_replies", { length: 10 }).notNull().default("mirror"),
   /** The follow-up that writes each message for the person: off | dry | live. */
   smartFollowup: varchar("smart_followup", { length: 8 }).notNull().default("dry"),
+  /** The register the employees write in: gulf | egyptian | levant | msa. */
+  dialect:        varchar("dialect", { length: 12 }),
+  /** What this business sells: accounting | jewelry | clinic | shop. */
+  vertical:       varchar("vertical", { length: 20 }),
+  /** How a piece is priced: { makingPerGram, vatPct, defaultKarat, rateSource }. */
+  pricing:        jsonb("pricing").$type<{ makingPerGram: number; vatPct: number; defaultKarat: number }>(),
+  /** Hours after our last message for each follow-up; null = the default ladder. */
+  followupLadder: jsonb("followup_ladder").$type<number[]>(),
+  /** spoke = only those who wrote to us; all = everyone we reached. */
+  followupScope:  varchar("followup_scope", { length: 8 }).notNull().default("spoke"),
+  /** Where the catalogue comes from: floret | null. */
+  catalogSource:  varchar("catalog_source", { length: 20 }),
   autoReply:   boolean("auto_reply").notNull().default(false),
   updatedAt:   timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

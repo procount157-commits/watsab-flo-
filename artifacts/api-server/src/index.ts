@@ -37,6 +37,8 @@ import { startSmartFollowUps } from "./lib/smart-followup";
 import { startCaretaker } from "./lib/email/caretaker";
 import { startSpecialistRounds } from "./lib/email/specialists";
 import { startTrackingWatch } from "./lib/email/public-url";
+import { startCatalogSync } from "./lib/catalog/floret";
+import { startListKeeper } from "./lib/list-keeper";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -153,6 +155,8 @@ function startListening() {
     startOptOutSweep();
     startSmartFollowUps();
     startCaretaker();
+    startCatalogSync();
+    startListKeeper();
     startAutopilotWorker();
     // أربعة محلّلين، جولةٌ يومية بفاصلٍ بينهم: الحساب المجاني يعطي
     // ٨٠٠٠ رمزاً في الدقيقة، وأربعة نداءاتٍ متلاحقة تضربه.
