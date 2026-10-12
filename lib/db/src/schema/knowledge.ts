@@ -43,6 +43,8 @@ export const businessProfileTable = pgTable("business_profile", {
   followupLadder: jsonb("followup_ladder").$type<number[]>(),
   /** spoke = only those who wrote to us; all = everyone we reached. */
   followupScope:  varchar("followup_scope", { length: 8 }).notNull().default("spoke"),
+  /** The whole team's off switch. */
+  teamPaused:     boolean("team_paused").notNull().default(false),
   /** Where the catalogue comes from: floret | null. */
   catalogSource:  varchar("catalog_source", { length: 20 }),
   autoReply:   boolean("auto_reply").notNull().default(false),

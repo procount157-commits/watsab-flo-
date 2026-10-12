@@ -24,6 +24,7 @@ import Meetings from "@/pages/Meetings";
 import SocialDesk from "@/pages/social/SocialDesk";
 import Team from "@/pages/Team";
 import GraphLive from "@/pages/GraphLive";
+import Engineer from "@/pages/Engineer";
 import Deals from "@/pages/Deals";
 import BookPage from "@/pages/BookPage";
 import ContentCalendar from "@/pages/ContentCalendar";
@@ -185,6 +186,7 @@ function AuthenticatedRoutes() {
           <Route path="/browser"        component={BrowserDesk} />
           <Route path="/meetings"       component={Meetings} />
           <Route path="/graph"          component={GraphLive} />
+          <Route path="/engineer"       component={Engineer} />
           <Route path="/team"           component={Team} />
           <Route path="/deals"          component={Deals} />
           <Route path="/content"        component={ContentCalendar} />

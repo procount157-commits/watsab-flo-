@@ -475,7 +475,7 @@ export async function answerFromKnowledge(
     const ourLast = [...turns].reverse().find((t) => t.role === "assistant")?.content ?? null;
     const reading = opts.speaker
       ? read(question, { campaignTopic: opts.outreach ? `${opts.outreach.campaign}: ${opts.outreach.text.split("\n").find((l) => l.trim().length > 25) ?? ""}` : null, ourLast, known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity } : undefined,
-          vertical: opts.shop?.vertical, ad: opts.shop?.ad ?? null, piece: opts.shop?.piece ?? null })
+          vertical: opts.shop?.vertical, ad: opts.shop?.ad ?? null, piece: opts.shop?.piece ?? null, accountDialect: opts.shop?.dialect ?? null })
       : null;
     const knownLines = opts.card ? [opts.card.licence && `الرخصة: ${opts.card.licence}`, opts.card.activity && `النشاط: ${opts.card.activity}`, opts.card.size && `الحجم: ${opts.card.size}`, opts.card.pain && `ما يقلقه: ${opts.card.pain}`].filter(Boolean) as string[] : [];
     const system = reading && opts.speaker

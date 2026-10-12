@@ -17,7 +17,10 @@
 //   WHAT  خالد writes each one for the person: what was said, what we sent,
 //         what the card knows, what the firm knows on the subject, and what
 //         the earlier follow-ups already tried. Each rung has its own angle,
-//         and he may decline — "لا ترسل" — when he has nothing new.
+//         and has no say in whether to write: who is followed is the code's
+//         decision (opt-outs, refusals, complaints and machines are out
+//         before he is asked). Left the choice, he declined half the time
+//         with «لا جديد» — on the silences that are the whole point.
 //   CHECK the same pre-send check as every reply, one rewrite at most; a
 //         blank or a near-copy of an earlier follow-up is dropped.
 //
@@ -46,6 +49,7 @@ import { assertCanSend } from "./plans";
 import { sendMessage, getStatus } from "./whatsapp";
 import { logger } from "./logger";
 import { receipt } from "./graph/receipts";
+import { dialectOf, dialectLine } from "./reply-brain";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -139,7 +143,7 @@ async function candidates(userId: number, scope: "spoke" | "all"): Promise<strin
   return (r.rows as Array<{ phone: string }>).map((x) => x.phone);
 }
 
-type Draft = { send: boolean; text: string | null; reason: string };
+type Draft = { send: boolean; text: string | null; reason: string; retry?: boolean };
 
 /** خالد writes the rung, or declines. */
 async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS): Promise<Draft> {
@@ -151,6 +155,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     savedName(userId, phone).catch(() => null),
   ]);
   const outreach = outreachPreamble(await lastOutreach(userId, phone, company).catch(() => null), company);
+  const customerDialect = dialectOf(turns.filter((t) => !t.fromMe).map((t) => t.text).join(" "), profile?.dialect ?? null);
   const topic = turns.filter((t) => !t.fromMe).slice(-3).map((t) => t.text).join(" ");
   const found = await retrieve(userId, topic, 3).catch(() => []);
   const facts = found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`).join("\n\n");
@@ -164,7 +169,8 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     rules: [
       angle,
       "اكتب الرسالة نفسها فقط، بلغة العميل ولهجته، سطر إلى ثلاثة.",
-      "إن لم يكن عندك شيء جديد يستحق رسالة — أو كان آخر ما قاله يعني أنه لا يريد — فاكتب بالضبط: «لا ترسل: <السبب في سطر>».",
+      dialectLine(customerDialect),
+      "صمته بعد سؤالنا هو سبب المتابعة لا مانعها: لا تعد السؤال نفسه — أحضر الجديد من الزاوية المطلوبة ومن معرفة الشركة (معلومة، صورة، قطعة أو خدمة تناسبه، سعر محدث، خطوة أسهل). من يُستبعد من المتابعة استُبعد قبل أن تصلك، فلا تقرر أنت ذلك.",
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
     ],
     context: [
@@ -181,9 +187,9 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     { role: "user", content: `المحادثة حتى الآن:\n${transcript}\n\nسكت العميل منذ آخر رسالة منا. اكتب ${angle.split(" — ")[0]}.` },
   ], 30_000);
   const raw = out?.text?.trim().replace(/^["«“]+|["»”]+$/g, "").trim();
-  if (!raw) return { send: false, text: null, reason: "تعذّر الوصول للنموذج" };
-  const no = /^«?\s*لا ترسل\s*[:：]?\s*(.*)$/s.exec(raw);
-  if (no) return { send: false, text: null, reason: `خالد: ${no[1]!.replace(/»$/, "").trim() || "لا جديد يستحق"}` };
+  if (!raw) return { send: false, text: null, reason: "تعذّر الوصول للنموذج", retry: true };
+  // He was told not to decide; if he still writes «لا ترسل», the rung is held for the next round, not lost.
+  if (/^«?\s*لا ترسل/.test(raw)) return { send: false, text: null, reason: `خالد امتنع: ${raw.slice(0, 160)}`, retry: true };
 
   // The check every reply passes, and one rewrite at most.
   const lastCustomer = [...turns].reverse().find((t) => !t.fromMe)?.text ?? "";
@@ -274,8 +280,10 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
     const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length));
     result.drafted++;
     if (!d.send || !d.text) {
-      // Declined: the ladder ends for this person until they speak again.
-      await record(userId, phone, due.rung, "drop", d.reason, d.text, false, ops.view);
+      // A model that did not answer, or refused, costs this round only: «hold»
+      // is not a rung taken, so the ladder resumes next round. A draft the
+      // check stopped is a real drop.
+      await record(userId, phone, due.rung, d.retry ? "hold" : "drop", d.reason, d.text, false, ops.view);
       result.declined++;
       continue;
     }
@@ -301,7 +309,7 @@ let timer: NodeJS.Timeout | null = null;
 export function startSmartFollowUps() {
   if (timer) return;
   const run = async () => {
-    const users = await db.execute(sql`SELECT user_id FROM business_profile WHERE smart_followup <> 'off' AND auto_reply = true`).catch(() => ({ rows: [] }));
+    const users = await db.execute(sql`SELECT user_id FROM business_profile WHERE smart_followup <> 'off' AND NOT team_paused`).catch(() => ({ rows: [] }));
     for (const u of users.rows as Array<{ user_id: number }>) {
       await runSmartFollowUps(u.user_id).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "smart follow-up round failed"));
     }

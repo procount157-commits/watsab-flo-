@@ -31,6 +31,44 @@ export type Situation =
   | "photo" | "weight_price" | "ad_lead" | "piece" | "order";
 
 export type Vertical = "accounting" | "jewelry";
+export type Dialect = "gulf" | "egyptian" | "levant" | "maghreb" | "msa" | "en";
+
+// ── Which Arabic the customer writes ─────────────────────────────
+// A lookup, not a talent: the words that belong to one dialect and almost
+// never to another. Counted, the winner is the register the reply mirrors —
+// unless the account fixes one (the gold house writes Emirati to everyone
+// who writes Gulf or standard Arabic).
+const DIALECT_WORDS: Record<Exclude<Dialect, "msa" | "en">, string[]> = {
+  gulf: ["شلون", "شلونك", "شحال", "وايد", "الحين", "ابغى", "ابي", "ودي", "زين", "يبا", "يبه", "هلا", "ترى", "عاد", "جذي", "جيه", "وش", "ليش", "مو", "عيل", "يا طويل العمر", "ابشر", "يزاك", "جان", "شو", "هاي", "ويه"],
+  egyptian: ["ازيك", "ازاي", "عايز", "عاوز", "دلوقتي", "ايه", "ليه", "كده", "كدا", "مش", "فين", "اوي", "خالص", "بتاع", "بتاعت", "حضرتك", "يعني ايه", "طب", "ماشي", "تمام يا", "انا عايز"],
+  levant: ["كيفك", "شلونك", "بدي", "بدك", "هلأ", "هلق", "ليش", "شو", "هيك", "كتير", "منيح", "تكرم", "عنجد", "مو", "لسا", "لسه", "يلا", "بس", "هاد", "هاي"],
+  maghreb: ["واش", "بزاف", "كيداير", "لاباس", "شحال", "دابا", "علاش", "بغيت", "خويا", "صافي", "واخا"],
+};
+const SHARED = new Set(["شلونك", "ليش", "شو", "مو", "بس", "هاي", "شحال", "لسا", "لسه"]);
+
+/** The dialect of a text, by its words; the account's own dialect for Gulf/standard Arabic when it fixes one. Pure. */
+export function dialectOf(text: string, accountDialect?: string | null): Dialect {
+  const t = normalizeArabic((text ?? "").toLowerCase());
+  const ar = (t.match(/[\u0600-\u06FF]/g) ?? []).length, en = (t.match(/[a-z]/g) ?? []).length;
+  if (!ar && en) return "en";
+  const score: Record<string, number> = { gulf: 0, egyptian: 0, levant: 0, maghreb: 0 };
+  for (const [d, words] of Object.entries(DIALECT_WORDS)) for (const w of words) {
+    if (new RegExp(`(^|\\s)${normalizeArabic(w)}(\\s|$)`).test(t)) score[d]! += SHARED.has(w) ? 0.5 : 1;
+  }
+  const [best, n] = Object.entries(score).sort((a, b) => b[1] - a[1])[0]!;
+  const found = n >= 1 ? (best as Dialect) : "msa";
+  if (accountDialect === "gulf" && (found === "msa" || found === "gulf")) return "gulf";
+  return found;
+}
+
+const DIALECT_NAME: Record<Dialect, string> = { gulf: "خليجية إماراتية", egyptian: "مصرية", levant: "شامية", maghreb: "مغاربية", msa: "عربية بسيطة واضحة", en: "English" };
+
+/** The line in the prompt that fixes the register. Pure. */
+export function dialectLine(d: Dialect): string {
+  if (d === "en") return "اكتب بالإنجليزية، قصيرة وطبيعية.";
+  if (d === "gulf") return DIALECT_LINE;
+  return `اللهجة: ${DIALECT_NAME[d]} طبيعية كما يكتبها العميل نفسه — لا تخلطها بلهجة أخرى ولا تنتقل للفصحى الثقيلة.`;
+}
 
 export type Lang = "ar" | "en";
 
@@ -47,6 +85,8 @@ export type Reading = {
   mayAsk: boolean;
   /** This reply closes the conversation — no follow-up after it. */
   closes: boolean;
+  /** The Arabic the customer writes, mirrored in the reply. */
+  dialect?: Dialect;
 };
 
 const has = (t: string, words: string[]) => words.some((w) => t.includes(w));
@@ -88,7 +128,12 @@ export function situationOf(text: string, vertical: Vertical = "accounting"): Si
 export const taxTopic = (s: string) => /(ضريب|vat|corporate tax|\bct\b|tax|رخص|licen[cs]e|mainland|free ?zone|مين لاند|فري زون)/i.test(s);
 
 /** The reading of one message. Pure. */
-export function read(text: string, ctx: { campaignTopic?: string | null; ourLast?: string | null; known?: { licence?: string | null; activity?: string | null }; vertical?: Vertical; ad?: { title?: string | null } | null; piece?: string | null }): Reading {
+export function read(text: string, ctx: Parameters<typeof readInner>[1]): Reading {
+  const r = readInner(text, ctx);
+  return { ...r, dialect: dialectOf(`${text} ${ctx.ourLast ?? ""}`.slice(0, 2000), ctx.accountDialect) };
+}
+
+function readInner(text: string, ctx: { campaignTopic?: string | null; ourLast?: string | null; known?: { licence?: string | null; activity?: string | null }; vertical?: Vertical; ad?: { title?: string | null } | null; piece?: string | null; accountDialect?: string | null }): Reading {
   const vertical = ctx.vertical ?? "accounting";
   let situation = situationOf(text, vertical);
   // A piece named in the message outranks a generic question; an ad click outranks a greeting.
@@ -215,7 +260,9 @@ export function replyPrompt(i: {
 }): string {
   const r = i.reading;
   const examples = (i.vertical === "jewelry" && JEWELRY_EXAMPLES[r.situation]?.[r.lang]) || EXAMPLES[r.situation][r.lang];
-  const dialect = i.dialect === "gulf" && r.lang === "ar" ? DIALECT_LINE : "";
+  // The customer's dialect wins; standard Arabic takes the account's own register when it fixes one.
+  const chosen = r.dialect && r.dialect !== "msa" && r.dialect !== "en" ? r.dialect : (i.dialect === "gulf" ? "gulf" : "msa");
+  const dialect = r.lang === "ar" ? dialectLine(chosen) : "";
   const nameLine = r.lang === "en" ? `Your name is ${englishName(i.name)} (${i.name}). Never use another name.` : `اسمك ${i.name}. لا تستخدم اسماً غيره.`;
   return [
     `أنت ${i.name}${i.title ? `، ${i.title}` : ""} لدى ${i.firm}${i.firmLine ? ` — ${i.firmLine}` : ""}. تكتب على واتساب لعميل محتمل.`,
