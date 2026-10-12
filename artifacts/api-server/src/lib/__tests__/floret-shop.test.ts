@@ -69,10 +69,12 @@ check("seven benefit angles for the shop, the last a farewell", JEWELRY_ANGLE.le
 check("the shop prompt bans uncertain numbers in words", replyPrompt({ name: "نورة", firm: "فلوريت", reading: read("كم وزنه", { vertical: "jewelry" }), vertical: "jewelry" }).includes("ممنوع منعاً باتاً"));
 
 // ── The voice: hospitality passes, corporate fails ────────────────
-const warm = checkReply("هلا والله فيچ 🌸 شفت إنچ سألتي عن طقم الكلوفر، وحبيت أقولچ إنه عيار ٢١ ووزنه ١٢.٨٧ جرام وسعره اليوم ٦,٤٦٠ درهم شامل الضريبة. لو تبين أصوّره لچ من زاوية ثانية قولي لي وأرسله على طول. نورة", { customer: "طقم الكلوفر", facts: "طقم الكلوفر — عيار 21 · 12.87 جم · 6,460 درهم", strictNumbers: true, warm: true });
+const warm = checkReply("هلا والله فيچ 🌸 هذا طقم الكلوفر اللي سألتي عنه — عيار ٢١ ووزنه ١٢.٨٧ جرام، وسعره اليوم ٦,٤٦٠ درهم شامل الضريبة. لمناسبة ولا للبس اليومي؟ نورة", { customer: "طقم الكلوفر", facts: "طقم الكلوفر — عيار 21 · 12.87 جم · 6,460 درهم", strictNumbers: true, warm: true });
 check("a warm hand-written five-line message passes the shop's check", warm.score >= 85 && !warm.issues.some((i) => ["robotic", "long", "invented-strict"].includes(i.code)), warm.issues.map((i) => i.note).join(" | "));
 const corp = checkReply("عزيزي العميل، يسعدنا إبلاغكم بتوفر منتجاتنا. هل وصلتك رسالتي السابقة؟", { customer: "x", warm: true });
 check("corporate language still fails", corp.issues.some((i) => i.code === "robotic"));
+check("«هلا حبيبتي» stops the message", blocksSend(checkReply("هلا حبيتي 🌸 الطقم موجود", { customer: "x", warm: true, strictNumbers: true })));
+check("«من زاوية ثانية» stops the message", blocksSend(checkReply("هلا فيچ 🌸 لو تبين أصوّره لچ من زاوية ثانية", { customer: "x", warm: true, strictNumbers: true })));
 check("the shop reply prompt carries the human voice and its hand-written examples", replyPrompt({ name: "نورة", firm: "فلوريت", reading: read("مهتمة", { vertical: "jewelry" }), vertical: "jewelry" }).includes("كيف يكتب إنسان على واتساب"));
 
 // ── The one discount, on one rung ────────────────────────────────
