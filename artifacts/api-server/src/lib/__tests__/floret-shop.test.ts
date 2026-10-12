@@ -3,7 +3,9 @@
 // situations and readings, the seven-rung ladder, and the keeper's rules.
 
 export {};
-const { quote, quoteText, parseWeightKarat, rateForKarat } = await import("../catalog/pricing");
+const { quote, quoteText, parseWeightKarat, rateForKarat, discounted, discountText, DEFAULT_PRICING } = await import("../catalog/pricing");
+const { piecesNamed, pieceKnown } = await import("../reply-check");
+const { parseReview, quickLabel } = await import("../graph/review");
 const { pieceEntry } = await import("../catalog/floret");
 const { situationOf, read, replyPrompt, dialectOf } = await import("../reply-brain");
 const { checkReply, blocksSend } = await import("../reply-check");
@@ -72,6 +74,31 @@ check("a warm hand-written five-line message passes the shop's check", warm.scor
 const corp = checkReply("عزيزي العميل، يسعدنا إبلاغكم بتوفر منتجاتنا. هل وصلتك رسالتي السابقة؟", { customer: "x", warm: true });
 check("corporate language still fails", corp.issues.some((i) => i.code === "robotic"));
 check("the shop reply prompt carries the human voice and its hand-written examples", replyPrompt({ name: "نورة", firm: "فلوريت", reading: read("مهتمة", { vertical: "jewelry" }), vertical: "jewelry" }).includes("كيف يكتب إنسان على واتساب"));
+
+// ── The one discount, on one rung ────────────────────────────────
+const full = quote(12.87, 21, r24), cut = discounted(12.87, 21, r24);
+check("the discount is the making charge to 25/g, the gold untouched", cut.making === Math.round(12.87 * 25 * 100) / 100 && cut.gold === full.gold && cut.total < full.total, `${full.total} → ${cut.total}`);
+check("it is said as a cut on the making charge, 44%", discountText(full, cut).includes("٤٤٪") || discountText(full, cut).includes("44٪"), discountText(full, cut));
+check("…and only on rung 4", DEFAULT_PRICING.discountRung === 4);
+const noDisc = checkReply("هلا فيچ 🌸 اليوم عندنا خصم ١٠٪ على كل الأطقم", { customer: "x", strictNumbers: true, warm: true, discountAllowed: false, facts: "" });
+check("a discount outside its rung stops the message", blocksSend(noDisc) && noDisc.issues.some((i) => i.code === "discount"));
+const okDisc = checkReply("هلا فيچ 🌸 وقدرت أرتب لچ خصم على المصنعية من ٤٥ إلى ٢٥ درهم للجرام، فالطقم يصير ٦,١٩٨ درهم بدل ٦,٤٦٠ شامل", { customer: "x", strictNumbers: true, warm: true, discountAllowed: true, facts: "خصم على المصنعية من 45 إلى 25 درهم للجرام: السعر يصير 6,198 درهم بدل 6,460" });
+check("the permitted discount passes", !blocksSend(okDisc), okDisc.issues.map((i) => i.note).join(" | "));
+
+// ── Only pieces that exist ───────────────────────────────────────
+const names = ["طقم الكلوفر بالخاتم", "طقم الكلوفر المفرّغ", "إسوارة الحيول الناعمة"];
+check("a piece we have is known", pieceKnown("طقم الكلوفر المفرغ", names) && piecesNamed("شفتي طقم الكلوفر المفرّغ عندنا؟").length === 1);
+check("an invented piece is caught", !pieceKnown("طقم الياسمين الملكي", names));
+const inv = checkReply("هلا 🌸 عندنا طقم الياسمين الملكي يناسبچ", { customer: "x", strictNumbers: true, warm: true, catalogNames: names });
+check("…and stops the message", blocksSend(inv) && inv.issues.some((i) => i.code === "unknown-piece"));
+check("a kind alone («طقم») names nothing and passes", !checkReply("عندنا أطقم كثيرة تناسب المناسبة", { customer: "x", strictNumbers: true, warm: true, catalogNames: names }).issues.some((i) => i.code === "unknown-piece"));
+
+// ── ريم's reading ─────────────────────────────────────────────────
+check("a machine-only thread is filed without a model", quickLabel([{ fromMe: true, text: "x", at: new Date() }, { fromMe: false, text: "Thank you for contacting us! Please let us know how we can help you.", at: new Date() }]) === "machine");
+check("a silent recipient is silent", quickLabel([{ fromMe: true, text: "x", at: new Date() }]) === "silent");
+const pr = parseReview('كلام قبل {"label":"hot","score":"85","piece":"طقم الكلوفر","summary":"تبي الطقم هدية","next":"صورة أوضح اليوم"} كلام بعد');
+check("the model's answer is read strictly", pr?.label === "hot" && pr.score === 85 && pr.piece === "طقم الكلوفر");
+check("an unknown label becomes a question, a wild score is clamped", parseReview('{"label":"whatever","score":250}')?.label === "question" && parseReview('{"label":"whatever","score":250}')?.score === 100);
 
 console.log(`\n${pass}/${total} مرّ`);
 process.exit(pass === total ? 0 : 1);

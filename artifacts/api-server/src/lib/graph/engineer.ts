@@ -68,7 +68,7 @@ export async function engineerContext(userId: number): Promise<string> {
   const taskLines = tasks.reduce((m, t) => { (m[t.role] ??= []).push(t.task); return m; }, {} as Record<string, string[]>);
   const plan = await db.execute<any>(sql`SELECT content FROM agent_memory WHERE user_id = ${userId} AND role = ${ENGINEER_ROLE} AND kind = 'instruction' AND topic = 'plan' ORDER BY updated_at DESC LIMIT 1`).then((r) => r.rows[0]?.content ?? null).catch(() => null);
   const sample = await recentForReview(userId, 8).then((r: any) => (r.rows ?? r.replies ?? r ?? [])).catch(() => []);
-  const pieces = profile?.vertical === "jewelry" ? await db.execute<any>(sql`SELECT name, purity, weight_g, price_aed, in_stock FROM catalog_items WHERE user_id = ${userId} AND published ORDER BY in_stock DESC, price_aed DESC NULLS LAST LIMIT 6`).then((r) => r.rows).catch(() => []) : [];
+  const pieces = profile?.vertical === "jewelry" ? await db.execute<any>(sql`SELECT name, purity, weight_g, price_aed, in_stock FROM catalog_items WHERE user_id = ${userId} AND published ORDER BY in_stock DESC, name`).then((r) => r.rows).catch(() => []) : [];
   const routines = await db.execute<any>(sql`SELECT role, name, trigger_kind, every_minutes, at_hour, is_active, last_run_at FROM agent_routines WHERE user_id = ${userId} ORDER BY role`).then((r) => r.rows).catch(() => []);
   return [
     `═══ الشركة ═══\n${profile?.name ?? "—"} · ${profile?.industry ?? ""} · النشاط: ${profile?.vertical ?? "accounting"} · اللهجة: ${profile?.dialect ?? "تتبع العميل"} · الرد التلقائي: ${profile?.autoReply ? "يعمل" : "متوقف"} · المتابعة: ${profile?.smartFollowup ?? "dry"} (${profile?.followupScope ?? "spoke"}، سلم ${JSON.stringify(profile?.followupLadder ?? "افتراضي")}) · الفريق ${profile?.teamPaused ? "موقوف" : "يعمل"}`,
@@ -77,7 +77,7 @@ export async function engineerContext(userId: number): Promise<string> {
     `═══ ردود واتساب في ٧ أيام ═══\n- رسائل واردة ${replies?.n ?? 0}، رُدّ على ${replies?.replied ?? 0}، ردود آلية من الطرف الآخر ${replies?.machines ?? 0}، متوسط جودة الرد ${replies?.q ?? "—"}/100، أُعيدت كتابة ${replies?.rewritten ?? 0}.\n- المواقف: ${situations.map((s: any) => `${s.s} ${s.n}`).join("، ") || "—"}`,
     `═══ المتابعة في ٧ أيام ═══\n${followups.length ? followups.map((f: any) => `- ${f.verdict}${f.executed ? " (أُرسلت)" : ""}: ${f.n}`).join("\n") : "- لا شيء"}`,
     `═══ حماية الرقم ═══\n- الحالة: ${ops?.level ?? "—"}${ops?.findings?.length ? ` — ${ops.findings.slice(0, 3).join(" · ")}` : ""}\n- طلبات إيقاف في ٧ أيام: ${stops}`,
-    pieces.length ? `═══ من الكتالوج (أمثلة حقيقية لتكتب بها) ═══\n${pieces.map((x: any) => `- ${x.name} · عيار ${x.purity} · ${Number(x.weight_g)} جم · ${Number(x.price_aed).toLocaleString("en-US")} درهم شامل${x.in_stock ? "" : " (غير متوفرة)"}`).join("\n")}` : "",
+    pieces.length ? `═══ الكتالوج كاملاً (${pieces.length} قطعة — لا تذكر قطعة غيرها) ═══\n${pieces.map((x: any) => `${x.name} (${x.purity}ع · ${Number(x.weight_g)}جم · ${Number(x.price_aed).toLocaleString("en-US")}د${x.in_stock ? "" : " · غير متوفرة"})`).join(" · ")}` : "",
     `═══ الخطة الحالية (الجراف كما رسمته أنت) ═══\n${plan ?? "- لا خطة بعد. ارسم واحدة بفعل plan: لكل هدف فرعي مالكٌ من الفريق ومخرجٌ ومقياس."}`,
     `═══ عينة من آخر الردود على العملاء (لتقيس الجودة بعينك) ═══\n${(Array.isArray(sample) ? sample : []).slice(0, 6).map((r: any) => `- العميل: «${String(r.incoming ?? "").replace(/\n/g, " ").slice(0, 70)}» ← ${r.agentRole ?? "?"}: «${String(r.reply ?? "").replace(/\n/g, " ").slice(0, 110)}» (${r.qualityScore ?? "—"})`).join("\n") || "- لا ردود بعد"}`,
     `═══ الروتينات (${routines.length}) ═══\n${routines.map((r: any) => `- ${r.role}: «${r.name}» ${r.trigger_kind === "daily" ? `يومياً ${r.at_hour}:00` : `كل ${r.every_minutes} د`}${r.is_active ? "" : " (موقوف)"}${r.last_run_at ? ` · آخر تشغيل ${new Date(r.last_run_at).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" })}` : " · لم يعمل بعد"}`).join("\n") || "- لا روتينات"}`,
@@ -101,6 +101,8 @@ const DOMAIN: Record<string, string> = {
     "- القرار عاطفي وسريع، فالمتابعة قصيرة وكثيفة في أول يوم (ساعة، ست ساعات، يوم) ثم تتباعد. كل متابعة بشيء جديد: صورة أوضح، قطعة مشابهة، سعر محدث بعد تغير الذهب، عرض لمناسبتها.",
     "- الإغلاق: الاسم، الإمارة، المقاس، طريقة الدفع والتوصيل أو الاستلام من المعرض في العين. من قال «أبغى أطلب» يُسلَّم لإنسان خلال دقائق.",
     "- اللهجة إماراتية طبيعية مع صيغة المؤنث؛ المصري يبقى مصرياً. الفصحى الثقيلة والقوالب تقتل الثقة.",
+    "- الخصم الوحيد في هذا المتجر: على المصنعية فقط، من ٤٥ إلى ٢٥ درهماً للجرام كحد أدنى (أي ٤٤–٥٠٪ من المصنعية)، ويُعرض في المتابعة الرابعة فقط ومرة واحدة. لا خصم على الذهب، ولا خصم في أي رسالة أخرى، ولا رقم خصم من عندك.",
+    "- لا تسمّي قطعة غير موجودة في قائمة الكتالوج أدناه، وبنفس اسمها. اسم مخترع يُوقف الرسالة ولا تُرسل.",
     "- خطر الحظر: رقم متجر يرسل لمن لم يراسله أولاً يُبلَّغ عنه بسرعة. الحملات للقوائم النظيفة فقط، وزر «إيقاف الرسائل» في كل رسالة، ومن أوقف لا يُلمس.",
   ].join("\n"),
   accounting: [

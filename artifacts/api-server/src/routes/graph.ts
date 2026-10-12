@@ -15,6 +15,7 @@ import { firstBroken } from "../lib/graph/receipts";
 import { setTeamPaused } from "../lib/graph/switch";
 import { GRAPHS, contractProblems } from "../lib/graph/contracts";
 import { liveGraph, doing } from "../lib/graph/live";
+import { reviewAll, listReviews, fileLabel, LABELS, type Label } from "../lib/graph/review";
 
 const router = Router();
 router.use(requireAuth);
@@ -40,6 +41,15 @@ router.get("/", async (req, res) => {
 
 // The living map: desks, employees, the lines between them, and the latest receipts.
 router.get("/live", async (req, res) => res.json(await liveGraph(req.session.userId!)));
+
+// ريم's reading of every conversation: list, run (all or only what changed), file a label into a list.
+router.get("/review", async (req, res) => res.json({ labels: LABELS, rows: await listReviews(req.session.userId!) }));
+router.post("/review/run", async (req, res) => res.json(await reviewAll(req.session.userId!, { onlyStale: !!(req.body as any)?.onlyStale, limit: Math.min(500, Number((req.body as any)?.limit) || 300) })));
+router.post("/review/file", async (req, res) => {
+  const label = String((req.body as any)?.label ?? "") as Label;
+  if (!(label in LABELS)) return res.status(400).json({ error: "تصنيف غير معروف" });
+  res.json(await fileLabel(req.session.userId!, label));
+});
 
 router.get("/receipts", async (req, res) => {
   const userId = req.session.userId!;

@@ -5,7 +5,7 @@
 // send after the words. Gathered here, once per message, from the catalogue
 // and the shop's gold rate; handed to the reading and the prompt as facts.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, businessProfileTable, leadSourcesTable } from "@workspace/db";
 import { findPieces, goldRate24, pricingOf, type CatalogItem } from "./floret";
 import { parseWeightKarat, quote, quoteText } from "./pricing";
@@ -20,9 +20,13 @@ export type ShopContext = {
   facts: string[];
   /** The photo to send after the reply, if any. */
   photo: { path: string; caption: string } | null;
+  /** Every published piece's name — the only pieces that may be named. */
+  names: string[];
+  pricing: import("./pricing").Pricing | null;
+  rate24: number | null;
 };
 
-const NONE: ShopContext = { vertical: "accounting", dialect: null, ad: null, piece: null, facts: [], photo: null };
+const NONE: ShopContext = { vertical: "accounting", dialect: null, ad: null, piece: null, facts: [], photo: null, names: [], pricing: null, rate24: null };
 
 // Today's rate, asked of the shop at most once an hour.
 let rateCache: { at: number; rate: number | null } = { at: 0, rate: null };
@@ -59,5 +63,7 @@ export async function shopContext(userId: number, phone: string, text: string): 
     facts.push(`قطعة: ${x.name} — رمز ${x.sku}${x.purity ? ` · عيار ${x.purity}` : ""}${x.weightG ? ` · ${x.weightG} جم` : ""}${x.priceAed ? ` · ${x.priceAed.toLocaleString("en-US")} درهم شامل الضريبة` : ""} · ${x.inStock ? "متوفرة" : "غير متوفرة حالياً"}${x.imagePath ? " · لها صورة تُرسل تلقائياً بعد ردك" : ""}`);
   }
   const photo = piece?.imagePath ? { path: piece.imagePath, caption: `${piece.name}${piece.purity ? ` · عيار ${piece.purity}` : ""}${piece.weightG ? ` · ${piece.weightG} جم` : ""}` } : null;
-  return { vertical: "jewelry", dialect: p.dialect ?? "gulf", ad, piece, facts, photo };
+  const names = (await db.execute<{ name: string }>(sql`SELECT name FROM catalog_items WHERE user_id = ${userId} AND published ORDER BY in_stock DESC, name`).catch(() => ({ rows: [] as Array<{ name: string }> }))).rows.map((r) => r.name);
+  facts.push(`القطع الموجودة عندنا الآن (لا تذكري قطعة غير هذه، وبنفس الاسم): ${names.join(" · ")}`);
+  return { vertical: "jewelry", dialect: p.dialect ?? "gulf", ad, piece, facts, photo, names, pricing, rate24: r24 };
 }

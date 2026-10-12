@@ -67,7 +67,7 @@ export async function simulate(userId: number, role: string, turns: Turn[]) {
   const answer = await answerFromKnowledge(userId, last.content, undefined, voice, agentJob(routing), finalCheckPreamble(skills), cardText(card), {
     card, history: clean,
     speaker: { name: agent.name, title: agent.title },
-    shop: shop ? { vertical: shop.vertical, dialect: shop.dialect, ad: shop.ad, piece: shop.piece?.name ?? null, facts: shop.facts } : null,
+    shop: shop ? { vertical: shop.vertical, dialect: shop.dialect, ad: shop.ad, piece: shop.piece?.name ?? null, facts: shop.facts, names: shop.names } : null,
   });
   return {
     reply: answer.reply, provider: answer.provider, ms: Date.now() - t0, reason: answer.reason ?? null,

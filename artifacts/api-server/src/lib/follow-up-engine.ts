@@ -442,7 +442,7 @@ async function autoReplyIfAppropriate(
       // Read the message first and write the short way, as this employee.
       speaker: { name: routing?.agent.name ?? "هال", title: routing?.agent.title ?? null },
       outreach: sent ? { campaign: sent.campaign, text: sent.text } : null,
-      shop: shop ? { vertical: shop.vertical, dialect: shop.dialect, ad: shop.ad, piece: shop.piece?.name ?? null, facts: shop.facts } : null,
+      shop: shop ? { vertical: shop.vertical, dialect: shop.dialect, ad: shop.ad, piece: shop.piece?.name ?? null, facts: shop.facts, names: shop.names } : null,
     },
   ));
   if (!answer.reply) {

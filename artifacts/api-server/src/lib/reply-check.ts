@@ -30,7 +30,31 @@ export interface CheckContext {
   strictNumbers?: boolean;
   /** A shop's warm register: hospitality is not a template; only corporate phrases are, and a hand-written message may run five lines. */
   warm?: boolean;
+  /** The pieces that exist. A piece named that is not among them stops the reply. */
+  catalogNames?: string[];
+  /** A discount may be offered in this message. Otherwise any discount stops it. */
+  discountAllowed?: boolean;
 }
+
+const PIECE_KINDS = "طقم|اطقم|إسواره|اسواره|أسواره|اسوره|سواره|خاتم|خواتم|دبله|مريه|حيول|مرتعشه|سلسله|سلسال|حلق|تعليقه|خلخال|انسيال|إنسيال|ميداليه|بروش|عقد";
+/** The pieces a text names, as «kind + up to three words». Pure. */
+export function piecesNamed(text: string): string[] {
+  const n = normalizeArabic(text);
+  const out: string[] = [];
+  for (const m of n.matchAll(new RegExp(`(?:^|\\s)(${PIECE_KINDS})\\s+([^\\s,،.؟!]+(?:\\s+[^\\s,،.؟!]+){0,2})`, "g"))) {
+    // A product is «kind + a definite noun» (طقم الكلوفر); «أطقم كثيرة» names nothing.
+    const words = m[2]!.split(/\s+/).filter((w) => !/^(عيار|وزن|سعر|اليوم|من|في|على|لك|لچ|له|بس|اللي|هذا|هذه|ذهب|الذهب)$/.test(w));
+    if (words.length && /^ال/.test(words[0]!)) out.push(`${m[1]} ${words.join(" ")}`);
+  }
+  return out;
+}
+/** Is a named piece in the catalogue? Two of its words in one catalogue name is a match. Pure. */
+export function pieceKnown(named: string, catalogNames: string[]): boolean {
+  const words = normalizeArabic(named).split(/\s+/).filter((w) => w.length > 2);
+  if (words.length < 2) return true; // a kind alone («طقم») names nothing
+  return catalogNames.some((c) => { const cn = normalizeArabic(c); const hits = words.filter((w) => cn.includes(w)).length; return hits >= Math.min(2, words.length); });
+}
+const DISCOUNT = /(خصم|تخفيض|تنزيل|عرض خاص|offer|discount|off\b|\d+\s*(%|٪))/i;
 
 export interface Issue { code: string; note: string; fix: string }
 export interface CheckResult { score: number; issues: Issue[] }
@@ -144,6 +168,15 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: ctx.strictNumbers ? "invented-strict" : "invented", note: `رقم غير موجود في معلومات الشركة: ${invented.join("، ")}`, fix: ctx.strictNumbers ? "احذف الرقم تماماً. الوزن والعيار والسعر تُقال فقط كما وردت في المعلومات أو في حساب السعر؛ وإلا قل «أتأكد لك من القطعة وأرد عليك» واسأل عن القطعة." : "احذف الرقم. إن سُئلت عنه فقل إنه يعتمد على وضعه واسأل عمّا يحدّده." });
   }
 
+  // A piece we do not have, and a discount that was not permitted.
+  if (ctx.catalogNames?.length) {
+    const unknown = piecesNamed(text).filter((p) => !pieceKnown(p, ctx.catalogNames!));
+    if (unknown.length) issues.push({ code: "unknown-piece", note: `قطعة ليست في الكتالوج: ${unknown.join("، ")}`, fix: "اذكري فقط قطعة من قائمة القطع الموجودة باسمها كما هو، أو لا تسمّي قطعة." });
+  }
+  if (ctx.strictNumbers && !ctx.discountAllowed && DISCOUNT.test(text)) {
+    issues.push({ code: "discount", note: "خصم غير مسموح في هذه الرسالة", fix: "احذفي أي خصم أو عرض. الخصم الوحيد المسموح هو على المصنعية وفي المتابعة الرابعة فقط." });
+  }
+
   // Same opening word as last time reads as a template.
   if (ctx.previous && firstWord(text) && firstWord(text) === firstWord(ctx.previous)) {
     issues.push({ code: "same-open", note: `يبدأ بنفس كلمة الرد السابق («${text.split(/\s+/)[0]}»)`, fix: "ابدأ بكلمة مختلفة — من شيء قاله العميل الآن." });
@@ -160,14 +193,14 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "oversell", note: "يعرض من جديد بعد أن وافق العميل", fix: "العميل وافق — انتقل للتنفيذ: الخطوة التالية وموعدها فقط." });
   }
 
-  const weights: Record<string, number> = { "invented-strict": 60, licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
+  const weights: Record<string, number> = { "invented-strict": 60, "unknown-piece": 60, discount: 60, licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (weights[i.code] ?? 10), 0));
   return { score, issues };
 }
 
 /** Must not be sent as it is, rewritten or not. */
 export function blocksSend(r: CheckResult): boolean {
-  return r.issues.some((i) => i.code === "placeholder" || i.code === "reveal" || i.code === "name" || i.code === "asked" || i.code === "invented-strict");
+  return r.issues.some((i) => ["placeholder", "reveal", "name", "asked", "invented-strict", "unknown-piece", "discount"].includes(i.code));
 }
 
 /** Worth a rewrite: anything but a cosmetic same-opening. */

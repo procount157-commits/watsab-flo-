@@ -52,6 +52,7 @@ import { receipt } from "./graph/receipts";
 import { dialectOf, dialectLine } from "./reply-brain";
 import { shopContext } from "./catalog/shop-context";
 import { HUMAN_VOICE } from "./voice-doctrine";
+import { quote, discounted, discountText } from "./catalog/pricing";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -78,7 +79,7 @@ export const JEWELRY_ANGLE: string[] = [
   "المتابعة ١ (بعد ساعة) — فائدة فورية: صورة أوضح أو زاوية ثانية للقطعة التي سألت عنها (اذكرها بالاسم)، أو أقرب قطعة لما أرسلته هي. سطر واحد وسؤال عن المقاس أو المناسبة.",
   "المتابعة ٢ (بعد ٦ ساعات) — معلومة تفيدها: الوزن والعيار الدقيقان من الكتالوج وما يعنيه ذلك لها (خفيف للبس اليومي / ثقيل للمناسبة)، أو إن تغير سعر الذهب اليوم فقل كم صار سعر القطعة الآن — من المعلومات فقط.",
   "المتابعة ٣ (بعد يوم) — خيار بديل: قطعة أو قطعتان من نفس الذوق بوزن أخف أو أثقل (بالأسماء من الكتالوج)، ليكون عندها مقارنة لا ضغط.",
-  "المتابعة ٤ (بعد ٣ أيام) — تسهيل القرار: ما يلزم للطلب (الاسم والإمارة والمقاس)، التوصيل أو الاستلام من المعرض في العين، ولو عندها قطعة ذهب قديمة فاستبدالها ممكن إن كان ذلك في المعلومات.",
+  "المتابعة ٤ (بعد ٣ أيام) — اللفتة الوحيدة: خصم على المصنعية كما هو مذكور في المعلومات (لا على الذهب)، يُقال مرة واحدة بكرم، مع ما يلزم للطلب (الاسم والإمارة والمقاس) والتوصيل أو الاستلام من المعرض في العين.",
   "المتابعة ٥ (بعد أسبوع) — مناسبة أو هدية: إن اقتربت مناسبة (عيد، زفاف، مولود) فاذكرها وقطعة تناسبها؛ وإلا نصيحة عناية قصيرة بالذهب تخص نوع قطعتها.",
   "المتابعة ٦ (بعد أسبوعين) — سعر الذهب: إن تحرك سعر الجرام منذ آخر رسالة فاذكر الفرق على قطعتها بالرقم من المعلومات؛ وإلا صورة جديدة من المجموعة بلا سؤال.",
   "المتابعة الأخيرة (بعد شهر) — ختام كريم: شكر، وأن المعرض في العين والواتساب موجودان متى احتاجت، بلا سؤال ولا ضغط.",
@@ -175,7 +176,13 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   const topic = turns.filter((t) => !t.fromMe).slice(-3).map((t) => t.text).join(" ");
   const found = await retrieve(userId, topic, 3).catch(() => []);
   const shop = vertical === "jewelry" ? await shopContext(userId, phone, topic).catch(() => null) : null;
-  const facts = [...(shop?.facts ?? []), ...found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`)].join("\n\n");
+  // The one discount there is — the making charge to its floor — on its rung only.
+  const discountRung = (shop?.pricing?.discountRung ?? 4) - 1;
+  const discountAllowed = !!shop && rung === discountRung && !!shop.piece?.weightG && !!shop.rate24;
+  const discountFact = discountAllowed
+    ? `مسموح في هذه المتابعة فقط: ${discountText(quote(shop!.piece!.weightG!, shop!.piece!.purity ?? shop!.pricing!.defaultKarat, shop!.rate24!, shop!.pricing!), discounted(shop!.piece!.weightG!, shop!.piece!.purity ?? shop!.pricing!.defaultKarat, shop!.rate24!, shop!.pricing!), shop!.pricing!)} قدّميه كلفتة كريمة لا كإلحاح.`
+    : (shop ? "ممنوع أي خصم أو عرض في هذه المتابعة." : "");
+  const facts = [...(shop?.facts ?? []), discountFact, ...found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`)].filter(Boolean).join("\n\n");
 
   const system = corePrompt({
     channel: "whatsapp",
@@ -218,7 +225,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     known: card ? { licence: card.licence, activity: card.activity, size: card.size, staff: card.staff } : undefined,
     facts: [facts, profile?.description ?? ""].join("\n"),
   };
-  if (vertical === "jewelry") { (ctx as any).strictNumbers = true; (ctx as any).warm = true; }
+  if (vertical === "jewelry") { (ctx as any).strictNumbers = true; (ctx as any).warm = true; (ctx as any).catalogNames = shop?.names ?? []; (ctx as any).discountAllowed = discountAllowed; }
   let text = raw, q = checkReply(text, ctx);
   if (needsRewrite(q)) {
     const fixed = await complete([

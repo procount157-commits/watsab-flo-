@@ -411,7 +411,7 @@ export async function answerFromKnowledge(
     /** What we sent this customer before they wrote. */
     outreach?: { campaign: string; text: string } | null;
     /** A shop's extras: what it sells, its register, the ad she came from, the piece she named, computed facts. */
-    shop?: { vertical?: "accounting" | "jewelry"; dialect?: string | null; ad?: { title: string | null } | null; piece?: string | null; facts?: string[] } | null;
+    shop?: { vertical?: "accounting" | "jewelry"; dialect?: string | null; ad?: { title: string | null } | null; piece?: string | null; facts?: string[]; names?: string[] } | null;
   } = {},
 ): Promise<AnswerResult> {
   const [profile, history, memory] = await Promise.all([
@@ -499,7 +499,7 @@ export async function answerFromKnowledge(
       const ctx = {
         customer: question, previous, stage: opts.card?.stage,
         reading, names: opts.speaker ? [opts.speaker.name, englishName(opts.speaker.name)] : undefined,
-        strictNumbers: opts.shop?.vertical === "jewelry", warm: opts.shop?.vertical === "jewelry",
+        strictNumbers: opts.shop?.vertical === "jewelry", warm: opts.shop?.vertical === "jewelry", catalogNames: opts.shop?.names, discountAllowed: false,
         known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity, size: opts.card.size, staff: opts.card.staff } : undefined,
         facts: [found.map((f) => `${f.entry.title}\n${f.entry.content}`).join("\n"), profile?.description ?? "", ...(opts.shop?.facts ?? [])].join("\n"),
       };
