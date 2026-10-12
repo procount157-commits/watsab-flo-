@@ -20,7 +20,10 @@ fi
 echo "→ building frontend"
 corepack pnpm install --frozen-lockfile=false
 corepack pnpm --filter @workspace/whatsapp-blast run build
-rm -rf deploy/www && mkdir -p deploy/www
+# Emptied in place, never removed: the web container bind-mounts this folder,
+# and a folder deleted and recreated is a different one — nginx kept serving
+# the old, empty one and the home page failed with a redirect loop.
+mkdir -p deploy/www && find deploy/www -mindepth 1 -delete
 cp -r artifacts/whatsapp-blast/dist/public/. deploy/www/
 
 echo "→ starting database"

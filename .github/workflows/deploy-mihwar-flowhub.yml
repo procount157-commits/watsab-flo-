@@ -1,0 +1,27 @@
+# Every push to main goes live on the Mihwar server (flowhub).
+# The key in MIHWAR_DEPLOY_KEY can do one thing only: ask the server to
+# update this project (a forced command on the server); MIHWAR_KNOWN_HOSTS
+# pins the server, so the key is never offered to anything else.
+name: Deploy to Mihwar (flowhub)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: mihwar-flowhub
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.repository == 'procount157-commits/watsab-flo-'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Deploy
+        env:
+          KEY: ${{ secrets.MIHWAR_DEPLOY_KEY }}
+          KNOWN: ${{ secrets.MIHWAR_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/mihwar && chmod 600 ~/.ssh/mihwar
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/mihwar -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 root@179.197.242.119 flowhub
