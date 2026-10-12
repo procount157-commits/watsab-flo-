@@ -176,13 +176,16 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   const topic = turns.filter((t) => !t.fromMe).slice(-3).map((t) => t.text).join(" ");
   const found = await retrieve(userId, topic, 3).catch(() => []);
   const shop = vertical === "jewelry" ? await shopContext(userId, phone, topic).catch(() => null) : null;
+  // ريم's reading of this very conversation: who they are, what they wanted, the step she chose.
+  const [rv] = (await db.execute<any>(sql`SELECT label, score, piece, summary, next_action FROM conversation_reviews WHERE user_id = ${userId} AND phone = ${phone}`).catch(() => ({ rows: [] }))).rows;
+  const reviewFact = rv ? `قراءة ريم لهذه المحادثة: ${rv.summary ?? ""} (${rv.label}، قربه من الشراء ${rv.score}/100${rv.piece ? `، القطعة: ${rv.piece}` : ""}). الخطوة التي اقترحتها: ${rv.next_action ?? "—"}. ابنِ متابعتك عليها.` : "";
   // The one discount there is — the making charge to its floor — on its rung only.
   const discountRung = (shop?.pricing?.discountRung ?? 4) - 1;
   const discountAllowed = !!shop && rung === discountRung && !!shop.piece?.weightG && !!shop.rate24;
   const discountFact = discountAllowed
     ? `مسموح في هذه المتابعة فقط: ${discountText(quote(shop!.piece!.weightG!, shop!.piece!.purity ?? shop!.pricing!.defaultKarat, shop!.rate24!, shop!.pricing!), discounted(shop!.piece!.weightG!, shop!.piece!.purity ?? shop!.pricing!.defaultKarat, shop!.rate24!, shop!.pricing!), shop!.pricing!)} قدّميه كلفتة كريمة لا كإلحاح.`
     : (shop ? "ممنوع أي خصم أو عرض في هذه المتابعة." : "");
-  const facts = [...(shop?.facts ?? []), discountFact, ...found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`)].filter(Boolean).join("\n\n");
+  const facts = [reviewFact, ...(shop?.facts ?? []), discountFact, ...found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`)].filter(Boolean).join("\n\n");
 
   const system = corePrompt({
     channel: "whatsapp",
@@ -250,10 +253,22 @@ async function record(userId: number, phone: string, rung: number, verdict: "sen
   });
 }
 
+// One round per account at a time. Two rounds that overlap — the worker's
+// and an owner's «run now» — both read the same ladder before either has
+// written its rung, and the customer gets the same follow-up twice. It
+// happened; two customers got two messages a minute apart.
+const running = new Set<number>();
+
 /** One round for one account. */
 export async function runSmartFollowUps(userId: number, now = Date.now()) {
   const mode = await modeOf(userId);
   const result = { mode, considered: 0, drafted: 0, sent: 0, declined: 0 };
+  if (running.has(userId)) return result;
+  running.add(userId);
+  try { return await runRound(userId, now, mode, result); } finally { running.delete(userId); }
+}
+
+async function runRound(userId: number, now: number, mode: Mode, result: { mode: Mode; considered: number; drafted: number; sent: number; declined: number }) {
   if (mode === "off") return result;
   if (!isWithinSendingHours(new Date(now))) return result;
   if (mode === "live" && !getStatus(userId).connected) return result;
@@ -267,7 +282,8 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
     db.select({ phone: unsubscribedPhonesTable.phone }).from(unsubscribedPhonesTable).where(and(eq(unsubscribedPhonesTable.userId, userId), inArray(unsubscribedPhonesTable.phone, phones))),
     db.select({ phone: leadSourcesTable.phone }).from(leadSourcesTable).where(and(eq(leadSourcesTable.userId, userId), inArray(leadSourcesTable.phone, phones), inArray(leadSourcesTable.lastIntent, ["not_interested", "opt_out", "complaint"]))),
   ]);
-  const skip = new Set([...outRows, ...coldRows].map((r) => r.phone));
+  const filed = (await db.execute<{ phone: string }>(sql`SELECT phone FROM conversation_reviews WHERE user_id = ${userId} AND label IN ('machine','not_customer','refused')`).catch(() => ({ rows: [] as Array<{ phone: string }> }))).rows;
+  const skip = new Set([...outRows, ...coldRows, ...filed].map((r) => r.phone));
 
   // The rungs already taken, per phone.
   const takenRows = await db.select({ phone: followupDeliberationsTable.phone, at: followupDeliberationsTable.createdAt, draft: followupDeliberationsTable.draft, verdict: followupDeliberationsTable.verdict })
@@ -302,6 +318,9 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
     if (!ops.ok) { logger.info({ userId, why: ops.view }, "smart follow-ups held by operations"); break; }
     if (left <= 0) break;
 
+    // Belt and braces: a follow-up already went to this number in the last two hours.
+    const recent = mine.find((r) => r.verdict === "send" && now - new Date(r.at).getTime() < 2 * H);
+    if (recent) continue;
     const lastIn = [...turns].reverse().find((t) => !t.fromMe)?.at.getTime() ?? 0;
     const earlier = mine.filter((r) => new Date(r.at).getTime() > lastIn && r.draft).map((r) => r.draft!);
     const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length, vertical));
