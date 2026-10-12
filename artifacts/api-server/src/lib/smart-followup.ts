@@ -53,6 +53,7 @@ import { dialectOf, dialectLine } from "./reply-brain";
 import { shopContext } from "./catalog/shop-context";
 import { HUMAN_VOICE } from "./voice-doctrine";
 import { quote, discounted, discountText } from "./catalog/pricing";
+import { normalizeArabic } from "./intent";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -76,12 +77,12 @@ export const RUNG_ANGLE: string[] = [
 ];
 /** A shop's rungs: each one a benefit to the customer, never a reminder. */
 export const JEWELRY_ANGLE: string[] = [
-  "المتابعة ١ (بعد ساعة) — فائدة فورية: صورة أوضح أو زاوية ثانية للقطعة التي سألت عنها (اذكرها بالاسم)، أو أقرب قطعة لما أرسلته هي. سطر واحد وسؤال عن المقاس أو المناسبة.",
+  "المتابعة ١ (بعد ساعة) — القطعة نفسها بالاسم مع وزنها وعيارها وسعرها اليوم شامل الضريبة من المعلومات (صورتها الحقيقية تُرسل تلقائياً مع رسالتك — لا تعرضي صورة أخرى)، وسؤال واحد: لمناسبة أم للبس اليومي، أو المقاس.",
   "المتابعة ٢ (بعد ٦ ساعات) — معلومة تفيدها: الوزن والعيار الدقيقان من الكتالوج وما يعنيه ذلك لها (خفيف للبس اليومي / ثقيل للمناسبة)، أو إن تغير سعر الذهب اليوم فقل كم صار سعر القطعة الآن — من المعلومات فقط.",
   "المتابعة ٣ (بعد يوم) — خيار بديل: قطعة أو قطعتان من نفس الذوق بوزن أخف أو أثقل (بالأسماء من الكتالوج)، ليكون عندها مقارنة لا ضغط.",
   "المتابعة ٤ (بعد ٣ أيام) — اللفتة الوحيدة: خصم على المصنعية كما هو مذكور في المعلومات (لا على الذهب)، يُقال مرة واحدة بكرم، مع ما يلزم للطلب (الاسم والإمارة والمقاس) والتوصيل أو الاستلام من المعرض في العين.",
   "المتابعة ٥ (بعد أسبوع) — مناسبة أو هدية: إن اقتربت مناسبة (عيد، زفاف، مولود) فاذكرها وقطعة تناسبها؛ وإلا نصيحة عناية قصيرة بالذهب تخص نوع قطعتها.",
-  "المتابعة ٦ (بعد أسبوعين) — سعر الذهب: إن تحرك سعر الجرام منذ آخر رسالة فاذكر الفرق على قطعتها بالرقم من المعلومات؛ وإلا صورة جديدة من المجموعة بلا سؤال.",
+  "المتابعة ٦ (بعد أسبوعين) — سعر الذهب: إن تحرك سعر الجرام منذ آخر رسالة فاذكر الفرق على قطعتها بالرقم من المعلومات؛ وإلا قطعة جديدة من المجموعة بالاسم ووزنها وسعرها، بلا سؤال.",
   "المتابعة الأخيرة (بعد شهر) — ختام كريم: شكر، وأن المعرض في العين والواتساب موجودان متى احتاجت، بلا سؤال ولا ضغط.",
 ];
 
@@ -160,7 +161,7 @@ async function candidates(userId: number, scope: "spoke" | "all"): Promise<strin
   return (r.rows as Array<{ phone: string }>).map((x) => x.phone);
 }
 
-type Draft = { send: boolean; text: string | null; reason: string; retry?: boolean };
+type Draft = { send: boolean; text: string | null; reason: string; retry?: boolean; photo?: { path: string; caption: string } | null };
 
 /** خالد writes the rung, or declines. */
 async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null): Promise<Draft> {
@@ -241,7 +242,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   if (blocksSend(q)) return { send: false, text, reason: `أُوقفت: ${q.issues[0]?.note ?? "فحص الكتابة"}` };
   const copy = earlier.find((e) => overlap(e, text) > 0.6);
   if (copy) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة" };
-  return { send: true, text, reason: q.issues.length ? `أُرسلت مع ملاحظات: ${q.issues.map((i) => i.note).join("، ")}`.slice(0, 300) : "جاهزة" };
+  return { send: true, text, reason: q.issues.length ? `أُرسلت مع ملاحظات: ${q.issues.map((i) => i.note).join("، ")}`.slice(0, 300) : "جاهزة", photo: shop?.photo && shop.piece && normalizeArabic(text).includes(normalizeArabic(shop.piece.name.split(" ").slice(0, 2).join(" "))) ? shop.photo : null };
 }
 
 async function record(userId: number, phone: string, rung: number, verdict: "send" | "hold" | "drop", reason: string, draft: string | null, executed: boolean, opsView: string) {
@@ -339,6 +340,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
     }
     try {
       await sendMessage(userId, phone, d.text);
+      if (d.photo) await sendMessage(userId, phone, d.photo.caption, "image", d.photo.path).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "صورة المتابعة لم تُرسل"));
       await record(userId, phone, due.rung, "send", d.reason, d.text, true, ops.view);
       result.sent++; left--;
       logger.info({ userId, phone, rung: due.rung + 1 }, "smart follow-up sent");

@@ -9,7 +9,7 @@
 // one extra call — happens only when something is actually wrong.
 
 import { normalizeArabic } from "./intent";
-import { CORPORATE } from "./voice-doctrine";
+import { CORPORATE, ENDEARMENT, FORBIDDEN_OFFERS } from "./voice-doctrine";
 
 export interface CheckContext {
   /** What the customer just wrote. */
@@ -168,6 +168,15 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: ctx.strictNumbers ? "invented-strict" : "invented", note: `رقم غير موجود في معلومات الشركة: ${invented.join("، ")}`, fix: ctx.strictNumbers ? "احذف الرقم تماماً. الوزن والعيار والسعر تُقال فقط كما وردت في المعلومات أو في حساب السعر؛ وإلا قل «أتأكد لك من القطعة وأرد عليك» واسأل عن القطعة." : "احذف الرقم. إن سُئلت عنه فقل إنه يعتمد على وضعه واسأل عمّا يحدّده." });
   }
 
+  // A term of endearment — «حبيبتي» to a customer — is forbidden outright.
+  const sweet = ENDEARMENT.filter((p) => new RegExp(`(^|[\\s،,.!؟?🌸✨💛])${normalizeArabic(p)}([\\s،,.!؟?🌸✨💛]|$)`).test(n) || n.includes(` ${normalizeArabic(p)} `));
+  if (sweet.length) issues.push({ code: "endearment", note: `كلمة تحبّب ممنوعة: ${sweet.join("، ")}`, fix: `احذفي «${sweet[0]}». خاطبيها بـ«هلا فيچ» أو باسمها — الدفء احترام لا تدليل.` });
+
+  if (ctx.warm) {
+    const offer = FORBIDDEN_OFFERS.filter((p) => n.includes(normalizeArabic(p)) || text.toLowerCase().includes(p));
+    if (offer.length) issues.push({ code: "offer", note: `عرض ممنوع: ${offer[0]}`, fix: "احذفي عرض الصورة الأخرى. تكلّمي عن القطعة نفسها: وزنها وسعرها ولمن تناسب، ثم سؤال عن المناسبة أو المقاس." });
+  }
+
   // A piece we do not have, and a discount that was not permitted.
   if (ctx.catalogNames?.length) {
     const unknown = piecesNamed(text).filter((p) => !pieceKnown(p, ctx.catalogNames!));
@@ -193,14 +202,14 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "oversell", note: "يعرض من جديد بعد أن وافق العميل", fix: "العميل وافق — انتقل للتنفيذ: الخطوة التالية وموعدها فقط." });
   }
 
-  const weights: Record<string, number> = { "invented-strict": 60, "unknown-piece": 60, discount: 60, licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
+  const weights: Record<string, number> = { offer: 60, endearment: 60, "invented-strict": 60, "unknown-piece": 60, discount: 60, licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (weights[i.code] ?? 10), 0));
   return { score, issues };
 }
 
 /** Must not be sent as it is, rewritten or not. */
 export function blocksSend(r: CheckResult): boolean {
-  return r.issues.some((i) => ["placeholder", "reveal", "name", "asked", "invented-strict", "unknown-piece", "discount"].includes(i.code));
+  return r.issues.some((i) => ["placeholder", "reveal", "name", "asked", "invented-strict", "unknown-piece", "discount", "endearment", "offer"].includes(i.code));
 }
 
 /** Worth a rewrite: anything but a cosmetic same-opening. */

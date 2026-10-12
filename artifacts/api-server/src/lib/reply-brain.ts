@@ -265,7 +265,7 @@ export function replyPrompt(i: {
   const examples = (i.vertical === "jewelry" && JEWELRY_EXAMPLES[r.situation]?.[r.lang]) || EXAMPLES[r.situation][r.lang];
   // The customer's dialect wins; standard Arabic takes the account's own register when it fixes one.
   const chosen = r.dialect && r.dialect !== "msa" && r.dialect !== "en" ? r.dialect : (i.dialect === "gulf" ? "gulf" : "msa");
-  const never = i.vertical === "jewelry" ? "\nممنوع منعاً باتاً: أي وزن أو عيار أو سعر أو توفر أو مدة توصيل لا يوجد نصاً في المعلومات أو في حساب السعر المرفق. إن لم تكن متأكداً قل «أتأكد لك من القطعة وأرد عليك خلال دقائق» واسأل عن القطعة أو الصورة — الرقم المخترع يُوقف ردك ولا يُرسل." : "";
+  const never = i.vertical === "jewelry" ? "\nممنوع منعاً باتاً كلمات التحبّب: حبيبتي، حبيبي، قلبي، عيوني، حياتي، يا قمر — خاطبيها بـ«هلا فيچ» أو باسمها.\nممنوع منعاً باتاً: أي وزن أو عيار أو سعر أو توفر أو مدة توصيل لا يوجد نصاً في المعلومات أو في حساب السعر المرفق. إن لم تكن متأكداً قل «أتأكد لك من القطعة وأرد عليك خلال دقائق» واسأل عن القطعة أو الصورة — الرقم المخترع يُوقف ردك ولا يُرسل." : "";
   const dialect = r.lang === "ar" ? dialectLine(chosen) : "";
   const nameLine = r.lang === "en" ? `Your name is ${englishName(i.name)} (${i.name}). Never use another name.` : `اسمك ${i.name}. لا تستخدم اسماً غيره.`;
   return [

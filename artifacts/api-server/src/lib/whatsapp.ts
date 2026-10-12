@@ -3154,6 +3154,16 @@ export function startWakeDetector() {
   appLogger.info("sleep detector started");
 }
 
+/** Recall a message we sent — «delete for everyone». WhatsApp allows it for about two days. */
+export async function deleteForEveryone(userId: number, phone: string, messageId: string): Promise<void> {
+  const inst = waManager.get(userId);
+  const sock = (inst as any).state?.socket;
+  if (!sock || !(inst as any).state?.connected) throw new Error("WhatsApp غير متصل");
+  const jid = formatPhone(phone.split(":")[0]!);
+  await sock.sendMessage(jid, { delete: { remoteJid: jid, fromMe: true, id: messageId } });
+  receipt({ userId, node: "sender", graph: "whatsapp", action: "recall.whatsapp", subject: phone, outputRef: messageId, why: "حُذفت الرسالة عند الطرفين بطلب صاحب العمل" });
+}
+
 export async function sendMessage(
   userId: number, phone: string, message: string,
   messageType?: string, mediaUrl?: string | null,

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, desc, sql, and, asc } from "drizzle-orm";
 import { db, waSessionEventsTable, contactGroupsTable, contactsTable, incomingMessagesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable } from "@workspace/db";
-import { getStatus, getQr, getHealth, getSyncStats, logout, initWhatsApp, forceResync, extractPhones, extractContacts, sendMessage, sendVoiceNote, resetSession, autoHeal, requestPairingCode } from "../lib/whatsapp";
+import { getStatus, getQr, getHealth, getSyncStats, logout, initWhatsApp, forceResync, extractPhones, extractContacts, sendMessage, sendVoiceNote, resetSession, autoHeal, requestPairingCode, deleteForEveryone } from "../lib/whatsapp";
 import { requireAuth } from "../lib/auth";
 import { takeover } from "../lib/lead-card";
 
@@ -131,6 +131,14 @@ router.post("/test-send", async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || "فشل إرسال الرسالة الاختبارية" });
   }
+});
+
+// Recall a sent message for everyone. { phone, messageId }
+router.post("/recall", async (req, res) => {
+  const { phone, messageId } = req.body as { phone?: string; messageId?: string };
+  if (!phone || !messageId) return res.status(400).json({ error: "phone و messageId مطلوبان" });
+  try { await deleteForEveryone(req.session.userId!, String(phone), String(messageId)); res.json({ ok: true }); }
+  catch (err: any) { res.status(500).json({ error: String(err?.message ?? err) }); }
 });
 
 router.post("/logout", async (req, res) => {
