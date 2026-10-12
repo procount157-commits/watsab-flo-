@@ -19,6 +19,7 @@ import { skillsFor, skillsPreamble, finalCheckPreamble } from "./agent-skills";
 import { memoryPreamble, remember } from "./agent-memory";
 import { personaPreamble, agentJob, type Routing } from "./agent-router";
 import { answerFromKnowledge } from "./knowledge";
+import { shopContext } from "./catalog/shop-context";
 
 export type Turn = { role: "user" | "assistant"; content: string };
 
@@ -60,13 +61,22 @@ export async function simulate(userId: number, role: string, turns: Turn[]) {
   const voice = [personaPreamble(routing), skillsPreamble(skills), memory].filter(Boolean).join("\n\n");
 
   const t0 = Date.now();
-  const answer = await answerFromKnowledge(userId, last.content, undefined, voice, agentJob(routing), finalCheckPreamble(skills), cardText(card), { card, history: clean });
+  // The same path a real reply takes: the message read first, the shop's
+  // facts (piece, quote, ad) attached, the employee's own name and dialect.
+  const shop = await shopContext(userId, "arena", last.content).catch(() => null);
+  const answer = await answerFromKnowledge(userId, last.content, undefined, voice, agentJob(routing), finalCheckPreamble(skills), cardText(card), {
+    card, history: clean,
+    speaker: { name: agent.name, title: agent.title },
+    shop: shop ? { vertical: shop.vertical, dialect: shop.dialect, ad: shop.ad, piece: shop.piece?.name ?? null, facts: shop.facts } : null,
+  });
   return {
     reply: answer.reply, provider: answer.provider, ms: Date.now() - t0, reason: answer.reason ?? null,
     intent, stage: STAGES[Math.min(7, Math.max(1, card.stage)) - 1],
     card: { licence: card.licence, activity: card.activity, size: card.size, staff: card.staff, taxStatus: card.taxStatus, accountant: card.accountant, pain: card.pain, objection: card.objection, agreed: !!card.agreedAt },
     skills: skills.map((s) => s.name),
     quality: answer.quality ?? null,
+    reading: answer.reading ?? null,
+    photo: shop?.photo?.caption ?? null,
     debug: answer.debug ?? null,
     employee: { name: agent.name, title: agent.title, avatar: agent.avatar },
   };

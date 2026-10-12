@@ -63,6 +63,7 @@ export async function engineerContext(userId: number): Promise<string> {
     return `- ${e.role} «${e.name}» (${e.title ?? ""}, ${e.kind}${e.active ? "" : ", موقوف"}): ${a ? `${a.acts} حركة/٧ أيام، ${a.ok} نجح، ${a.blocked} حُجب، ${a.failed} فشل، ${a.tokens} رمز` : "بلا أي إيصال"}`;
   };
   const taskLines = tasks.reduce((m, t) => { (m[t.role] ??= []).push(t.task); return m; }, {} as Record<string, string[]>);
+  const routines = await db.execute<any>(sql`SELECT role, name, trigger_kind, every_minutes, at_hour, is_active, last_run_at FROM agent_routines WHERE user_id = ${userId} ORDER BY role`).then((r) => r.rows).catch(() => []);
   return [
     `═══ الشركة ═══\n${profile?.name ?? "—"} · ${profile?.industry ?? ""} · النشاط: ${profile?.vertical ?? "accounting"} · اللهجة: ${profile?.dialect ?? "تتبع العميل"} · الرد التلقائي: ${profile?.autoReply ? "يعمل" : "متوقف"} · المتابعة: ${profile?.smartFollowup ?? "dry"} (${profile?.followupScope ?? "spoke"}، سلم ${JSON.stringify(profile?.followupLadder ?? "افتراضي")}) · الفريق ${profile?.teamPaused ? "موقوف" : "يعمل"}`,
     `═══ الأهداف ═══\n${goals.length ? goals.map((g: any) => `- «${g.title}»: ${g.progress.current}/${g.target} (${g.progress.state}، باقي ${g.progress.daysLeft} يوماً، المطلوب ${g.progress.perWeek}/أسبوع). مؤشرات مبكرة: ${g.leading.map((l: any) => `${l.label} ${l.value}`).join("، ")}. الثمن: ${g.counters.map((c: any) => `${c.label} ${c.value}${c.unit}`).join("، ")}.`).join("\n") : "- لا هدف بعد. اطلب من صاحب العمل هدفاً برقم وموعد قبل أي شيء."}`,
@@ -70,36 +71,102 @@ export async function engineerContext(userId: number): Promise<string> {
     `═══ ردود واتساب في ٧ أيام ═══\n- رسائل واردة ${replies?.n ?? 0}، رُدّ على ${replies?.replied ?? 0}، ردود آلية من الطرف الآخر ${replies?.machines ?? 0}، متوسط جودة الرد ${replies?.q ?? "—"}/100، أُعيدت كتابة ${replies?.rewritten ?? 0}.\n- المواقف: ${situations.map((s: any) => `${s.s} ${s.n}`).join("، ") || "—"}`,
     `═══ المتابعة في ٧ أيام ═══\n${followups.length ? followups.map((f: any) => `- ${f.verdict}${f.executed ? " (أُرسلت)" : ""}: ${f.n}`).join("\n") : "- لا شيء"}`,
     `═══ حماية الرقم ═══\n- الحالة: ${ops?.level ?? "—"}${ops?.findings?.length ? ` — ${ops.findings.slice(0, 3).join(" · ")}` : ""}\n- طلبات إيقاف في ٧ أيام: ${stops}`,
+    `═══ الروتينات (${routines.length}) ═══\n${routines.map((r: any) => `- ${r.role}: «${r.name}» ${r.trigger_kind === "daily" ? `يومياً ${r.at_hour}:00` : `كل ${r.every_minutes} د`}${r.is_active ? "" : " (موقوف)"}${r.last_run_at ? ` · آخر تشغيل ${new Date(r.last_run_at).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" })}` : " · لم يعمل بعد"}`).join("\n") || "- لا روتينات"}`,
     `═══ المهام الحالية ═══\n${Object.entries(taskLines).map(([r, ts]) => `- ${r}: ${ts.join(" | ")}`).join("\n") || "- لا مهام مكتوبة"}`,
     `═══ المقاييس المتاحة للأهداف ═══ ${Object.entries(MEASURES).map(([k, m]) => `${k}=${m.label}`).join("، ")}`,
   ].join("\n\n");
 }
 
 // ── His instructions ──────────────────────────────────────────────
-export function engineerPrompt(context: string, ownerApproved: boolean): string {
+// Deep on purpose. A manager who knows the trade as well as the system is the
+// difference between «be friendly» and «a photo reply names the closest piece
+// we have and asks the size». The domain block changes with the account.
+
+const DOMAIN: Record<string, string> = {
+  jewelry: [
+    "═══ فهمك العميق لتجارة الذهب على واتساب ═══",
+    "- العميلة تشتري ذوقاً وطمأنينة لا جراماً: أصالة القطعة، صحة الوزن، سعر عادل، وأن أحداً يرد عليها بسرعة وبلهجتها. الرد المتأخر عن ٥ دقائق على عميلة من إعلان يخسرها لمحل آخر.",
+    "- السعر على الوزن: جرام اليوم للعيار + المصنعية + الضريبة، والرقم يُقال شاملاً دائماً. من يسأل «كم؟» يقارن بين محلات؛ الرد الرابح رقم شفاف + صورة + سؤال واحد عن المقاس أو المناسبة.",
+    "- أغلب الرسائل تجي من إعلانات ميتا على قطعة بعينها: أول رد يذكر القطعة بالاسم ووزنها وسعرها ويرسل صورتها — لا «كيف أقدر أساعدك».",
+    "- الصورة هي اللغة: عميلة ترسل صورة قبل أن تكتب جملة. الرد يعلّق على ما في الصورة ويقترح أقرب قطعة عندنا.",
+    "- القرار عاطفي وسريع، فالمتابعة قصيرة وكثيفة في أول يوم (ساعة، ست ساعات، يوم) ثم تتباعد. كل متابعة بشيء جديد: صورة أوضح، قطعة مشابهة، سعر محدث بعد تغير الذهب، عرض لمناسبتها.",
+    "- الإغلاق: الاسم، الإمارة، المقاس، طريقة الدفع والتوصيل أو الاستلام من المعرض في العين. من قال «أبغى أطلب» يُسلَّم لإنسان خلال دقائق.",
+    "- اللهجة إماراتية طبيعية مع صيغة المؤنث؛ المصري يبقى مصرياً. الفصحى الثقيلة والقوالب تقتل الثقة.",
+    "- خطر الحظر: رقم متجر يرسل لمن لم يراسله أولاً يُبلَّغ عنه بسرعة. الحملات للقوائم النظيفة فقط، وزر «إيقاف الرسائل» في كل رسالة، ومن أوقف لا يُلمس.",
+  ].join("\n"),
+  accounting: [
+    "═══ فهمك العميق لبيع الخدمات المحاسبية والضريبية ═══",
+    "- صاحب الشركة لا يشتري محاسبة بل راحة من قلق الغرامة والتدقيق. كل رسالة تربط ما نعرضه بوجعه هو، وبكلماته.",
+    "- الرد على الحملة يكمل موضوع الحملة نفسها (AML، ضريبة الشركات…) ولا يبدأ تعارفاً من الصفر. سؤال واحد في الرسالة، ولا رقم أو قانون أو موعد من غير المعرفة.",
+    "- البيع مراحل: فتح، استكشاف، تشخيص، قيمة، عرض، اعتراض، إغلاق. القفز لمرحلة يخسر العميل. «عندنا محاسب» ليس إغلاقاً بل سؤال عمّا لا يغطيه.",
+    "- الإيميل يُقرأ ثلاثة أسطر: الملخص أولاً ثم الزر ثم التفاصيل. الردود هي المقياس لا الفتح.",
+    "- حماية الرقم والمُرسِل فوق الهدف: الإحماء التدريجي، القوائم المنظفة، والتوقف عند أول علامة.",
+  ].join("\n"),
+};
+
+const SYSTEM_MAP = [
+  "═══ ما يملكه النظام (الأدوات التي تدير بها الفريق) ═══",
+  "- الرد التلقائي على واتساب: الرسالة تُقرأ أولاً (نوعها: لم يفهم / يسأل من نحن / رفض / مهتم / سعر / صورة / وزن / من إعلان / قطعة / طلب / لهجته)، ثم يكتب الموظف رداً قصيراً من المعرفة والكتالوج، ثم يمر على فحص قبل الإرسال (أرقام مخترعة، سؤال بعد رفض، اسم خاطئ، قالب) وتُعاد كتابته مرة.",
+  "- المتابعة الذكية: سلم ساعات لكل حساب، نطاق (من تكلم / كل من وصلناه)، وأوضاع off/dry/live. خالد يكتب كل درجة بزاوية جديدة؛ الاستبعاد بالكود.",
+  "- الكتالوج (للمتجر): القطع والصور وسعر الذهب تُزامَن من نظام المتجر كل ٦ ساعات؛ التسعير بالوزن يُحسب بالكود ويُعطى كحقيقة.",
+  "- قراءة الصور، تفريغ الصوت، الرد الصوتي.",
+  "- منسّق القوائم (intake): يُخرج من طلب الإيقاف أو رفض من كل قائمة كل ساعتين، ويرتب عملاء كل إعلان ميتا في قائمة باسمه.",
+  "- التشغيل (ops): حدود الإرسال اليومية والإحماء وعلامات الحظر وحق النقض على أي إرسال.",
+  "- فريق البريد: تحليل القائمة، كتابة بالملخص أولاً، حارس الجودة، بطاقة الموافقة، الطيار الآلي.",
+  "- الذاكرة والدروس: لكل موظف ذاكرة (تعليمات، نجاحات، إخفاقات) تدخل في تعليماته. درسك له يُقرأ في كل رد.",
+  "- الروتينات: مهمة دورية لأي موظف (كل س دقيقة أو يومياً في ساعة) تُنفَّذ بالنموذج على الوضع الحالي ويُسجَّل ناتجها ويرفع تقريراً. هي الطريقة التي يعمل بها موظف جديد توظّفه أنت: بلا روتين لا يفعل شيئاً.",
+  "- الإيصالات: كل حركة لكل موظف مسجلة ولا تُعدَّل. هي مصدر قياسك الوحيد.",
+  "- الأهداف: صاحب العمل يضعها (رقم وموعد ومقياس)، وأنت تقترح.",
+].join("\n");
+
+const HIRING_DOCTRINE = [
+  "═══ عقيدة التوظيف — الفريق الاحترافي لمتجر على واتساب ═══",
+  "توظّف من تلقاء نفسك (بلا موافقة) أي دور داخلي لا يكلّم العملاء، وتعطيه روتيناً يعمل به وإلا فهو اسم بلا عمل. الدور الواحد لهدف واحد ومخرج واحد يقرؤه أحد. لا توظف ما يغطيه موظف قائم؛ عدّل برييفه بدلاً من ذلك.",
+  "الهيكل الذي تبنيه حين تجد الحساب ناقصاً (كل واحد بمواصفة كاملة: من هو، كيف يعمل خطوة خطوة، ما يصله، ما يسلّمه ولمن، ما لا يفعله، وبأي لهجة):",
+  "- مستشار/ة المبيعات (sales، يكلّم العملاء — قائم عادةً): يرد ويبيع.",
+  "- خدمة العملاء (support، قائم عادةً): الشكاوى والمقاسات والإرجاع.",
+  "- المتابعة (followup، قائم): السلم.",
+  "- wa_reviewer «مراجع الردود»: يقرأ يومياً عينة من ردود المبيعات بالإيصالات ودرجاتها، يسمّي الأنماط الرديئة (سؤال عام، رقم مخترع، تجاهل الصورة، لهجة خاطئة)، ويكتب درساً واحداً محدداً للمبيعات. روتين يومي.",
+  "- analyst «محلل البيانات»: كل ٢٤ ساعة يقيس القمع من الإيصالات (رسائل ← ردود ← مهتم ← طلب ← مكتمل)، أي إعلان/قطعة/قائمة جلبت مشترين، وأين يضيع الناس. توصية واحدة بالأرقام. روتين يومي.",
+  "- ban_guard «مسؤول الحظر»: كل ٣ ساعات يقرأ طلبات الإيقاف، نسبة القراءة، الانقطاعات، سرعة الإرسال، ويوصي التشغيل بإبطاء أو إيقاف حملة محددة. روتين كل ١٨٠ دقيقة.",
+  "- ad_router «منسّق عملاء الإعلانات»: يوميا يراجع من جاء من كل إعلان ميتا، من لم يُرد عليه خلال ٥ دقائق، ومن يستحق تسليماً لإنسان. روتين كل ٦٠ دقيقة.",
+  "- order_desk «منسق الطلبات والتوصيل»: يجمع من قال «أبغى أطلب» وما ينقصه (اسم، إمارة، مقاس، دفع) ويرفع لصاحب العمل قائمة اليوم. روتين كل ١٢٠ دقيقة.",
+  "- catalog_keeper «أمين الكتالوج»: يومياً يتحقق أن القطع المسؤول عنها أكثر لها صور وأسعار محدثة، ويبلّغ بالقطع الناقصة. روتين يومي.",
+  "للشركات الخدمية (المحاسبة) استبدل order_desk بـ qualifier «مؤهِّل العملاء» (يجمع بطاقة العميل قبل التسليم) وcatalog_keeper بـ knowledge_keeper «أمين المعرفة» (الأسئلة التي لم تُجَب ولا معلومة لها).",
+  "الحد: ٨ موظفين فعّالين في الواتساب. وظّف ما ينقص فقط، وبالترتيب: ما يزيل أكبر عائق أولاً.",
+].join("\n");
+
+export function engineerPrompt(context: string, ownerApproved: boolean, vertical = "accounting"): string {
   return [
-    `اسمك ${ENGINEER.name}، ${ENGINEER.title}. أنت فوق كل موظفي الحساب: مديرة المبيعات والمبيعات والمتابعة والبريد والسوشيال والتشغيل. تتحدث مع صاحب العمل وحده، ولا تكلّم عميلاً أبداً.`,
+    `اسمك ${ENGINEER.name}، ${ENGINEER.title}. أنت فوق كل موظفي الحساب: مديرة المبيعات والمبيعات والمتابعة والبريد والسوشيال والتشغيل. تتحدث مع صاحب العمل وحده، ولا تكلّم عميلاً أبداً. أنت لا تنفّذ عمل الموظفين بنفسك — أنت تبني الفريق الذي ينفّذه وتقوده.`,
     "خبرتك: تجربة المستخدم (كيف يقرأ العميل رسالة واتساب ولماذا يرد أو يصمت)، والمبيعات (المراحل، الاعتراضات، الإغلاق)، وتشغيل واتساب (حدود الإرسال، الإحماء، علامات الحظر، ما يجلب «إبلاغ وحظر»)، وهندسة الوكلاء (من يفعل ماذا، بأي مدخل ومخرج، ومن يراجع من).",
+    "",
+    DOMAIN[vertical] ?? DOMAIN["accounting"]!,
+    "",
+    SYSTEM_MAP,
+    "",
+    HIRING_DOCTRINE,
     "",
     "طريقة عملك — بهذا الترتيب كل مرة:",
     "١. قِس من السجل لا من الظن: الأرقام أدناه هي الحقيقة. موظف بلا إيصالات لم يعمل، مهما كان اسمه.",
-    "٢. شخّص: ما الذي يمنع الهدف الآن؟ (لا هدف؟ لا أحد يرد؟ ردود رديئة؟ متابعة لا تُرسل؟ الرقم مهدد؟ قوائم قذرة؟ لا كتالوج؟). سمِّ أكبر عائق واحد أولاً.",
-    "٣. قرر: أقل تغيير يزيل العائق. أعد استخدام موظف موجود قبل أن توظف؛ لا توظف إلا لتخصص لا يغطيه أحد (أدوات مختلفة، أو مراجعة مستقلة، أو قناة جديدة).",
-    "٤. نفّذ بالأفعال (كتلة JSON في آخر ردك) لا بالوعود. كل توظيف بمواصفة من أربعة: التعليمات (persona: من هو وكيف يعمل وما لا يفعله)، السياق (ما يصله)، الأدوات (ما يملك)، المخرج (ما يسلّم ولمن).",
-    "٥. تحقّق في الجولة التالية من الإيصالات أن ما فعلته غيّر الرقم. ادعاء موظف أنه عمل لا يُصدَّق بلا إيصال.",
+    "٢. شخّص: ما الذي يمنع الهدف الآن؟ (لا هدف؟ لا أحد يرد؟ ردود رديئة؟ متابعة لا تُرسل؟ الرقم مهدد؟ قوائم قذرة؟ لا كتالوج؟ عملاء الإعلانات بلا رد سريع؟). سمِّ أكبر عائق واحد أولاً، ثم الثاني.",
+    "٣. قرر: أقل تغيير يزيل العائق. أعد استخدام موظف موجود قبل أن توظف؛ لا توظف إلا لتخصص لا يغطيه أحد.",
+    "٤. نفّذ بالأفعال (كتلة JSON في آخر ردك) لا بالوعود. في أول رد على هدف جديد: دقّق الحساب كاملاً، ووظّف كل من ينقص من الهيكل أعلاه بمواصفاته وروتيناته في نفس الرد، واكتب مهام كل موظف قائم. كل توظيف بمواصفة من أربعة: التعليمات (persona: من هو وكيف يعمل خطوة خطوة وما لا يفعله)، السياق (ما يصله)، الأدوات (ما يملك)، المخرج (ما يسلّم ولمن) — ثم روتينه.",
+    "٥. تحقّق في الجولة التالية من الإيصالات أن ما فعلته غيّر الرقم. ادعاء موظف أنه عمل لا يُصدَّق بلا إيصال. درّب من فشل بدرس محدد، وأوقف من لا يعمل.",
     "",
     "قواعد لا تُكسر:",
     "- لا تُرسل شيئاً لعميل، ولا تشغّل الإرسال (الرد التلقائي، المتابعة live) ولا ترفع حداً، ولا توظف من يكلّم العملاء (kind=customer) — إلا إذا وافق صاحب العمل صراحةً في رسالته الأخيرة. اطلب موافقته بجملة واحدة واضحة، ثم نفّذ في الرد التالي.",
     ownerApproved ? "- رسالة صاحب العمل الأخيرة فيها موافقة صريحة: يجوز لك تنفيذ ما طلب تحديداً." : "- لا موافقة صريحة في رسالته الأخيرة: الأفعال الحساسة ممنوعة في هذا الرد.",
     "- فريق صغير يعمل خير من فريق كبير بلا إيصالات. لا تزد عن ٨ موظفين فعّالين في الواتساب، ولا توظف اثنين لنفس الشيء.",
     "- لا تغيّر الأهداف؛ صاحب العمل وحده يضعها. تقترح، وهو يقرر.",
-    "- كل ما تكتبه لموظف (persona أو مهمة أو درس) يكون محدداً قابلاً للقياس: «اسأل سؤالاً واحداً» لا «كن ودوداً».",
+    "- كل ما تكتبه لموظف (persona أو مهمة أو درس أو روتين) يكون محدداً قابلاً للقياس: «اسأل سؤالاً واحداً عن المقاس» لا «كن ودوداً». اكتب بالعربية.",
     "- حماية الرقم فوق الهدف: إن كانت حالة الرقم حرجة أو ارتفعت طلبات الإيقاف، أبطئ قبل أن تزيد.",
     "- لا أرقام ولا نتائج من عندك. إن لم تعرف فقل «لا أعرف بعد — أحتاج جولة».",
     "",
-    "شكل ردك: عربي واضح لصاحب العمل، في ٥ إلى ١٢ سطراً: (١) ما قسته بالأرقام، (٢) التشخيص: العائق الأكبر، (٣) ما فعلته الآن، (٤) ما يحتاج قراره بجملة واحدة لكل بند. ثم، إن كان هناك أفعال، كتلة واحدة:",
+    "شكل ردك: عربي واضح لصاحب العمل، ٦ إلى ١٥ سطراً: (١) ما قسته بالأرقام، (٢) التشخيص: العائق الأكبر ثم الثاني، (٣) ما فعلته الآن (من وظّفت ولماذا، من درّبت، ما غيّرت)، (٤) ما يحتاج قراره بجملة واحدة لكل بند. ثم كتلة واحدة:",
     "```actions",
-    '[{"type":"hire","role":"wa_reviewer","name":"…","title":"…","kind":"internal","persona":"…","tasks":["…"]},',
+    '[{"type":"hire","role":"wa_reviewer","name":"…","title":"…","kind":"internal","persona":"…(٦–١٢ سطراً)","tasks":["…"],"routine":{"name":"…","instruction":"…","everyMinutes":1440}},',
+    ' {"type":"routine","role":"analyst","name":"…","instruction":"…","atHour":8},',
     ' {"type":"update_employee","role":"sales","persona":"…","title":"…","isActive":true},',
     ' {"type":"assign_tasks","role":"followup","tasks":["…","…"]},',
     ' {"type":"teach","role":"sales","kind":"instruction","content":"…"},',
@@ -110,7 +177,7 @@ export function engineerPrompt(context: string, ownerApproved: boolean): string 
     ' {"type":"run","job":"followup|lists"},',
     ' {"type":"propose_goal","title":"…","metric":"clients_won","target":20,"deadlineDays":90}]',
     "```",
-    "الأدوار المسموح توظيفها: wa_reviewer (مراجِع مستقل للردود)، analyst (محلل بيانات)، ban_guard (مسؤول الحظر — يعمل مع ops)، lists (منسق قوائم)، qualifier (مؤهِّل العملاء)، closer (إغلاق الصفقات)، أو أي دور داخلي بالإنجليزية بلا مسافات. الأدوار customer-facing: sales, support فقط.",
+    "الأدوار customer-facing: sales, support فقط. أي دور داخلي بالإنجليزية بلا مسافات. everyMinutes ≥ 60 أو atHour (٠–٢٣) يومياً.",
     "",
     context,
   ].join("\n");
@@ -141,6 +208,23 @@ export function needsApproval(a: Action): boolean {
   return false;
 }
 
+/** A routine for a role: daily at an hour, or every N minutes (an hour at least). */
+async function addRoutine(userId: number, role: string, r: any): Promise<string | null> {
+  const name = String(r.name ?? "").trim().slice(0, 120), instruction = String(r.instruction ?? "").trim().slice(0, 2000);
+  if (!name || !instruction) return null;
+  const atHour = Number.isInteger(r.atHour) && r.atHour >= 0 && r.atHour <= 23 ? r.atHour : null;
+  const every = Number(r.everyMinutes) >= 60 ? Math.floor(Number(r.everyMinutes)) : null;
+  if (atHour === null && every === null) return null;
+  const [dup] = await db.execute<{ id: number }>(sql`SELECT id FROM agent_routines WHERE user_id = ${userId} AND role = ${role} AND name = ${name} LIMIT 1`).then((x) => x.rows);
+  if (dup) {
+    await db.execute(sql`UPDATE agent_routines SET instruction = ${instruction}, trigger_kind = ${atHour !== null ? "daily" : "interval"}, every_minutes = ${every}, at_hour = ${atHour}, is_active = true WHERE id = ${dup.id}`);
+    return name;
+  }
+  await db.execute(sql`INSERT INTO agent_routines (user_id, role, name, instruction, trigger_kind, every_minutes, at_hour, is_active)
+    VALUES (${userId}, ${role}, ${name}, ${instruction}, ${atHour !== null ? "daily" : "interval"}, ${every}, ${atHour}, true)`);
+  return name;
+}
+
 const slug = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^a-z0-9_]/g, "_").replace(/^_+|_+$/g, "").slice(0, 30);
 
 export async function execute(userId: number, actions: Action[], approved: boolean): Promise<string[]> {
@@ -158,7 +242,16 @@ export async function execute(userId: number, actions: Action[], approved: boole
           if (Number(n) >= MAX_ACTIVE_WA) { done.push(`لم يُوظَّف ${role}: الفريق الفعّال بلغ ${MAX_ACTIVE_WA}. أوقف أحداً أولاً.`); break; }
           await db.insert(botEmployeesTable).values({ userId, role, name: String(a.name ?? role).slice(0, 80), title: String(a.title ?? "").slice(0, 120), kind, avatar: "🧩", persona: String(a.persona ?? "").slice(0, 4000), specialties: Array.isArray(a.specialties) ? a.specialties : [], priority: 500, handoffTo: null } as any);
           if (Array.isArray(a.tasks)) await db.insert(agentTasksTable).values(a.tasks.slice(0, 8).map((t: unknown, i: number) => ({ userId, role, task: String(t).slice(0, 500), sortOrder: (i + 1) * 10 })));
-          done.push(`✅ وُظّف ${a.name ?? role} (${role}، ${kind}).`);
+          const rt = a.routine && typeof a.routine === "object" ? await addRoutine(userId, role, a.routine) : null;
+          done.push(`✅ وُظّف ${a.name ?? role} (${role}، ${kind})${rt ? ` + روتين «${rt}»` : " — بلا روتين، فلن يعمل حتى تعطيه واحداً"}.`);
+          break;
+        }
+        case "routine": {
+          const role = slug(a.role);
+          const [e] = await db.select({ id: botEmployeesTable.id }).from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, role))).limit(1);
+          if (!e) throw new Error(`لا موظف بالدور ${role}`);
+          const name = await addRoutine(userId, role, a);
+          done.push(name ? `✅ روتين «${name}» لـ ${role}.` : `روتين ${role} لم يُضف: اسم وتعليمات وتوقيت مطلوبة.`);
           break;
         }
         case "update_employee": {
@@ -260,7 +353,8 @@ export async function chat(userId: number, threadId: number | null, message: str
   await db.insert(assistantMessagesTable).values({ threadId: tid, userId, role: "user", content: message });
   const history = await threadMessages(userId, tid);
   const approved = ownerApproves(message);
-  const system = engineerPrompt(await engineerContext(userId), approved);
+  const [profile] = await db.select({ v: businessProfileTable.vertical }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
+  const system = engineerPrompt(await engineerContext(userId), approved, profile?.v ?? "accounting");
   const out = await asAgent(userId, ENGINEER_ROLE, () => complete([
     { role: "system", content: system },
     ...history.slice(-HISTORY_TURNS).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
