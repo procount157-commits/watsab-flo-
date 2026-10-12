@@ -51,7 +51,7 @@ export async function engineerContext(userId: number): Promise<string> {
     db.execute<any>(sql`SELECT count(*)::int AS n, count(*) FILTER (WHERE reply IS NOT NULL)::int AS replied, round(avg(quality_score))::int AS q,
         count(*) FILTER (WHERE skipped LIKE 'رد آلي%')::int AS machines, count(*) FILTER (WHERE rewritten)::int AS rewritten
       FROM auto_reply_log WHERE user_id = ${userId} AND created_at > now() - interval '7 days'`).then((r) => r.rows[0]),
-    db.execute<any>(sql`SELECT coalesce(evidence->>'situation', intent, '?') AS s, count(*)::int AS n FROM receipts WHERE user_id = ${userId} AND action IN ('reply','decide') AND at > now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`).then((r) => r.rows),
+    db.execute<any>(sql`SELECT coalesce(evidence->>'situation', evidence->>'intent', '?') AS s, count(*)::int AS n FROM receipts WHERE user_id = ${userId} AND action IN ('reply','decide') AND at > now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`).then((r) => r.rows),
     db.execute<any>(sql`SELECT verdict, executed, count(*)::int AS n FROM followup_deliberations WHERE user_id = ${userId} AND step >= 100 AND created_at > now() - interval '7 days' GROUP BY 1, 2`).then((r) => r.rows),
     gather(userId).then(decide).catch(() => null),
     db.execute<any>(sql`SELECT count(*)::int AS n FROM unsubscribed_phones WHERE user_id = ${userId} AND created_at > now() - interval '7 days'`).then((r) => Number(r.rows[0]?.n ?? 0)),
