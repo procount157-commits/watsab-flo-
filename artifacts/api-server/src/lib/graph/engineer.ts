@@ -34,6 +34,8 @@ import { gather, decide } from "../ops-agent";
 import { runSmartFollowUps } from "../smart-followup";
 import { keeperRound } from "../list-keeper";
 import { setTeamPaused } from "./switch";
+import { runMeeting } from "../meeting";
+import { recentForReview } from "../arena";
 import { logger } from "../logger";
 
 export const ENGINEER_ROLE = "engineer";
@@ -63,6 +65,8 @@ export async function engineerContext(userId: number): Promise<string> {
     return `- ${e.role} «${e.name}» (${e.title ?? ""}, ${e.kind}${e.active ? "" : ", موقوف"}): ${a ? `${a.acts} حركة/٧ أيام، ${a.ok} نجح، ${a.blocked} حُجب، ${a.failed} فشل، ${a.tokens} رمز` : "بلا أي إيصال"}`;
   };
   const taskLines = tasks.reduce((m, t) => { (m[t.role] ??= []).push(t.task); return m; }, {} as Record<string, string[]>);
+  const plan = await db.execute<any>(sql`SELECT content FROM agent_memory WHERE user_id = ${userId} AND role = ${ENGINEER_ROLE} AND kind = 'instruction' AND topic = 'plan' ORDER BY updated_at DESC LIMIT 1`).then((r) => r.rows[0]?.content ?? null).catch(() => null);
+  const sample = await recentForReview(userId, 8).then((r: any) => (r.rows ?? r.replies ?? r ?? [])).catch(() => []);
   const routines = await db.execute<any>(sql`SELECT role, name, trigger_kind, every_minutes, at_hour, is_active, last_run_at FROM agent_routines WHERE user_id = ${userId} ORDER BY role`).then((r) => r.rows).catch(() => []);
   return [
     `═══ الشركة ═══\n${profile?.name ?? "—"} · ${profile?.industry ?? ""} · النشاط: ${profile?.vertical ?? "accounting"} · اللهجة: ${profile?.dialect ?? "تتبع العميل"} · الرد التلقائي: ${profile?.autoReply ? "يعمل" : "متوقف"} · المتابعة: ${profile?.smartFollowup ?? "dry"} (${profile?.followupScope ?? "spoke"}، سلم ${JSON.stringify(profile?.followupLadder ?? "افتراضي")}) · الفريق ${profile?.teamPaused ? "موقوف" : "يعمل"}`,
@@ -71,6 +75,8 @@ export async function engineerContext(userId: number): Promise<string> {
     `═══ ردود واتساب في ٧ أيام ═══\n- رسائل واردة ${replies?.n ?? 0}، رُدّ على ${replies?.replied ?? 0}، ردود آلية من الطرف الآخر ${replies?.machines ?? 0}، متوسط جودة الرد ${replies?.q ?? "—"}/100، أُعيدت كتابة ${replies?.rewritten ?? 0}.\n- المواقف: ${situations.map((s: any) => `${s.s} ${s.n}`).join("، ") || "—"}`,
     `═══ المتابعة في ٧ أيام ═══\n${followups.length ? followups.map((f: any) => `- ${f.verdict}${f.executed ? " (أُرسلت)" : ""}: ${f.n}`).join("\n") : "- لا شيء"}`,
     `═══ حماية الرقم ═══\n- الحالة: ${ops?.level ?? "—"}${ops?.findings?.length ? ` — ${ops.findings.slice(0, 3).join(" · ")}` : ""}\n- طلبات إيقاف في ٧ أيام: ${stops}`,
+    `═══ الخطة الحالية (الجراف كما رسمته أنت) ═══\n${plan ?? "- لا خطة بعد. ارسم واحدة بفعل plan: لكل هدف فرعي مالكٌ من الفريق ومخرجٌ ومقياس."}`,
+    `═══ عينة من آخر الردود على العملاء (لتقيس الجودة بعينك) ═══\n${(Array.isArray(sample) ? sample : []).slice(0, 6).map((r: any) => `- العميل: «${String(r.incoming ?? "").replace(/\n/g, " ").slice(0, 70)}» ← ${r.agentRole ?? "?"}: «${String(r.reply ?? "").replace(/\n/g, " ").slice(0, 110)}» (${r.qualityScore ?? "—"})`).join("\n") || "- لا ردود بعد"}`,
     `═══ الروتينات (${routines.length}) ═══\n${routines.map((r: any) => `- ${r.role}: «${r.name}» ${r.trigger_kind === "daily" ? `يومياً ${r.at_hour}:00` : `كل ${r.every_minutes} د`}${r.is_active ? "" : " (موقوف)"}${r.last_run_at ? ` · آخر تشغيل ${new Date(r.last_run_at).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" })}` : " · لم يعمل بعد"}`).join("\n") || "- لا روتينات"}`,
     `═══ المهام الحالية ═══\n${Object.entries(taskLines).map(([r, ts]) => `- ${r}: ${ts.join(" | ")}`).join("\n") || "- لا مهام مكتوبة"}`,
     `═══ المقاييس المتاحة للأهداف ═══ ${Object.entries(MEASURES).map(([k, m]) => `${k}=${m.label}`).join("، ")}`,
@@ -147,6 +153,9 @@ export function engineerPrompt(context: string, ownerApproved: boolean, vertical
     "",
     HIRING_DOCTRINE,
     "",
+    "═══ الجراف كما تهندسه ═══",
+    "الهدف الكبير يُقسَّم إلى أهداف فرعية، ولكل هدف فرعي مالك واحد من الفريق الموجود (وظّف جديداً فقط إن لم يصلح أحد)، ومخرج محدد، ومقياس يُقرأ من الإيصالات، ومن يستلم منه. هذا هو جراف الحساب: عقد (موظفون) وحواف (من يسلّم لمن). ارسمه بفعل plan، وحدّثه حين تتغير الأرقام. الاجتماع اليومي (فعل meeting) هو حيث يراجع الفريق الجراف: كل مالك يقول رقمه، وأنت تقرر.",
+    "",
     "طريقة عملك — بهذا الترتيب كل مرة:",
     "١. قِس من السجل لا من الظن: الأرقام أدناه هي الحقيقة. موظف بلا إيصالات لم يعمل، مهما كان اسمه.",
     "٢. شخّص: ما الذي يمنع الهدف الآن؟ (لا هدف؟ لا أحد يرد؟ ردود رديئة؟ متابعة لا تُرسل؟ الرقم مهدد؟ قوائم قذرة؟ لا كتالوج؟ عملاء الإعلانات بلا رد سريع؟). سمِّ أكبر عائق واحد أولاً، ثم الثاني.",
@@ -165,7 +174,9 @@ export function engineerPrompt(context: string, ownerApproved: boolean, vertical
     "",
     "شكل ردك: عربي واضح لصاحب العمل، ٦ إلى ١٥ سطراً: (١) ما قسته بالأرقام، (٢) التشخيص: العائق الأكبر ثم الثاني، (٣) ما فعلته الآن (من وظّفت ولماذا، من درّبت، ما غيّرت)، (٤) ما يحتاج قراره بجملة واحدة لكل بند. ثم كتلة واحدة:",
     "```actions",
-    '[{"type":"hire","role":"wa_reviewer","name":"…","title":"…","kind":"internal","persona":"…(٦–١٢ سطراً)","tasks":["…"],"routine":{"name":"…","instruction":"…","everyMinutes":1440}},',
+    '[{"type":"plan","goal":"…","nodes":[{"subgoal":"…","owner":"sales","output":"…","metric":"…","handsTo":"followup"}]},',
+    ' {"type":"meeting","kind":"daily|pipeline|postmortem"},',
+    ' {"type":"hire","role":"wa_reviewer","name":"…","title":"…","kind":"internal","persona":"…(٦–١٢ سطراً)","tasks":["…"],"routine":{"name":"…","instruction":"…","everyMinutes":1440}},',
     ' {"type":"routine","role":"analyst","name":"…","instruction":"…","atHour":8},',
     ' {"type":"update_employee","role":"sales","persona":"…","title":"…","isActive":true},',
     ' {"type":"assign_tasks","role":"followup","tasks":["…","…"]},',
@@ -244,6 +255,28 @@ export async function execute(userId: number, actions: Action[], approved: boole
           if (Array.isArray(a.tasks)) await db.insert(agentTasksTable).values(a.tasks.slice(0, 8).map((t: unknown, i: number) => ({ userId, role, task: String(t).slice(0, 500), sortOrder: (i + 1) * 10 })));
           const rt = a.routine && typeof a.routine === "object" ? await addRoutine(userId, role, a.routine) : null;
           done.push(`✅ وُظّف ${a.name ?? role} (${role}، ${kind})${rt ? ` + روتين «${rt}»` : " — بلا روتين، فلن يعمل حتى تعطيه واحداً"}.`);
+          break;
+        }
+        case "plan": {
+          const nodes = Array.isArray(a.nodes) ? a.nodes.slice(0, 12) : [];
+          if (!nodes.length) throw new Error("خطة بلا عقد");
+          const text = [`الهدف: ${String(a.goal ?? "").slice(0, 200)}`, ...nodes.map((n: any, i: number) => `${i + 1}. ${String(n.subgoal ?? "").slice(0, 160)} — المالك: ${slug(n.owner) || "?"} · المخرج: ${String(n.output ?? "").slice(0, 160)} · المقياس: ${String(n.metric ?? "").slice(0, 100)}${n.handsTo ? ` · يسلّم إلى: ${slug(n.handsTo)}` : ""}`)].join("\n");
+          await db.execute(sql`DELETE FROM agent_memory WHERE user_id = ${userId} AND role = ${ENGINEER_ROLE} AND kind = 'instruction' AND topic = 'plan'`);
+          await db.execute(sql`INSERT INTO agent_memory (user_id, role, kind, content, topic) VALUES (${userId}, ${ENGINEER_ROLE}, 'instruction', ${text.slice(0, 4000)}, 'plan')`);
+          // Each owner gets the sub-goal as a standing task, so it reaches their prompt.
+          for (const n of nodes) {
+            const role = slug(n.owner); if (!role) continue;
+            const task = `هدفك الفرعي من غانم: ${String(n.subgoal ?? "").slice(0, 200)} — المخرج: ${String(n.output ?? "").slice(0, 150)}`;
+            await db.execute(sql`DELETE FROM agent_tasks WHERE user_id = ${userId} AND role = ${role} AND task LIKE 'هدفك الفرعي من غانم:%'`);
+            await db.insert(agentTasksTable).values({ userId, role, task, sortOrder: 1 });
+          }
+          done.push(`✅ رُسمت الخطة: ${nodes.length} عقدة (${nodes.map((n: any) => slug(n.owner)).join(" → ")}).`);
+          break;
+        }
+        case "meeting": {
+          const kind = ["daily", "pipeline", "postmortem"].includes(a.kind) ? a.kind : "daily";
+          const m: any = await runMeeting(userId, kind);
+          done.push(m?.error ? `الاجتماع لم يُعقد: ${m.error}` : `✅ عُقد ${kind === "daily" ? "الاجتماع اليومي" : kind === "pipeline" ? "مراجعة خط المبيعات" : "مراجعة ما لم ينجح"} — اقرأه في «اجتماعات الفريق».`);
           break;
         }
         case "routine": {
@@ -371,4 +404,33 @@ export async function chat(userId: number, threadId: number | null, message: str
   await db.update(assistantThreadsTable).set({ updatedAt: new Date() }).where(eq(assistantThreadsTable.id, tid));
   logger.info({ userId, threadId: tid, actions: actions.length }, "المهندس أجاب");
   return { threadId: tid, reply: stored, actions, results };
+}
+
+
+// ── His own round, every morning ─────────────────────────────────
+// A graph engineer who only answers when spoken to is a consultant. Every
+// morning he reads the ledger himself, writes the round into a thread the
+// owner can open («جولات غانم اليومية»), and executes what needs no
+// approval: lessons, task changes, routines, the meeting. Anything that
+// sends waits in the thread for the owner's word.
+export async function dailyRound(userId: number) {
+  const title = "جولات غانم اليومية";
+  let [t] = await db.select({ id: assistantThreadsTable.id }).from(assistantThreadsTable).where(and(eq(assistantThreadsTable.userId, userId), eq(assistantThreadsTable.kind, THREAD_KIND), eq(assistantThreadsTable.title, title))).limit(1);
+  if (!t) [t] = await db.insert(assistantThreadsTable).values({ userId, title, kind: THREAD_KIND } as any).returning({ id: assistantThreadsTable.id });
+  const msg = `الجولة اليومية (${new Date().toLocaleDateString("ar-AE")}): اقرأ الإيصالات والعينة والخطة. ما الذي تغيّر منذ الأمس بالأرقام؟ من عمل ومن لم يعمل؟ أي درس يحتاجه من ردّ بجودة أقل من ٨٥؟ حدّث الخطة إن لزم، واعقد الاجتماع اليومي. نفّذ ما لا يحتاج موافقتي، واكتب ما يحتاجها في سطر.`;
+  return chat(userId, t!.id, msg);
+}
+
+let dailyTimer: NodeJS.Timeout | null = null;
+export function startEngineerRounds() {
+  if (dailyTimer) return;
+  const tick = async () => {
+    const h = (new Date().getUTCHours() + 4) % 24; // Gulf time
+    if (h !== 8) return;
+    const users = await db.execute<{ user_id: number }>(sql`SELECT DISTINCT e.user_id FROM bot_employees e JOIN business_profile p ON p.user_id = e.user_id WHERE e.role = ${ENGINEER_ROLE} AND NOT p.team_paused
+      AND NOT EXISTS (SELECT 1 FROM assistant_messages m JOIN assistant_threads t ON t.id = m.thread_id WHERE t.user_id = e.user_id AND t.title = 'جولات غانم اليومية' AND m.role = 'user' AND m.created_at > now() - interval '20 hours')`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
+    for (const u of users.rows) await dailyRound(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err).slice(0, 160) }, "جولة غانم فشلت"));
+  };
+  dailyTimer = setInterval(() => void tick(), 15 * 60_000);
+  dailyTimer.unref();
 }

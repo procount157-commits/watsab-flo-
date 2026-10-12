@@ -50,6 +50,7 @@ import { sendMessage, getStatus } from "./whatsapp";
 import { logger } from "./logger";
 import { receipt } from "./graph/receipts";
 import { dialectOf, dialectLine } from "./reply-brain";
+import { shopContext } from "./catalog/shop-context";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -71,8 +72,22 @@ export const RUNG_ANGLE: string[] = [
   "المتابعة ٦ — قبل الختام: اعرض أن ترسل له ما يحتاج (صورة، سعر محدث، تفاصيل) متى شاء، في سطر، بلا ضغط.",
   "المتابعة الأخيرة — ختام لطيف: قل إنك لن تزعجه بعدها وإن الباب مفتوح متى احتاج، في سطر أو سطرين، بلا ضغط ولا سؤال.",
 ];
+/** A shop's rungs: each one a benefit to the customer, never a reminder. */
+export const JEWELRY_ANGLE: string[] = [
+  "المتابعة ١ (بعد ساعة) — فائدة فورية: صورة أوضح أو زاوية ثانية للقطعة التي سألت عنها (اذكرها بالاسم)، أو أقرب قطعة لما أرسلته هي. سطر واحد وسؤال عن المقاس أو المناسبة.",
+  "المتابعة ٢ (بعد ٦ ساعات) — معلومة تفيدها: الوزن والعيار الدقيقان من الكتالوج وما يعنيه ذلك لها (خفيف للبس اليومي / ثقيل للمناسبة)، أو إن تغير سعر الذهب اليوم فقل كم صار سعر القطعة الآن — من المعلومات فقط.",
+  "المتابعة ٣ (بعد يوم) — خيار بديل: قطعة أو قطعتان من نفس الذوق بوزن أخف أو أثقل (بالأسماء من الكتالوج)، ليكون عندها مقارنة لا ضغط.",
+  "المتابعة ٤ (بعد ٣ أيام) — تسهيل القرار: ما يلزم للطلب (الاسم والإمارة والمقاس)، التوصيل أو الاستلام من المعرض في العين، ولو عندها قطعة ذهب قديمة فاستبدالها ممكن إن كان ذلك في المعلومات.",
+  "المتابعة ٥ (بعد أسبوع) — مناسبة أو هدية: إن اقتربت مناسبة (عيد، زفاف، مولود) فاذكرها وقطعة تناسبها؛ وإلا نصيحة عناية قصيرة بالذهب تخص نوع قطعتها.",
+  "المتابعة ٦ (بعد أسبوعين) — سعر الذهب: إن تحرك سعر الجرام منذ آخر رسالة فاذكر الفرق على قطعتها بالرقم من المعلومات؛ وإلا صورة جديدة من المجموعة بلا سؤال.",
+  "المتابعة الأخيرة (بعد شهر) — ختام كريم: شكر، وأن المعرض في العين والواتساب موجودان متى احتاجت، بلا سؤال ولا ضغط.",
+];
+
 /** The angle for a rung on any ladder: the last angle is always the farewell. Pure. */
-export const angleFor = (rung: number, rungs: number) => (rung >= rungs - 1 ? RUNG_ANGLE[RUNG_ANGLE.length - 1]! : RUNG_ANGLE[Math.min(rung, RUNG_ANGLE.length - 2)]!);
+export const angleFor = (rung: number, rungs: number, vertical?: string | null) => {
+  const set = vertical === "jewelry" ? JEWELRY_ANGLE : RUNG_ANGLE;
+  return rung >= rungs - 1 ? set[set.length - 1]! : set[Math.min(rung, set.length - 2)]!;
+};
 
 export type Mode = "off" | "dry" | "live";
 
@@ -115,10 +130,10 @@ export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.
 }
 
 /** The account's ladder and scope. */
-async function ladderOf(userId: number): Promise<{ ladder: number[] | null; scope: "spoke" | "all" }> {
-  const [p] = await db.select({ l: businessProfileTable.followupLadder, s: businessProfileTable.followupScope }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
+async function ladderOf(userId: number): Promise<{ ladder: number[] | null; scope: "spoke" | "all"; vertical: string | null }> {
+  const [p] = await db.select({ l: businessProfileTable.followupLadder, s: businessProfileTable.followupScope, v: businessProfileTable.vertical }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
   const l = Array.isArray(p?.l) ? p!.l.map(Number).filter((h) => h > 0).slice(0, 10) : null;
-  return { ladder: l?.length ? l : null, scope: p?.s === "all" ? "all" : "spoke" };
+  return { ladder: l?.length ? l : null, scope: p?.s === "all" ? "all" : "spoke", vertical: p?.v ?? null };
 }
 
 async function thread(userId: number, phone: string, limit = 14): Promise<Turn[]> {
@@ -146,8 +161,8 @@ async function candidates(userId: number, scope: "spoke" | "all"): Promise<strin
 type Draft = { send: boolean; text: string | null; reason: string; retry?: boolean };
 
 /** خالد writes the rung, or declines. */
-async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS): Promise<Draft> {
-  const angle = angleFor(rung, rungs);
+async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null): Promise<Draft> {
+  const angle = angleFor(rung, rungs, vertical);
   const [[me], [profile], card, company] = await Promise.all([
     db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
     db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
@@ -158,7 +173,8 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   const customerDialect = dialectOf(turns.filter((t) => !t.fromMe).map((t) => t.text).join(" "), profile?.dialect ?? null);
   const topic = turns.filter((t) => !t.fromMe).slice(-3).map((t) => t.text).join(" ");
   const found = await retrieve(userId, topic, 3).catch(() => []);
-  const facts = found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`).join("\n\n");
+  const shop = vertical === "jewelry" ? await shopContext(userId, phone, topic).catch(() => null) : null;
+  const facts = [...(shop?.facts ?? []), ...found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`)].join("\n\n");
 
   const system = corePrompt({
     channel: "whatsapp",
@@ -170,6 +186,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
       angle,
       "اكتب الرسالة نفسها فقط، بلغة العميل ولهجته، سطر إلى ثلاثة.",
       dialectLine(customerDialect),
+      vertical === "jewelry" ? "ممنوع منعاً باتاً: وزن أو عيار أو سعر أو توفر لا يوجد نصاً في المعلومات المرفقة. إن لم يكن عندك الرقم فلا تذكره، واعرض أن تتأكد وترد." : "",
       "صمته بعد سؤالنا هو سبب المتابعة لا مانعها: لا تعد السؤال نفسه — أحضر الجديد من الزاوية المطلوبة ومن معرفة الشركة (معلومة، صورة، قطعة أو خدمة تناسبه، سعر محدث، خطوة أسهل). من يُستبعد من المتابعة استُبعد قبل أن تصلك، فلا تقرر أنت ذلك.",
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
     ],
@@ -199,6 +216,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     known: card ? { licence: card.licence, activity: card.activity, size: card.size, staff: card.staff } : undefined,
     facts: [facts, profile?.description ?? ""].join("\n"),
   };
+  if (vertical === "jewelry") (ctx as any).strictNumbers = true;
   let text = raw, q = checkReply(text, ctx);
   if (needsRewrite(q)) {
     const fixed = await complete([
@@ -231,7 +249,7 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
   if (!isWithinSendingHours(new Date(now))) return result;
   if (mode === "live" && !getStatus(userId).connected) return result;
 
-  const { ladder, scope } = await ladderOf(userId);
+  const { ladder, scope, vertical } = await ladderOf(userId);
   const phones = await candidates(userId, scope);
   if (!phones.length) return result;
 
@@ -277,7 +295,7 @@ export async function runSmartFollowUps(userId: number, now = Date.now()) {
 
     const lastIn = [...turns].reverse().find((t) => !t.fromMe)?.at.getTime() ?? 0;
     const earlier = mine.filter((r) => new Date(r.at).getTime() > lastIn && r.draft).map((r) => r.draft!);
-    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length));
+    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length, vertical));
     result.drafted++;
     if (!d.send || !d.text) {
       // A model that did not answer, or refused, costs this round only: «hold»

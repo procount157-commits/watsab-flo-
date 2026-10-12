@@ -5,7 +5,9 @@
 export {};
 const { quote, quoteText, parseWeightKarat, rateForKarat } = await import("../catalog/pricing");
 const { pieceEntry } = await import("../catalog/floret");
-const { situationOf, read, replyPrompt } = await import("../reply-brain");
+const { situationOf, read, replyPrompt, dialectOf } = await import("../reply-brain");
+const { checkReply, blocksSend } = await import("../reply-check");
+const { JEWELRY_ANGLE } = await import("../smart-followup");
 const { dueRung, angleFor, SHOP_LADDER, RUNG_ANGLE } = await import("../smart-followup");
 const { photoAsText } = await import("../vision");
 
@@ -53,6 +55,16 @@ const reached = [{ fromMe: true, text: "campaign", at: at(30) }];
 check("someone reached who never wrote is followed when the scope is all", dueRung(reached, [], false, now, { ladder: SHOP_LADDER, scope: "all" })?.rung === 0);
 check("...and not when the scope is spoke", dueRung(reached, [], false, now, { ladder: SHOP_LADDER, scope: "spoke" }) === null);
 check("the last rung is always the farewell, whatever the ladder", angleFor(6, 7) === RUNG_ANGLE[RUNG_ANGLE.length - 1] && angleFor(3, 4) === RUNG_ANGLE[RUNG_ANGLE.length - 1] && angleFor(3, 7) !== RUNG_ANGLE[RUNG_ANGLE.length - 1]);
+
+// ── The hard ban: no number the facts do not hold ─────────────────
+const strict = checkReply("الطقم عيار ٢١ ووزنه ١٤ جم وسعره ٧,٢٠٠ درهم", { customer: "كم وزن الطقم؟", facts: "طقم الكلوفر — عيار 21 · 12.87 جم · 6,460 درهم", strictNumbers: true });
+check("a weight or price not in the facts stops the send", blocksSend(strict) && strict.issues.some((i) => i.code === "invented-strict"));
+const honest = checkReply("الطقم عيار ٢١ ووزنه ١٢.٨٧ جم وسعره اليوم ٦,٤٦٠ درهم شامل الضريبة. لأي مناسبة؟", { customer: "كم وزن الطقم؟", facts: "طقم الكلوفر — عيار 21 · 12.87 جم · 6,460 درهم", strictNumbers: true });
+check("the catalogue's own numbers pass", !blocksSend(honest) && !honest.issues.some((i) => i.code.startsWith("invented")), honest.issues.map((i) => i.note).join(" | "));
+check("«أتأكد لك» with no number passes", !blocksSend(checkReply("أتأكد لك من وزن القطعة وأرد عليك خلال دقائق — تبين صورة أوضح؟", { customer: "كم وزنه", strictNumbers: true })));
+check("Yemeni is read", dialectOf("اشتي اعرف بش سعر الطقم حقك عاد") === "yemeni");
+check("seven benefit angles for the shop, the last a farewell", JEWELRY_ANGLE.length === 7 && JEWELRY_ANGLE[0]!.includes("صورة") && JEWELRY_ANGLE[6]!.includes("ختام"));
+check("the shop prompt bans uncertain numbers in words", replyPrompt({ name: "نورة", firm: "فلوريت", reading: read("كم وزنه", { vertical: "jewelry" }), vertical: "jewelry" }).includes("ممنوع منعاً باتاً"));
 
 console.log(`\n${pass}/${total} مرّ`);
 process.exit(pass === total ? 0 : 1);

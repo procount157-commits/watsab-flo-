@@ -33,5 +33,9 @@ check("English is English", dialectOf("How much is it?") === "en");
 check("the reading carries the dialect", read("عايز اعرف السعر دلوقتي", {}).dialect === "egyptian");
 check("the Egyptian line forbids mixing", dialectLine("egyptian").includes("مصرية") && dialectLine("egyptian").includes("لا تخلطها"));
 
+const plan = parseActions("خطة.\n```actions\n[{\"type\":\"plan\",\"goal\":\"٢٠ طلباً\",\"nodes\":[{\"subgoal\":\"رد خلال ٥ دقائق\",\"owner\":\"sales\",\"output\":\"رد\",\"metric\":\"wa_replies\",\"handsTo\":\"followup\"}]},{\"type\":\"meeting\",\"kind\":\"daily\"}]\n```");
+check("a plan and a meeting are actions that need no approval", plan.actions.length === 2 && !needsApproval(plan.actions[0]!) && !needsApproval(plan.actions[1]!));
+check("the prompt frames the graph: sub-goals, owners, outputs, metrics, meetings", engineerPrompt("CTX", false, "jewelry").includes("الجراف كما تهندسه") && engineerPrompt("CTX", false, "jewelry").includes("فهمك العميق لتجارة الذهب"));
+
 console.log(`\n${pass}/${total} مرّ`);
 process.exit(pass === total ? 0 : 1);

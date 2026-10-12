@@ -25,6 +25,8 @@ export interface CheckContext {
   reading?: { situation: string; mayAsk: boolean; forbid: string[] } | null;
   /** The names the employee may call themselves. */
   names?: string[];
+  /** A shop: a number not in the facts is never sent — not even after a rewrite. */
+  strictNumbers?: boolean;
 }
 
 export interface Issue { code: string; note: string; fix: string }
@@ -55,7 +57,9 @@ export function claims(t: string): string[] {
   t = t.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/(\d)[,٬](\d{3})/g, "$1$2");
   const n = normalizeArabic(t);
   const out = new Set<string>();
-  const re = /(\d[\d,.]*)\s*(درهم|ريال|aed|sar|usd|\$|%|٪|بالمئه|بالمائه|يوم|ايام|اسبوع|اسابيع|شهر|اشهر|ساعه|ساعات)/giu;
+  const re = /(\d[\d,.]*)\s*(درهم|ريال|aed|sar|usd|\$|%|٪|بالمئه|بالمائه|يوم|ايام|اسبوع|اسابيع|شهر|اشهر|ساعه|ساعات|جم|جرام|غرام|غم|g\b|gm|gram|grams|قيراط|k\b)/giu;
+  // A karat is a claim too: «عيار 21» said of a piece the facts do not describe.
+  for (const m of n.matchAll(/عيار\s*(\d{2})/g)) out.add(m[1]!);
   for (const m of n.matchAll(re)) out.add(m[1]!.replace(/[,.]0+$/, "").replace(/,/g, ""));
   for (const m of t.matchAll(/(\d[\d,.]*)\s*%/g)) out.add(m[1]!.replace(/,/g, ""));
   return [...out];
@@ -134,7 +138,7 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
   const allowed = new Set([...claims(ctx.facts ?? ""), ...claims(ctx.customer)]);
   const invented = claims(text).filter((c) => !allowed.has(c));
   if (invented.length) {
-    issues.push({ code: "invented", note: `رقم غير موجود في معلومات الشركة: ${invented.join("، ")}`, fix: "احذف الرقم. إن سُئلت عنه فقل إنه يعتمد على وضعه واسأل عمّا يحدّده." });
+    issues.push({ code: ctx.strictNumbers ? "invented-strict" : "invented", note: `رقم غير موجود في معلومات الشركة: ${invented.join("، ")}`, fix: ctx.strictNumbers ? "احذف الرقم تماماً. الوزن والعيار والسعر تُقال فقط كما وردت في المعلومات أو في حساب السعر؛ وإلا قل «أتأكد لك من القطعة وأرد عليك» واسأل عن القطعة." : "احذف الرقم. إن سُئلت عنه فقل إنه يعتمد على وضعه واسأل عمّا يحدّده." });
   }
 
   // Same opening word as last time reads as a template.
@@ -153,14 +157,14 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "oversell", note: "يعرض من جديد بعد أن وافق العميل", fix: "العميل وافق — انتقل للتنفيذ: الخطوة التالية وموعدها فقط." });
   }
 
-  const weights: Record<string, number> = { licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
+  const weights: Record<string, number> = { "invented-strict": 60, licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (weights[i.code] ?? 10), 0));
   return { score, issues };
 }
 
 /** Must not be sent as it is, rewritten or not. */
 export function blocksSend(r: CheckResult): boolean {
-  return r.issues.some((i) => i.code === "placeholder" || i.code === "reveal" || i.code === "name" || i.code === "asked");
+  return r.issues.some((i) => i.code === "placeholder" || i.code === "reveal" || i.code === "name" || i.code === "asked" || i.code === "invented-strict");
 }
 
 /** Worth a rewrite: anything but a cosmetic same-opening. */

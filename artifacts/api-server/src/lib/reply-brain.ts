@@ -31,7 +31,7 @@ export type Situation =
   | "photo" | "weight_price" | "ad_lead" | "piece" | "order";
 
 export type Vertical = "accounting" | "jewelry";
-export type Dialect = "gulf" | "egyptian" | "levant" | "maghreb" | "msa" | "en";
+export type Dialect = "gulf" | "yemeni" | "egyptian" | "levant" | "maghreb" | "msa" | "en";
 
 // ── Which Arabic the customer writes ─────────────────────────────
 // A lookup, not a talent: the words that belong to one dialect and almost
@@ -39,19 +39,20 @@ export type Dialect = "gulf" | "egyptian" | "levant" | "maghreb" | "msa" | "en";
 // unless the account fixes one (the gold house writes Emirati to everyone
 // who writes Gulf or standard Arabic).
 const DIALECT_WORDS: Record<Exclude<Dialect, "msa" | "en">, string[]> = {
-  gulf: ["شلون", "شلونك", "شحال", "وايد", "الحين", "ابغى", "ابي", "ودي", "زين", "يبا", "يبه", "هلا", "ترى", "عاد", "جذي", "جيه", "وش", "ليش", "مو", "عيل", "يا طويل العمر", "ابشر", "يزاك", "جان", "شو", "هاي", "ويه"],
+  gulf: ["شلون", "شلونك", "شحال", "وايد", "الحين", "ابغى", "ابي", "ودي", "زين", "يبا", "يبه", "هلا", "ترى", "جذي", "جيه", "وش", "ليش", "مو", "عيل", "يا طويل العمر", "ابشر", "يزاك", "جان", "شو", "هاي", "ويه"],
+  yemeni: ["بش", "ايش", "عندش", "معش", "حقك", "حقي", "حقنا", "حقه", "قدي", "كذيه", "هوه", "هيه", "تمام عاد", "والله عاد", "شي", "ماشي عاد", "اشتي", "اشتيه", "تشتي", "يا خال", "يا ولد", "اثبت", "جنبيه", "قد", "دحين"],
   egyptian: ["ازيك", "ازاي", "عايز", "عاوز", "دلوقتي", "ايه", "ليه", "كده", "كدا", "مش", "فين", "اوي", "خالص", "بتاع", "بتاعت", "حضرتك", "يعني ايه", "طب", "ماشي", "تمام يا", "انا عايز"],
   levant: ["كيفك", "شلونك", "بدي", "بدك", "هلأ", "هلق", "ليش", "شو", "هيك", "كتير", "منيح", "تكرم", "عنجد", "مو", "لسا", "لسه", "يلا", "بس", "هاد", "هاي"],
   maghreb: ["واش", "بزاف", "كيداير", "لاباس", "شحال", "دابا", "علاش", "بغيت", "خويا", "صافي", "واخا"],
 };
-const SHARED = new Set(["شلونك", "ليش", "شو", "مو", "بس", "هاي", "شحال", "لسا", "لسه"]);
+const SHARED = new Set(["شلونك", "ليش", "شو", "مو", "بس", "هاي", "شحال", "لسا", "لسه", "ايش", "شي", "قد"]);
 
 /** The dialect of a text, by its words; the account's own dialect for Gulf/standard Arabic when it fixes one. Pure. */
 export function dialectOf(text: string, accountDialect?: string | null): Dialect {
   const t = normalizeArabic((text ?? "").toLowerCase());
   const ar = (t.match(/[\u0600-\u06FF]/g) ?? []).length, en = (t.match(/[a-z]/g) ?? []).length;
   if (!ar && en) return "en";
-  const score: Record<string, number> = { gulf: 0, egyptian: 0, levant: 0, maghreb: 0 };
+  const score: Record<string, number> = { gulf: 0, yemeni: 0, egyptian: 0, levant: 0, maghreb: 0 };
   for (const [d, words] of Object.entries(DIALECT_WORDS)) for (const w of words) {
     if (new RegExp(`(^|\\s)${normalizeArabic(w)}(\\s|$)`).test(t)) score[d]! += SHARED.has(w) ? 0.5 : 1;
   }
@@ -61,12 +62,13 @@ export function dialectOf(text: string, accountDialect?: string | null): Dialect
   return found;
 }
 
-const DIALECT_NAME: Record<Dialect, string> = { gulf: "خليجية إماراتية", egyptian: "مصرية", levant: "شامية", maghreb: "مغاربية", msa: "عربية بسيطة واضحة", en: "English" };
+const DIALECT_NAME: Record<Dialect, string> = { gulf: "خليجية إماراتية", yemeni: "يمنية", egyptian: "مصرية", levant: "شامية", maghreb: "مغاربية", msa: "عربية بسيطة واضحة", en: "English" };
 
 /** The line in the prompt that fixes the register. Pure. */
 export function dialectLine(d: Dialect): string {
   if (d === "en") return "اكتب بالإنجليزية، قصيرة وطبيعية.";
   if (d === "gulf") return DIALECT_LINE;
+  if (d === "yemeni") return "اللهجة: يمنية بسيطة قريبة كما يكتبها العميل (اشتي، بش، حقك، عاد، قدي) مع عربية واضحة؛ لا تخلطها بمصري أو شامي، ولا تبالغ في المحاكاة — كلمتان في محلهما خير من عشر مصطنعة.";
   return `اللهجة: ${DIALECT_NAME[d]} طبيعية كما يكتبها العميل نفسه — لا تخلطها بلهجة أخرى ولا تنتقل للفصحى الثقيلة.`;
 }
 
@@ -262,6 +264,7 @@ export function replyPrompt(i: {
   const examples = (i.vertical === "jewelry" && JEWELRY_EXAMPLES[r.situation]?.[r.lang]) || EXAMPLES[r.situation][r.lang];
   // The customer's dialect wins; standard Arabic takes the account's own register when it fixes one.
   const chosen = r.dialect && r.dialect !== "msa" && r.dialect !== "en" ? r.dialect : (i.dialect === "gulf" ? "gulf" : "msa");
+  const never = i.vertical === "jewelry" ? "\nممنوع منعاً باتاً: أي وزن أو عيار أو سعر أو توفر أو مدة توصيل لا يوجد نصاً في المعلومات أو في حساب السعر المرفق. إن لم تكن متأكداً قل «أتأكد لك من القطعة وأرد عليك خلال دقائق» واسأل عن القطعة أو الصورة — الرقم المخترع يُوقف ردك ولا يُرسل." : "";
   const dialect = r.lang === "ar" ? dialectLine(chosen) : "";
   const nameLine = r.lang === "en" ? `Your name is ${englishName(i.name)} (${i.name}). Never use another name.` : `اسمك ${i.name}. لا تستخدم اسماً غيره.`;
   return [
@@ -282,6 +285,7 @@ export function replyPrompt(i: {
     "",
     i.facts ? `معلومات الشركة التي يجوز ذكرها (لا تذكر غيرها):\n${i.facts.slice(0, 1600)}` : "لا معلومات محددة لهذا الموضوع — لا تذكر أرقاماً ولا أسعاراً.",
     i.guardrails ? `تعليمات صاحب العمل: ${i.guardrails}` : "",
+    never,
     "",
     `اكتب الرد وحده ${r.lang === "en" ? "in English" : "بالعربية وبلهجة العميل"}: سطر إلى ثلاثة، بلا مقدمات ولا علامات تنصيص ولا قوائم. لا تقل إنك ذكاء اصطناعي.`,
   ].filter((x) => x !== "").join("\n");
