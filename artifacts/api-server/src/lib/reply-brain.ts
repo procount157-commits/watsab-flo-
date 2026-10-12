@@ -23,6 +23,7 @@
 // owner sees why each reply was written the way it was.
 
 import { normalizeArabic } from "./intent";
+import { HUMAN_VOICE } from "./voice-doctrine";
 
 export type Situation =
   | "confused" | "who" | "declined" | "language" | "interested" | "price"
@@ -151,7 +152,7 @@ function readInner(text: string, ctx: { campaignTopic?: string | null; ourLast?:
   };
   if (noLicence) base.forbid.push("السؤال عن الرخصة (مين لاند/فري زون)");
   if (vertical === "jewelry") {
-    base.forbid = ["سعر أو وزن أو عيار غير موجود في المعلومات المرفقة أو في حساب السعر", "ادعاء توفر قطعة غير مذكورة", "عبارات القوالب: يسعدنا، لا تتردد، نحن هنا لخدمتك", "السؤال عن الرخصة أو النشاط"];
+    base.forbid = ["سعر أو وزن أو عيار غير موجود في المعلومات المرفقة أو في حساب السعر", "ادعاء توفر قطعة غير مذكورة", "لغة الشركات: عزيزي العميل، يسعدنا إبلاغكم، لا تترددوا، هل وصلتك رسالتي", "السؤال عن الرخصة أو النشاط"];
     const ad = ctx.ad?.title ? `إعلان «${ctx.ad.title}»` : "إعلاننا";
     switch (situation) {
       case "photo": return { ...base, situation, lang, meaning: "أرسل صورة قطعة (مذكور وصفها في رسالته).", goal: "علّق على القطعة بما تراه في الوصف، وقل إن كانت من مجموعتنا أو قريبة منها (سمِّ القطعة المشابهة من المعلومات إن وُجدت)، ثم سؤال واحد: الوزن أو المناسبة أو هل تبغى سعرها." };
@@ -280,6 +281,7 @@ export function replyPrompt(i: {
     `ممنوع في هذا الرد: ${r.forbid.join("؛ ")}.`,
     r.mayAsk ? "سؤال واحد على الأكثر." : "لا تسأل أي سؤال.",
     "",
+    i.vertical === "jewelry" ? HUMAN_VOICE : "",
     `أمثلة لهذا النوع بالضبط:\n${examples.join("\n")}`,
     dialect,
     "",
@@ -287,6 +289,8 @@ export function replyPrompt(i: {
     i.guardrails ? `تعليمات صاحب العمل: ${i.guardrails}` : "",
     never,
     "",
-    `اكتب الرد وحده ${r.lang === "en" ? "in English" : "بالعربية وبلهجة العميل"}: سطر إلى ثلاثة، بلا مقدمات ولا علامات تنصيص ولا قوائم. لا تقل إنك ذكاء اصطناعي.`,
+    i.vertical === "jewelry"
+      ? `اكتبي الرد وحده ${r.lang === "en" ? "in English" : "بلهجة العميلة"}: رسالة كما تكتبها يد — سطران إلى خمسة، دافئة وشخصية، بلا قوائم ولا علامات تنصيص. لا تقولي إنك برنامج.`
+      : `اكتب الرد وحده ${r.lang === "en" ? "in English" : "بالعربية وبلهجة العميل"}: سطر إلى ثلاثة، بلا مقدمات ولا علامات تنصيص ولا قوائم. لا تقل إنك ذكاء اصطناعي.`,
   ].filter((x) => x !== "").join("\n");
 }

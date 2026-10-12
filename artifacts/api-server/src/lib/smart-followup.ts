@@ -51,6 +51,7 @@ import { logger } from "./logger";
 import { receipt } from "./graph/receipts";
 import { dialectOf, dialectLine } from "./reply-brain";
 import { shopContext } from "./catalog/shop-context";
+import { HUMAN_VOICE } from "./voice-doctrine";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -183,8 +184,9 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     persona: me?.persona ?? null,
     firm: profile?.description ?? null,
     rules: [
+      vertical === "jewelry" ? HUMAN_VOICE : "",
       angle,
-      "اكتب الرسالة نفسها فقط، بلغة العميل ولهجته، سطر إلى ثلاثة.",
+      vertical === "jewelry" ? "اكتب الرسالة نفسها فقط، بلهجة العميلة، كما تكتبها يد: سطران إلى خمسة، دافئة وشخصية، وفيها شيء يخصها هي." : "اكتب الرسالة نفسها فقط، بلغة العميل ولهجته، سطر إلى ثلاثة.",
       dialectLine(customerDialect),
       vertical === "jewelry" ? "ممنوع منعاً باتاً: وزن أو عيار أو سعر أو توفر لا يوجد نصاً في المعلومات المرفقة. إن لم يكن عندك الرقم فلا تذكره، واعرض أن تتأكد وترد." : "",
       "صمته بعد سؤالنا هو سبب المتابعة لا مانعها: لا تعد السؤال نفسه — أحضر الجديد من الزاوية المطلوبة ومن معرفة الشركة (معلومة، صورة، قطعة أو خدمة تناسبه، سعر محدث، خطوة أسهل). من يُستبعد من المتابعة استُبعد قبل أن تصلك، فلا تقرر أنت ذلك.",
@@ -196,7 +198,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
       earlier.length ? `═══ ما قلناه له في المتابعات السابقة — لا تكرره ولا تعِد صياغته ═══\n${earlier.map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
       facts ? `═══ من معرفة الشركة عن موضوعه ═══\n${facts}` : "",
     ],
-    check: ["□ هل فيها شيء جديد لم يُقل في المحادثة ولا في المتابعات السابقة؟", "□ هل تصلح لهذا العميل وحده؟"],
+    check: ["□ هل فيها شيء جديد لم يُقل في المحادثة ولا في المتابعات السابقة؟", "□ هل تصلح لهذا العميل وحده؟", ...(vertical === "jewelry" ? ["□ هل تُقرأ كأن إنساناً كتبها لها الآن — دافئة، عنها هي، بلا لغة شركات؟"] : [])],
   });
   const transcript = turns.map((t) => `${t.fromMe ? "نحن" : "العميل"}: ${t.text.slice(0, 500)}`).join("\n");
   const out = await complete([
@@ -216,7 +218,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     known: card ? { licence: card.licence, activity: card.activity, size: card.size, staff: card.staff } : undefined,
     facts: [facts, profile?.description ?? ""].join("\n"),
   };
-  if (vertical === "jewelry") (ctx as any).strictNumbers = true;
+  if (vertical === "jewelry") { (ctx as any).strictNumbers = true; (ctx as any).warm = true; }
   let text = raw, q = checkReply(text, ctx);
   if (needsRewrite(q)) {
     const fixed = await complete([

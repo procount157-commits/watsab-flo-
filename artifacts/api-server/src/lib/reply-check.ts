@@ -9,6 +9,7 @@
 // one extra call — happens only when something is actually wrong.
 
 import { normalizeArabic } from "./intent";
+import { CORPORATE } from "./voice-doctrine";
 
 export interface CheckContext {
   /** What the customer just wrote. */
@@ -27,6 +28,8 @@ export interface CheckContext {
   names?: string[];
   /** A shop: a number not in the facts is never sent — not even after a rewrite. */
   strictNumbers?: boolean;
+  /** A shop's warm register: hospitality is not a template; only corporate phrases are, and a hand-written message may run five lines. */
+  warm?: boolean;
 }
 
 export interface Issue { code: string; note: string; fix: string }
@@ -71,7 +74,7 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
   const n = normalizeArabic(text);
 
   const ls = lines(text);
-  if (ls.length > 4 || text.length > 480) {
+  if (ctx.warm ? (ls.length > 6 || text.length > 700) : (ls.length > 4 || text.length > 480)) {
     issues.push({ code: "long", note: `طويل (${ls.length} أسطر، ${text.length} حرفاً)`, fix: "اختصره إلى سطرين أو ثلاثة، وقل المقصود فقط." });
   }
   const questions = (text.match(/[؟?]/g) ?? []).length;
@@ -81,7 +84,7 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
   if (ls.some((l) => /^(\d+[.)]|[-•*▪])\s+/.test(l)) || /^#+\s/m.test(text)) {
     issues.push({ code: "list", note: "ترقيم أو نقاط أو عناوين", fix: "اكتبها جملاً متصلة كرسالة واتساب، بلا ترقيم." });
   }
-  const robotic = ROBOTIC.filter((p) => n.includes(normalizeArabic(p)));
+  const robotic = (ctx.warm ? CORPORATE : ROBOTIC).filter((p) => n.includes(normalizeArabic(p)));
   if (robotic.length) {
     issues.push({ code: "robotic", note: `عبارات آلية: ${robotic.join("، ")}`, fix: `احذف: ${robotic.join("، ")}. ابدأ من شيء قاله العميل.` });
   }

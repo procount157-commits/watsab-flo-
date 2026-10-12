@@ -37,6 +37,7 @@ import { setTeamPaused } from "./switch";
 import { runMeeting } from "../meeting";
 import { recentForReview } from "../arena";
 import { logger } from "../logger";
+import { HUMAN_VOICE } from "../voice-doctrine";
 
 export const ENGINEER_ROLE = "engineer";
 export const ENGINEER = { name: "غانم", title: "مهندس الجراف — مدير الفريق", avatar: "🧭" };
@@ -67,6 +68,7 @@ export async function engineerContext(userId: number): Promise<string> {
   const taskLines = tasks.reduce((m, t) => { (m[t.role] ??= []).push(t.task); return m; }, {} as Record<string, string[]>);
   const plan = await db.execute<any>(sql`SELECT content FROM agent_memory WHERE user_id = ${userId} AND role = ${ENGINEER_ROLE} AND kind = 'instruction' AND topic = 'plan' ORDER BY updated_at DESC LIMIT 1`).then((r) => r.rows[0]?.content ?? null).catch(() => null);
   const sample = await recentForReview(userId, 8).then((r: any) => (r.rows ?? r.replies ?? r ?? [])).catch(() => []);
+  const pieces = profile?.vertical === "jewelry" ? await db.execute<any>(sql`SELECT name, purity, weight_g, price_aed, in_stock FROM catalog_items WHERE user_id = ${userId} AND published ORDER BY in_stock DESC, price_aed DESC NULLS LAST LIMIT 6`).then((r) => r.rows).catch(() => []) : [];
   const routines = await db.execute<any>(sql`SELECT role, name, trigger_kind, every_minutes, at_hour, is_active, last_run_at FROM agent_routines WHERE user_id = ${userId} ORDER BY role`).then((r) => r.rows).catch(() => []);
   return [
     `═══ الشركة ═══\n${profile?.name ?? "—"} · ${profile?.industry ?? ""} · النشاط: ${profile?.vertical ?? "accounting"} · اللهجة: ${profile?.dialect ?? "تتبع العميل"} · الرد التلقائي: ${profile?.autoReply ? "يعمل" : "متوقف"} · المتابعة: ${profile?.smartFollowup ?? "dry"} (${profile?.followupScope ?? "spoke"}، سلم ${JSON.stringify(profile?.followupLadder ?? "افتراضي")}) · الفريق ${profile?.teamPaused ? "موقوف" : "يعمل"}`,
@@ -75,6 +77,7 @@ export async function engineerContext(userId: number): Promise<string> {
     `═══ ردود واتساب في ٧ أيام ═══\n- رسائل واردة ${replies?.n ?? 0}، رُدّ على ${replies?.replied ?? 0}، ردود آلية من الطرف الآخر ${replies?.machines ?? 0}، متوسط جودة الرد ${replies?.q ?? "—"}/100، أُعيدت كتابة ${replies?.rewritten ?? 0}.\n- المواقف: ${situations.map((s: any) => `${s.s} ${s.n}`).join("، ") || "—"}`,
     `═══ المتابعة في ٧ أيام ═══\n${followups.length ? followups.map((f: any) => `- ${f.verdict}${f.executed ? " (أُرسلت)" : ""}: ${f.n}`).join("\n") : "- لا شيء"}`,
     `═══ حماية الرقم ═══\n- الحالة: ${ops?.level ?? "—"}${ops?.findings?.length ? ` — ${ops.findings.slice(0, 3).join(" · ")}` : ""}\n- طلبات إيقاف في ٧ أيام: ${stops}`,
+    pieces.length ? `═══ من الكتالوج (أمثلة حقيقية لتكتب بها) ═══\n${pieces.map((x: any) => `- ${x.name} · عيار ${x.purity} · ${Number(x.weight_g)} جم · ${Number(x.price_aed).toLocaleString("en-US")} درهم شامل${x.in_stock ? "" : " (غير متوفرة)"}`).join("\n")}` : "",
     `═══ الخطة الحالية (الجراف كما رسمته أنت) ═══\n${plan ?? "- لا خطة بعد. ارسم واحدة بفعل plan: لكل هدف فرعي مالكٌ من الفريق ومخرجٌ ومقياس."}`,
     `═══ عينة من آخر الردود على العملاء (لتقيس الجودة بعينك) ═══\n${(Array.isArray(sample) ? sample : []).slice(0, 6).map((r: any) => `- العميل: «${String(r.incoming ?? "").replace(/\n/g, " ").slice(0, 70)}» ← ${r.agentRole ?? "?"}: «${String(r.reply ?? "").replace(/\n/g, " ").slice(0, 110)}» (${r.qualityScore ?? "—"})`).join("\n") || "- لا ردود بعد"}`,
     `═══ الروتينات (${routines.length}) ═══\n${routines.map((r: any) => `- ${r.role}: «${r.name}» ${r.trigger_kind === "daily" ? `يومياً ${r.at_hour}:00` : `كل ${r.every_minutes} د`}${r.is_active ? "" : " (موقوف)"}${r.last_run_at ? ` · آخر تشغيل ${new Date(r.last_run_at).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" })}` : " · لم يعمل بعد"}`).join("\n") || "- لا روتينات"}`,
@@ -109,6 +112,15 @@ const DOMAIN: Record<string, string> = {
     "- حماية الرقم والمُرسِل فوق الهدف: الإحماء التدريجي، القوائم المنظفة، والتوقف عند أول علامة.",
   ].join("\n"),
 };
+
+const SOURCES_JEWELRY = [
+  "═══ من أين تأتي كل حقيقة (قلها بالاسم حين يسألك صاحب العمل «من وين؟») ═══",
+  "- القطع وأسماؤها وأوزانها وعياراتها وصورها: من قاعدة بيانات متجر فلوريت نفسه (جدول cms.product)، تُنسخ إلى جدول catalog_items هنا كل ٦ ساعات، وتدخل قاعدة المعرفة قطعةً قطعة. ما ليس فيها لا يُقال.",
+  "- سعر الذهب اليومي: من جدول cms.gold_rate في نظام المتجر، يسجّله بوت المتجر «راشد» من مصدرين متفقين (بالدرهم للجرام عيار ٢٤)، ومنه يُشتق عيار ٢١ (× ٢١/٢٤).",
+  "- سعر القطعة: (الوزن × سعر الجرام للعيار + الوزن × ٤٥ درهم مصنعية) × ١٫٠٥ ضريبة — يُحسب بالكود لا بالنموذج، ويُعطى للموظفة كحقيقة تنسخها. سعر الكتالوج المعروض هو نفسه حين آخر تطبيق للسعر في المتجر.",
+  "- من جاء من إعلان: من بيانات الرسالة نفسها (معرّف النقرة وعنوان الإعلان) التي يرسلها واتساب مع أول رسالة.",
+  "- جودة الردود: من فحص قبل الإرسال يعطي درجة من ١٠٠ ويسجّل ما وجد. الإيصالات: من جدول لا يُعدَّل.",
+].join("\n");
 
 const SYSTEM_MAP = [
   "═══ ما يملكه النظام (الأدوات التي تدير بها الفريق) ═══",
@@ -148,6 +160,9 @@ export function engineerPrompt(context: string, ownerApproved: boolean, vertical
     "خبرتك: تجربة المستخدم (كيف يقرأ العميل رسالة واتساب ولماذا يرد أو يصمت)، والمبيعات (المراحل، الاعتراضات، الإغلاق)، وتشغيل واتساب (حدود الإرسال، الإحماء، علامات الحظر، ما يجلب «إبلاغ وحظر»)، وهندسة الوكلاء (من يفعل ماذا، بأي مدخل ومخرج، ومن يراجع من).",
     "",
     DOMAIN[vertical] ?? DOMAIN["accounting"]!,
+    "",
+    vertical === "jewelry" ? SOURCES_JEWELRY : "",
+    vertical === "jewelry" ? `${HUMAN_VOICE}\nحين يطلب منك صاحب العمل أن تكتب رسالة أو متابعة كمثال: اكتبها كما تكتبها نورة أو خالد بيدهم، بهذا الصوت، عن قطعة حقيقية بالاسم من الكتالوج أدناه ورقمها الحقيقي — لا رسالة عامة.` : "",
     "",
     SYSTEM_MAP,
     "",
