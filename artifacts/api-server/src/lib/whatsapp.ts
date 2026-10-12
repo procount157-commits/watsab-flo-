@@ -2375,6 +2375,10 @@ class WhatsAppInstance {
         if (status === undefined || status === null) continue;
 
         try {
+          // Every message of ours in the thread, whatever sent it: a follow-up,
+          // a reply, a photo. The owner's «did anyone read it?» is answered here.
+          if (status === 3) void db.execute(sql`UPDATE wa_thread_messages SET delivered_at = coalesce(delivered_at, now()) WHERE user_id = ${this.userId} AND message_id = ${msgId}`).catch(() => {});
+          if (status === 4) void db.execute(sql`UPDATE wa_thread_messages SET delivered_at = coalesce(delivered_at, now()), read_at = coalesce(read_at, now()) WHERE user_id = ${this.userId} AND message_id = ${msgId}`).catch(() => {});
           if (status === 3) {
             // DELIVERY_ACK — double grey tick
             // Atomic: UPDATE returns a row only when we actually transition delivered_at
