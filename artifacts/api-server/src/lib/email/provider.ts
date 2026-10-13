@@ -21,8 +21,44 @@ export interface OutgoingEmail {
 
 export interface SendResult { providerId: string | null; serverReply?: string; accepted?: string[]; rejected?: string[] }
 
+/**
+ * لماذا رُفضت الرسالة — وهذا ليس تفصيلاً: الجواب يحدّد من يُعاقَب.
+ *
+ *   address   العنوان نفسه لا وجود له. الجهة تُعلَّم مرتدّة، وهذا صحيح.
+ *   policy    المزوّد رفض **رسالتنا**: عدّها إزعاجاً، أو حجب سمعتنا، أو
+ *             منعنا بسياسة. العنوان سليم، والخلل عندنا.
+ *   transient لحظةٌ عابرة: حدّ معدّل، شبكة، خادمٌ مشغول.
+ *   config    إعدادنا ناقص.
+ *
+ * كان الحكم واحداً: كل رمز 5xx «دائم»، وكل دائمٍ ارتدادٌ من العنوان. فلمّا
+ * رفض Hostinger ثلاثين رسالة في يومٍ واحد بـ«554 5.7.1 Spam message
+ * rejected» — رفضاً لنصّنا المتكرّر لا لعناوينهم — عُلّمت ثلاثون شركة
+ * سليمة «مرتدّة» وخرجت من كل قائمة، وارتفعت نسبة الارتداد المعروضة،
+ * وبُني على ذلك حكمٌ بأن القائمة فاسدة. والقائمة كانت بريئة.
+ */
+export type SendFailure = "address" | "policy" | "transient" | "config";
+
+const POLICY_RE  = /(5\.7\.\d|spam|policy|blocked|blacklist|block list|reputation|denied|not allowed|content rejected|message rejected|suspicious|abuse|dmarc|spf|dkim|authentication)/i;
+const ADDRESS_RE = /(5\.1\.\d|5\.2\.[12]|user unknown|unknown user|no such (user|recipient|mailbox|address)|mailbox (unavailable|not found|does not exist|disabled)|recipient (address )?rejected|address rejected|does not exist|invalid (recipient|mailbox|address)|account (disabled|inactive)|undeliverable)/i;
+const RATE_RE    = /(rate|too many|limit|quota|throttl|try again|temporar)/i;
+
+/** نوع الفشل من رمز الخادم ونصّه. السياسة تُسأل قبل العنوان: «5.7.1» ليست عن المستلم. */
+export function classifySendFailure(code: string, message: string): SendFailure {
+  if (RATE_RE.test(message) && !/5\.1\.\d/.test(message)) return "transient";
+  if (!code.startsWith("5")) return "transient";
+  if (POLICY_RE.test(message)) return "policy";
+  if (ADDRESS_RE.test(message)) return "address";
+  // 5xx بلا دلالة: لا يُعاقَب به عنوانٌ. الشكّ يُفسَّر لمصلحة الجهة، فجهةٌ
+  // تُعلَّم مرتدّة ظلماً تخرج من كل موجةٍ قادمة بلا أن يراها أحد.
+  return "policy";
+}
+
 export class SendError extends Error {
-  constructor(message: string, public permanent = false) { super(message); }
+  public kind: SendFailure;
+  constructor(message: string, public permanent = false, kind?: SendFailure) {
+    super(message);
+    this.kind = kind ?? (permanent ? "config" : "transient");
+  }
 }
 
 export function isConfigured(s: EmailSettings | null | undefined): boolean {
@@ -82,7 +118,8 @@ export async function sendEmail(s: EmailSettings, m: OutgoingEmail): Promise<Sen
       const msg = String(err?.message ?? err).slice(0, 300);
       // 5xx from the server is the address or the message; 4xx and network
       // errors are the moment.
-      throw new SendError(msg, code.startsWith("5") && !/rate|too many|limit/i.test(msg));
+      const kind = classifySendFailure(code, msg);
+      throw new SendError(msg, kind === "address" || kind === "policy", kind);
     }
   }
 

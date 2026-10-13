@@ -24,6 +24,7 @@ import { db, emailListsTable, emailMissionsTable } from "@workspace/db";
 import { verifyDomains, cleanList, hygieneReport } from "./hygiene";
 import { activity } from "./team";
 import { getAutopilot, busy, unsentBySector, campaignForSector, MIN_SECTOR } from "./autopilot";
+import { isTargeted } from "./policy";
 import { createMission, runMission } from "./missions";
 import { getSettings } from "./service";
 import { complete } from "../llm";
@@ -53,7 +54,8 @@ export type Analysis = {
 export function recommend(sectors: Array<{ sector: string; n: number }>, opts: { min?: number; max?: number } = {}): Recommendation[] {
   const min = opts.min ?? MIN_SECTOR, max = opts.max ?? MAX_RECOMMENDED;
   return sectors
-    .filter((s) => s.n >= min)
+    // خارج الاستهداف لا يُوصى به: القطاع الذي لا نراسله لا يُعرض موجةً.
+    .filter((s) => s.n >= min && isTargeted(s.sector))
     .map((s) => {
       const goal = campaignForSector(s.sector);
       const own = !goal.startsWith("حملة ضريبة الشركات والمحاسبة الخارجية");

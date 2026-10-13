@@ -39,6 +39,7 @@ import { opensReport } from "../lib/email/opens";
 import { runSpecialist, runSpecialistRound, lastReports, SPECIALISTS, type SpecialistRole } from "../lib/email/specialists";
 import { seedLibrary2 } from "../lib/email/library-2";
 import { reachReport, contentSignals } from "../lib/email/deliverability";
+import { managerState, runManagerCycle } from "../lib/email/manager";
 import { campaignReadiness } from "../lib/email/readiness";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { register as emailRegister } from "../lib/email/register";
@@ -175,6 +176,18 @@ router.post("/ledger/repair", async (req, res) => {
     return res.status(400).json({ error: "إصلاح غير معروف" });
   }
   res.json(await repair(req.session.userId!, what));
+});
+
+// ── منصور: مدير البريد ────────────────────────────────────────────
+/** السياسة، والنسبة الفعلية، والأحكام، وآخر تقرير — بلا نداء نموذج. */
+router.get("/manager", async (req, res) => res.json(await managerState(req.session.userId!)));
+
+/** دورةٌ الآن. تجري في الخلفية: فيها نداء نموذج وجولة الطيار. */
+router.post("/manager/run", async (req, res) => {
+  const userId = req.session.userId!;
+  void runManagerCycle(userId, { brief: true, notifyOwner: req.body?.notify !== false, force: true })
+    .catch((err) => req.log?.warn?.({ err: String(err?.message ?? err) }, "manager cycle failed"));
+  res.json({ started: true, note: "بدأت الدورة: الفريق ← السجل ← النتائج ← القرارات ← الموجات ← التقرير. يظهر التقرير هنا خلال دقيقة ويصلك على تليجرام." });
 });
 
 // ── الوصول: أن تصل الرسالة الصندوق لا مجلد الإعلانات ─────────────

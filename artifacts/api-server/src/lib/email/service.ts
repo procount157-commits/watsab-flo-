@@ -454,13 +454,41 @@ async function drainOne(userId: number) {
     await db.update(emailMessagesTable).set({ status: "failed", error: String(e?.message ?? err).slice(0, 400) }).where(eq(emailMessagesTable.id, m.id));
     if (m.campaignId) await db.update(emailCampaignsTable).set({ failedCount: sql`${emailCampaignsTable.failedCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
     await recordEvent(userId, m.id, "failed", { meta: { error: String(e?.message ?? err).slice(0, 200) } });
-    // A permanent refusal of the address is a bounce in all but name.
-    if (e?.permanent && contact) await recordEvent(userId, m.id, "bounce", { meta: { synthetic: true } });
-    // The provider itself refusing us (auth, rate) — stop hammering.
-    if (!e?.permanent) heldUntil.set(userId, now + 10 * 60_000);
+    // رفضُ **العنوان** وحده ارتدادٌ في كل شيء إلا الاسم. ورفضُ المزوّد
+    // لرسالتنا ليس عن الجهة في شيء: هي تبقى نشطة، ونحن الذين نتوقف.
+    if (e?.kind === "address" && contact) await recordEvent(userId, m.id, "bounce", { meta: { synthetic: true } });
+    if (e?.kind === "policy") {
+      // المزوّد يقول إن ما نرسله يشبه الإزعاج. الاستمرار بعدها هو ما يحوّل
+      // تحذيراً إلى حجب، فيُحجز الإرسال ست ساعات ويُقال لصاحب العمل مرةً.
+      const until = new Date(now + 6 * 3_600_000);
+      heldUntil.set(userId, until.getTime());
+      await db.update(emailSettingsTable).set({ guardHeldAt: new Date(now), guardHoldUntil: until }).where(eq(emailSettingsTable.userId, userId)).catch(() => {});
+      await recordEvent(userId, m.id, "failed", { meta: { policy: true, error: String(e?.message ?? "").slice(0, 200) } }).catch(() => {});
+      await policyAlert(userId, String(e?.message ?? ""), m.campaignId).catch(() => {});
+    }
+    // المزوّد يرفضنا لحظةً (مصادقة، معدّل) — لا نطرق الباب.
+    if (e?.kind === "transient" || (!e?.kind && !e?.permanent)) heldUntil.set(userId, now + 10 * 60_000);
     logger.warn({ userId, messageId: m.id, err: String(e?.message ?? err) }, "email send failed");
     receipt({ userId, node: "sender", graph: "email", action: "send.email", status: "failed", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : null, outputRef: `email-message:${m.id}`, why: String(e?.message ?? err).slice(0, 300) });
   }
+}
+
+/** مرةً في اليوم، لا مع كل رسالة مرفوضة. */
+const policyAlerted = new Map<number, number>();
+async function policyAlert(userId: number, error: string, campaignId: number | null) {
+  if (Date.now() - (policyAlerted.get(userId) ?? 0) < 20 * 3_600_000) return;
+  policyAlerted.set(userId, Date.now());
+  const { notify, esc } = await import("../telegram");
+  const { activity } = await import("./team");
+  const text = `مزوّد البريد رفض رسالتنا لا عنوان العميل: «${error.slice(0, 120)}». حجزتُ الإرسال ست ساعات — الجهات لم تُمسّ.`;
+  await activity(userId, "email_guard", "hold", text, { campaignId, policy: true });
+  await notify(userId, [
+    "<b>⚠️ مزوّد البريد رفض رسائلنا كإزعاج</b>",
+    esc(error.slice(0, 200)),
+    "",
+    "هذا رفضٌ لنصّنا أو لإيقاعنا، لا لعناوين العملاء — فلم تُعلَّم جهةٌ مرتدّة.",
+    "حُجز الإرسال ست ساعات. السبب الغالب: نصٌّ واحد يتكرّر مئات المرات. غيّر الزاوية والعنوان قبل الاستئناف.",
+  ].join("\n")).catch(() => {});
 }
 
 async function completeFinishedCampaigns(userId: number) {

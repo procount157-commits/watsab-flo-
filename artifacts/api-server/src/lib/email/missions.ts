@@ -29,6 +29,7 @@ import { writeCampaign, rememberLesson, learnFrom, type EmailDraft } from "./age
 import { count, describe } from "./segments";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { INTENSITY, asIntensity } from "./intensity";
+import { CAMPAIGN_LANGUAGE, trackOfAngle, type Track } from "./policy";
 import { trackingActive, retestHeld, getSettings, signals } from "./service";
 import { warmupCap } from "./health";
 import { activity, guardCheck, formatIssues, onDuty, type EmailRole } from "./team";
@@ -44,9 +45,15 @@ async function set(id: number, patch: Partial<typeof emailMissionsTable.$inferIn
 export async function createMission(userId: number, input: {
   name: string; goal: string; filter: SegmentFilter; language?: string; tone?: string | null; requireApproval?: boolean; followAfterHours?: number;
   agentRole?: EmailRole; sourceListId?: number | null; intensity?: string | null;
+  track?: Track | null; angle?: string | null;
 }) {
-  // The account's default language (English) unless this mission asked for another.
-  const accountLang = asLanguage((await getSettings(userId))?.defaultLanguage);
+  // قرار صاحب العمل: كل الحملات بالإنجليزية. فاللغة لا تُؤخذ من الطلب ولا
+  // من إعداد الحساب — مهمتان عربيتان خرجتا في أكتوبر لأن حقلاً في نموذجٍ
+  // حمل «ar». والمسار يُستنتج من الزاوية أو من نص الهدف إن لم يُعطَ،
+  // فكل مهمةٍ تُحسب على نسبة ٨٠/٢٠ ولو أُنشئت يدوياً.
+  const accountLang = asLanguage(CAMPAIGN_LANGUAGE);
+  input = { ...input, language: CAMPAIGN_LANGUAGE };
+  const track: Track = input.track ?? trackOfAngle(input.angle) ?? (/(AML|DPMS|MLRO|goAML|غسل الأموال|غسل الاموال)/i.test(input.goal) ? "aml" : "services");
   const [m] = await db.insert(emailMissionsTable).values({
     userId, name: input.name.slice(0, 160), goal: input.goal.slice(0, 2000), filter: input.filter,
     // English unless the owner asked for another for this mission.
@@ -55,6 +62,7 @@ export async function createMission(userId: number, input: {
     // The first follow-up's day comes from the intensity (day 2 when intensive) unless given.
     followAfterHours: Math.min(24 * 14, Math.max(24, Number(input.followAfterHours) || INTENSITY[asIntensity(input.intensity, asIntensity((await getSettings(userId))?.followIntensity))].firstAfterHours)),
     agentRole: input.agentRole ?? null, sourceListId: input.sourceListId ?? null,
+    track, angle: input.angle ?? null,
   }).returning();
   await log(m!.id, `أُنشئت المهمة: ${describe(input.filter)} — ${input.goal.slice(0, 200)}`, "start");
   return m!;

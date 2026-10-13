@@ -294,6 +294,10 @@ export const emailMissionsTable = pgTable("email_missions", {
   followAfterHours: integer("follow_after_hours").notNull().default(48),
   /** light | normal | intense; null means the account's setting. */
   intensity:        varchar("intensity", { length: 10 }),
+  /** aml | services — المسار الذي تُحسب عليه نسبة ٨٠/٢٠. */
+  track:        varchar("track", { length: 12 }),
+  /** معرّف الزاوية من policy.ts — وحدة المقارنة عند محلّل النتائج. */
+  angle:        varchar("angle", { length: 40 }),
   /** Which email agent writes it (bot_employees.role); null is نورة. */
   agentRole:        varchar("agent_role", { length: 30 }),
   /** The list the autopilot started it for. */
@@ -331,6 +335,8 @@ export interface SegmentFilter {
   maxTouches?: number;
   /** At most this many, oldest first — a wave, not the whole list at once. */
   take?: number;
+  /** عناوين الأقسام (info@، sales@) قبل عناوين الأشخاص: ترتدّ أقل بأربعة أضعاف في بيانات هذا الحساب. */
+  roleFirst?: boolean;
 }
 
 // ── What the owner taught the email section ──────────────────────

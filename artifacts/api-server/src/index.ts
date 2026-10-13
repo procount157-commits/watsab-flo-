@@ -37,6 +37,7 @@ import { startSmartFollowUps } from "./lib/smart-followup";
 import { startCaretaker } from "./lib/email/caretaker";
 import { startSpecialistRounds } from "./lib/email/specialists";
 import { startTrackingWatch } from "./lib/email/public-url";
+import { startManagerLoop } from "./lib/email/manager";
 import { startCatalogSync } from "./lib/catalog/floret";
 import { startListKeeper } from "./lib/list-keeper";
 import { startEngineerRounds } from "./lib/graph/engineer";
@@ -165,6 +166,8 @@ function startListening() {
     startSpecialistRounds();
     // الفشل الصامت هو ما كلّف ٥٦٠ إرسالاً: عنوانٌ عام يموت فلا يُقال.
     startTrackingWatch();
+    // منصور: دورة الفريق كاملةً كل ست ساعات، وتقريرٌ واحد في اليوم.
+    startManagerLoop();
     // نورة joins every team that exists, so she appears beside the others.
     setTimeout(async () => {
       const teams = await dbx.selectDistinct({ userId: botEmp.userId }).from(botEmp).catch(() => []);

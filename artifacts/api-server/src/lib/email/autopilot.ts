@@ -19,6 +19,8 @@
 // goes into the activity feed the dashboard shows.
 
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { CAMPAIGN_LANGUAGE, MIX, TRACK_AR, anglesFor, chooseTrack, isTargeted, mixShare, nextAngle, tracksFor, type Track } from "./policy";
+import { mixState, resultsReport } from "./results";
 import {
   db, emailAutopilotTable, emailListsTable, emailListMembersTable, emailMissionsTable,
   type EmailAutopilot, type SegmentFilter,
@@ -61,7 +63,8 @@ export async function saveAutopilot(userId: number, b: any): Promise<EmailAutopi
     maxTouches: clamp(b.maxTouches, 1, 6, cur.maxTouches),
     quietDays: clamp(b.quietDays, 2, 30, cur.quietDays),
     // English unless the owner chose another.
-    language: ["en", "ar", "both"].includes(b.language) ? b.language : cur.language,
+    // قرار صاحب العمل: كل الحملات بالإنجليزية — فلا يُحفظ غيرها.
+    language: CAMPAIGN_LANGUAGE,
     updatedAt: new Date(),
   };
   const [row] = await db.insert(emailAutopilotTable).values(values).onConflictDoUpdate({ target: emailAutopilotTable.userId, set: values }).returning();
@@ -134,16 +137,17 @@ export async function refreshStageLists(userId: number, parent: { id: number; na
 }
 
 // ── سلمى: which campaign for which list ───────────────────────────
-// The firm's campaign library (A–I in its knowledge base), by sector.
-const CAMPAIGNS: Array<{ sectors: string[]; goal: string }> = [
-  { sectors: ["عقارات"], goal: "حملة AML للعقارات: وسطاء ووكالات العقارات من فئات DNFBP — الحديث عن العناية الواجبة بالعملاء والمستفيد الحقيقي وتقييم المخاطر والجاهزية للتفتيش، لا التسجيل في goAML وحده. الدعوة: نراجع جاهزيتكم لـ AML." },
-  { sectors: ["ذهب ومجوهرات"], goal: "حملة الذهب والمجوهرات: التزامات DPMS ومعرفة العميل والمعاملات النقدية، مع محاسبة المخزون وتكلفة الجرام والهامش. الدعوة: نقيّم التزامات DPMS لديكم." },
-  { sectors: ["مقاولات", "مواد بناء"], goal: "حملة تكاليف المقاولات: هل كل مشروع رابح فعلاً؟ تكلفة المشروع والعمالة والمواد والمقاولين من الباطن والميزانية مقابل الفعلي. الدعوة: نناقش حجم عملكم المحاسبي." },
-  { sectors: ["مطاعم ومقاهي", "أغذية"], goal: "حملة محاسبة المطاعم: المبيعات ليست ربحاً — تكلفة الطعام والهدر والمخزون وربحية كل فرع. الدعوة: استشارة قصيرة عن ربحية فروعكم." },
-  { sectors: ["استشارات", "قانونية", "تقنية", "تسويق وإعلان"], goal: "حملة الشركات القائمة على المشاريع: ربحية كل مشروع وكل عميل وتوزيع تكلفة الموظفين، مع ضريبة الشركات وVAT. الدعوة: نناقش احتياجاتكم." },
-  { sectors: ["محاسبة وتدقيق", "خدمات الشركات"], goal: "حملة مسؤول امتثال خارجي (MLRO): المحاسبون المستقلون من فئات DNFBP بحسب إرشادات 2026 — إطار AML والسياسات والتدريب والجاهزية للتفتيش. الدعوة: تقييم امتثال AML." },
-];
+// حملة القطاع تأتي من سياسة الاستهداف (policy.ts): لكل قطاعٍ مستهدف
+// مسارٌ أول وزوايا يدور عليها. والخريطة التي كانت هنا أعطت كل قطاعٍ حملةً
+// واحدة — فلا نسبة تُقاس — ووضعت المحامين في محاسبة المشاريع، وراسلت
+// كل قطاعٍ غير مستهدف بحملةٍ افتراضية.
 const DEFAULT_GOAL = "حملة ضريبة الشركات والمحاسبة الخارجية للشركات الصغيرة والمتوسطة: الإقرار خلال تسعة أشهر من نهاية الفترة الضريبية، والسجلات، ومتى تكون الاستعانة بمحاسبة خارجية منطقية. الدعوة: نراجع وضعكم الضريبي.";
+
+/** هدف القطاع بمساره الأول وزاويته الأولى — أو الافتراضي لما هو خارج الاستهداف. */
+function primaryGoal(sector: string | null): string {
+  const t = tracksFor(sector)[0];
+  return (t && sector ? anglesFor(t, sector)[0]?.goal : null) ?? DEFAULT_GOAL;
+}
 
 /** The sector most of the list is in, and the campaign for it. */
 export async function campaignFor(listId: number): Promise<{ sector: string | null; goal: string }> {
@@ -151,14 +155,12 @@ export async function campaignFor(listId: number): Promise<{ sector: string | nu
     SELECT c.sector FROM email_list_members lm JOIN email_contacts c ON c.id = lm.contact_id
     WHERE lm.list_id = ${listId} AND c.sector IS NOT NULL GROUP BY c.sector ORDER BY count(*) DESC LIMIT 1`)).rows;
   const sector = r?.sector ?? null;
-  const hit = sector ? CAMPAIGNS.find((c) => c.sectors.includes(sector)) : null;
-  return { sector, goal: hit?.goal ?? DEFAULT_GOAL };
+  return { sector, goal: primaryGoal(sector) };
 }
 
 /** The campaign for one sector — or the default when the library has none for it. Pure. */
 export function campaignForSector(sector: string | null): string {
-  const hit = sector ? CAMPAIGNS.find((c) => c.sectors.includes(sector)) : null;
-  return hit?.goal ?? DEFAULT_GOAL;
+  return primaryGoal(sector);
 }
 
 /**
@@ -187,6 +189,22 @@ export async function unsentBySector(listId: number): Promise<Array<{ sector: st
     WHERE lm.list_id = ${listId} AND c.status = 'active' AND coalesce(c.mx_ok, true) AND c.last_sent_at IS NULL AND c.sector IS NOT NULL
     GROUP BY c.sector ORDER BY count(*) DESC`);
   return r.rows.map((x) => ({ sector: x.sector, n: Number(x.n) }));
+}
+
+/** مرةً كل `hours` ساعة — لا مع كل جولة ربع ساعة. */
+async function sayOnce(userId: number, role: Parameters<typeof activity>[1], action: string, text: string, hours: number) {
+  const [again] = (await db.execute(sql`SELECT 1 FROM email_agent_activity WHERE user_id = ${userId} AND role = ${role} AND text = ${text.slice(0, 2000)} AND created_at > now() - (${hours} || ' hours')::interval LIMIT 1`)).rows;
+  if (!again) await activity(userId, role, action, text);
+}
+
+/** زوايا موجات هذا (المسار، القطاع) السابقة، بالترتيب — ليدور عليها `nextAngle`. */
+async function anglesUsed(userId: number, track: Track, sector: string): Promise<string[]> {
+  const r = await db.execute<{ angle: string }>(sql`
+    SELECT angle FROM email_missions
+    WHERE user_id = ${userId} AND track = ${track} AND angle IS NOT NULL
+      AND filter->'sectors' @> ${JSON.stringify([sector])}::jsonb
+    ORDER BY created_at`);
+  return r.rows.map((x) => x.angle);
 }
 
 // ── One round ────────────────────────────────────────────────────
@@ -223,6 +241,16 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
   const strategist = await onDuty(userId, "email_strategist");
   const requireApproval = cfg.mode !== "auto";
 
+  // ── ما يحكم التخطيط هذه الجولة: النسبة، وما حكم به المحلّل ──
+  const mix = await mixState(userId);
+  const res = await resultsReport(userId).catch(() => null);
+  const avoidAngles = res?.avoidAngles ?? [];
+  const roleFirst = !!res?.decisions.some((d) => d.kind === "role_first");
+  const amlHasAudience = (res?.audience ?? []).some((a) => a.tracks.includes("aml") && a.ready >= MIN_SECTOR);
+  // المزوّد رفض نصّنا كإزعاج: الموجات تصغر حتى يزول الأثر — ستون بدل
+  // مئتين، فنصٌّ جديد يُجرَّب على عددٍ لا يُغرق المزوّد إن أخطأ.
+  const waveCap = res?.decisions.some((d) => d.kind === "policy") ? Math.min(cfg.waveSize, 60) : cfg.waveSize;
+
   for (const list of lists) {
     // يوسف: where everyone is.
     if (followup) {
@@ -235,30 +263,47 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
     }
     if (!healthy) continue;
 
-    // سلمى: the next wave of people not yet written to — one per sector, each
-    // with its own sector's campaign. A list is rarely one sector, and one
-    // campaign written for the biggest sector reached everyone else in it with
-    // the wrong pain. Only the sectors the owner picked, when they picked any.
+    // سلمى: الموجة القادمة ممن لم يُراسَلوا — بسياسة الاستهداف.
+    //
+    // ثلاثة أشياء تغيّرت هنا بقرار صاحب العمل:
+    //   · القطاع غير المستهدف لا يُراسَل، ولو كان في القائمة.
+    //   · مسار الموجة يُختار بالنسبة: الخدمات لا تتجاوز خُمس الحجم.
+    //   · والزاوية تدور: النص الواحد مئات المرات هو ما رفضه مزوّد البريد.
     if (strategist) {
       const wanted = (cfg.sectors as string[] | null) ?? [];
-      const sectors = (await unsentBySector(list.id))
-        .filter((s) => s.n >= MIN_SECTOR && (!wanted.length || wanted.includes(s.sector)));
+      const all = (await unsentBySector(list.id)).filter((s) => s.n >= MIN_SECTOR && (!wanted.length || wanted.includes(s.sector)));
+      const skipped = all.filter((s) => !isTargeted(s.sector));
+      if (skipped.length) await sayOnce(userId, "email_strategist", "skip",
+        `«${list.name}»: ${skipped.map((s) => `${s.sector} (${s.n})`).join("، ")} خارج الاستهداف — لا موجة لها. المستهدف: AML للعقارات والمحامين والذهب، والمحاسبة للمطاعم والمقاولات والعقارات.`, 24);
+      const sectors = all.filter((s) => isTargeted(s.sector));
       let running = 0;
       for (const s of sectors) if (await busy(list.id, s.sector)) running++;
       for (const s of sectors) {
         if (running >= MAX_SECTOR_WAVES) break;
         if (await busy(list.id, s.sector)) continue;
-        const filter: SegmentFilter = { listIds: [list.id], sectors: [s.sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take: cfg.waveSize };
+        const pick = chooseTrack(s.sector, mix, { amlHasAudience, minWave: MIN_SECTOR });
+        if (!pick) {
+          await sayOnce(userId, "email_strategist", "wait", `«${s.sector}» في «${list.name}» ينتظر: مسار الخدمات عند سقفه (${Math.round(mixShare(mix).services * 100)}٪ من ${MIX.services * 100}٪).`, 24);
+          continue;
+        }
+        const take = Math.min(waveCap, pick.take ?? waveCap);
+        const filter: SegmentFilter = { listIds: [list.id], sectors: [s.sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take, ...(roleFirst ? { roleFirst: true } : {}) };
         const n = await count(userId, filter, true);
         if (!n) continue;
-        const goal = campaignForSector(s.sector);
+        const used = await anglesUsed(userId, pick.track, s.sector);
+        const angle = nextAngle(pick.track, s.sector, used, avoidAngles);
+        if (!angle) continue;
         const m = await createMission(userId, {
-          name: `${s.sector} — ${list.name} — موجة ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
-          goal, filter, language: cfg.language, requireApproval,
+          name: `${s.sector} — ${TRACK_AR[pick.track]} — ${angle.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
+          goal: angle.goal, filter, language: CAMPAIGN_LANGUAGE, requireApproval,
           followAfterHours: cfg.followAfterHours, agentRole: "email", sourceListId: list.id,
+          track: pick.track, angle: angle.id,
         });
+        mix[pick.track] += n;
         done.waves++; running++;
-        await activity(userId, "email_strategist", "wave", `قسّمت «${list.name}» حسب القطاع: موجة لـ ${n} من «${s.sector}» (من ${s.n} لم يُراسَلوا بعد) — ${goal.split(":")[0]}. سلّمتها لنورة لتكتبها.`, { listId: list.id, missionId: m.id, sector: s.sector });
+        await activity(userId, "email_strategist", "wave",
+          `موجة ${TRACK_AR[pick.track]} لـ ${n} من «${s.sector}» في «${list.name}» بزاوية «${angle.label}» — ${pick.why}. النسبة بعدها: AML ${Math.round(mixShare(mix).aml * 100)}٪ / خدمات ${Math.round(mixShare(mix).services * 100)}٪.`,
+          { listId: list.id, missionId: m.id, sector: s.sector, track: pick.track, angle: angle.id });
       }
     }
 
@@ -277,7 +322,7 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
           : `متابعة لمن فتح رسالتنا ولم يرد. زاوية ألم جديدة من قطاعه لم تُذكر من قبل، وسؤال تأهيل واحد يسهل الرد عليه. السياق: ${plan.goal}`;
         const m = await createMission(userId, {
           name: `${list.name} — متابعة ${STAGES[sl.stage as Stage]}`.slice(0, 160),
-          goal, filter, language: cfg.language, requireApproval, followAfterHours: cfg.followAfterHours,
+          goal, filter, language: CAMPAIGN_LANGUAGE, requireApproval, followAfterHours: cfg.followAfterHours,
           agentRole: "email_followup", sourceListId: sl.id,
         });
         done.nurtures++;

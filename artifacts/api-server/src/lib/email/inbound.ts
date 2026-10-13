@@ -109,8 +109,12 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
     // الارتداد يأتي من الخادم، والعنوان الفاشل داخل النص.
     const addr = /([a-z0-9._%+\-']+@[a-z0-9.-]+\.[a-z]{2,})/i.exec(text)?.[1]?.toLowerCase();
     if (addr) {
+      // الرسالة التي **خرجت** إلى هذا العنوان، لا آخر صفٍّ له: ثماني عشرة
+      // إشعار ارتدادٍ نُسبت إلى متابعاتٍ ما زالت في الطابور، فظهرت رسائل
+      // «مرتدّة» لم تُرسَل قط، واختلّ كل عدٍّ يقسم الارتداد على ما خرج.
       const [m] = await db.select({ id: emailMessagesTable.id, contactId: emailMessagesTable.contactId }).from(emailMessagesTable)
-        .where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.toEmail, addr))).orderBy(desc(emailMessagesTable.createdAt)).limit(1);
+        .where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.toEmail, addr), isNotNull(emailMessagesTable.sentAt)))
+        .orderBy(desc(emailMessagesTable.sentAt)).limit(1);
       if (m) matched = m;
     }
   }

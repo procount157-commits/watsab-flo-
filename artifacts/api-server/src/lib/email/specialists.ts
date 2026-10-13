@@ -25,14 +25,16 @@ import { dataPicture } from "./cohorts";
 import { retargetPlans } from "./retarget";
 import { opensReport } from "./opens";
 import { trackingState } from "./public-url";
+import { resultsReport, resultsFacts } from "./results";
 
-export type SpecialistRole = "email_registrar" | "email_data" | "email_retarget" | "email_opens";
+export type SpecialistRole = "email_registrar" | "email_data" | "email_retarget" | "email_opens" | "email_analyst";
 
 export const SPECIALISTS: Record<SpecialistRole, { name: string; title: string; question: string }> = {
   email_registrar: { name: "راشد", title: "أمين سجل الإرسال", question: "هل السجل صادق — وما التناقض الذي يجب إصلاحه اليوم؟" },
   email_data:      { name: "بدور", title: "أمينة تصنيف البيانات", question: "أين الداتا الآن، وأي عيبٍ فيها يكلّفنا ردوداً فعلاً؟" },
   email_retarget:  { name: "مريم", title: "أخصائية إعادة الاستهداف", question: "ما الموجة الواحدة التي تُرسل غداً، ولمن، وبأي زاوية؟" },
   email_opens:     { name: "حصّة", title: "محللة الفتح والتوقيت", question: "ما الذي يرفع الفتح والرد في الموجة القادمة بالتحديد؟" },
+  email_analyst:   { name: "جاسم", title: "محلل النتائج", question: "ما الذي نفع مما أُرسل وما الذي لم ينفع — وأيّ زاويةٍ تُوسَّع وأيّها يُعاد كتابته؟" },
 };
 
 /** وقائع كل أخصائي — نصاً مضغوطاً، فالمزوّد المجاني يعطي ٨٠٠٠ رمزاً في الدقيقة. */
@@ -76,6 +78,10 @@ export async function factsFor(userId: number, role: SpecialistRole): Promise<{ 
           r.excludedCohorts.length ? `لا تُمسّ: ${r.excludedCohorts.map((x) => `${x.label} ${x.n}`).join("، ")}.` : "",
         ].filter(Boolean).join("\n"),
       };
+    }
+    case "email_analyst": {
+      const r = await resultsReport(userId);
+      return { raw: r, text: resultsFacts(r) };
     }
     case "email_opens": {
       const o = await opensReport(userId);
@@ -172,7 +178,7 @@ export async function runSpecialist(userId: number, role: SpecialistRole, opts: 
  * تصنيفها، ثم حصّة تقرأ ما يرفع الفتح، ثم راشد يتحقّق أن السجل صادق.
  * بفاصلٍ بينهم، فالمزوّد المجاني محدودٌ بالدقيقة.
  */
-export const SPECIALIST_ORDER: SpecialistRole[] = ["email_data", "email_retarget", "email_opens", "email_registrar"];
+export const SPECIALIST_ORDER: SpecialistRole[] = ["email_analyst", "email_data", "email_retarget", "email_opens", "email_registrar"];
 
 export async function runSpecialistRound(userId: number, opts: { notifyOwner?: boolean; gapMs?: number } = {}): Promise<SpecialistReport[]> {
   const out: SpecialistReport[] = [];
@@ -199,7 +205,7 @@ export async function lastReports(userId: number) {
     SELECT DISTINCT ON (role) role, text, created_at AS "at"
     FROM email_agent_activity
     WHERE user_id = ${userId} AND action = 'report'
-      AND role IN ('email_registrar','email_data','email_retarget','email_opens')
+      AND role IN ('email_registrar','email_data','email_retarget','email_opens','email_analyst')
     ORDER BY role, created_at DESC`);
   const rows = ((r as any).rows ?? r) as any[];
   return (Object.keys(SPECIALISTS) as SpecialistRole[]).map((role) => {
@@ -214,7 +220,11 @@ export function startSpecialistRounds(): void {
   const run = async () => {
     const rows = await db.execute<any>(sql`SELECT user_id FROM email_settings WHERE from_email IS NOT NULL`);
     for (const u of ((rows as any).rows ?? rows) as any[]) {
-      await runSpecialistRound(Number(u.user_id), { notifyOwner: true }).catch(() => {});
+      // مع مديرٍ على رأس العمل يصل صاحبَ العمل صوتٌ واحد في اليوم: تقريره.
+      // وتقارير المتخصّصين تبقى في الواجهة لمن أراد التفصيل. ستُّ رسائل
+      // يومياً تُقرأ أولاها وتُكتم الباقية.
+      const managed = await onDuty(Number(u.user_id), "email_manager").catch(() => false);
+      await runSpecialistRound(Number(u.user_id), { notifyOwner: !managed }).catch(() => {});
     }
   };
   // أول جولةٍ بعد ثلاث دقائق من الإقلاع، ثم كل يوم.

@@ -75,6 +75,7 @@ export function cleanFilter(raw: any): SegmentFilter {
   if (num(raw?.quietDays, 60)) f.quietDays = num(raw.quietDays, 60);
   if (num(raw?.maxTouches, 20)) f.maxTouches = num(raw.maxTouches, 20);
   if (num(raw?.take, 5000)) f.take = num(raw.take, 5000);
+  if (raw?.roleFirst === true) f.roleFirst = true;
   return f;
 }
 
@@ -83,7 +84,12 @@ export async function resolve(userId: number, f: SegmentFilter, opts: { sendable
   const conds = conditions(userId, f);
   // الهدنة: من طلب أن نمهله لا يُختار، ولو كانت حالته «نشط».
   if (opts.sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`, sql`(${c.quietUntil} is null or ${c.quietUntil} < now())`);
-  const q = db.select().from(c).where(and(...conds)).orderBy(c.id);
+  // الترتيب يحسم من يدخل الموجة حين تكون أصغر من الجمهور. وعناوين
+  // الأقسام أولاً قرارٌ من البيانات: ارتدّت ١٫٣٪ مقابل ٥٪ لعناوين الأشخاص.
+  const roleRank = sql`CASE WHEN ${c.email} ~* '^(info|sales|admin|contact|support|hello|enquiry|enquiries|inquiry|office|mail|email|general|reception|accounts|accounting|finance)@' THEN 0 ELSE 1 END`;
+  const q = f.roleFirst
+    ? db.select().from(c).where(and(...conds)).orderBy(roleRank, c.id)
+    : db.select().from(c).where(and(...conds)).orderBy(c.id);
   const lim = Math.min(opts.limit ?? Infinity, f.take ?? Infinity);
   return Number.isFinite(lim) ? q.limit(lim) : q;
 }

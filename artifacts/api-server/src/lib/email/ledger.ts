@@ -24,8 +24,11 @@ export interface LedgerFinding {
   fix?: string;
   n: number;
   /** هل يمكن إصلاحه بزرٍّ واحد — واسم الإصلاح. */
-  repair?: "requeue_stuck" | "resync_counters" | "mark_bounced" | "cancel_orphans";
+  repair?: "requeue_stuck" | "resync_counters" | "mark_bounced" | "cancel_orphans" | "restore_policy_rejected";
 }
+
+/** رسالةٌ رفضها المزوّد نفسه — بنصّ خطئها. يطابق `classifySendFailure` في provider.ts. */
+const POLICY_SQL = sql`m.error ~* '(5\.7\.[0-9]|spam|policy|blocked|blacklist|reputation|message rejected|content rejected)'`;
 
 const one = async <T = any>(q: ReturnType<typeof sql>): Promise<T> => {
   const r = await db.execute<any>(q);
@@ -142,6 +145,20 @@ export async function reconcile(userId: number): Promise<{ findings: LedgerFindi
         fix: "حدّد نافذة الإرسال في الإعدادات، فالمُرسِل يحترمها." }
     : { id: "off_hours", title: "نافذة الإرسال", state: "ok", n: 0, detail: "كل ما خرج خرج في ساعات العمل" });
 
+  // ٩ · جهاتٌ عُلّمت مرتدّة لأن المزوّد رفض رسالتنا. الرفض بـ5.7.x حكمٌ
+  //     على نصّنا أو سمعتنا، لا على عنوانهم — والرسالة لم تخرج أصلاً.
+  const wronged = await one(sql`
+    SELECT count(DISTINCT c.id)::int AS n FROM email_contacts c
+    WHERE c.user_id = ${userId} AND c.status = 'bounced'
+      AND EXISTS (SELECT 1 FROM email_messages m WHERE m.contact_id = c.id AND m.sent_at IS NULL AND ${POLICY_SQL})
+      AND NOT EXISTS (SELECT 1 FROM email_messages m WHERE m.contact_id = c.id AND m.bounced_at IS NOT NULL AND NOT (m.sent_at IS NULL AND ${POLICY_SQL}))`);
+  f.push(Number(wronged?.n) > 0
+    ? { id: "policy_as_bounce", title: "شركات عُلّمت مرتدّة ظلماً", state: "fail", n: Number(wronged.n),
+        detail: `${wronged.n} جهة حالتها «مرتدّة» وسببها الوحيد أن مزوّد البريد رفض رسالتنا (5.7.x — إزعاج أو سياسة)`,
+        means: "عناوينها سليمة، والرسالة لم تخرج إليها أصلاً. خرجت من كل قائمة ومن كل موجةٍ قادمة، ورفعت نسبة الارتداد المعروضة بما ليس ارتداداً.",
+        fix: "تُعاد نشطة، وتُعلَّم رسائلها «فشلت» بسببها الحقيقي.", repair: "restore_policy_rejected" }
+    : { id: "policy_as_bounce", title: "رفض المزوّد مقابل الارتداد", state: "ok", n: 0, detail: "لا جهة عُلّمت مرتدّة بسبب رفض المزوّد لرسالتنا" });
+
   // ٨ · حدثٌ بلا رسالة. سجلٌّ يشير إلى ما لا وجود له.
   const ghost = await one(sql`
     SELECT count(*)::int AS n FROM email_events e
@@ -202,6 +219,24 @@ export async function repair(userId: number, what: NonNullable<LedgerFinding["re
           AND EXISTS (SELECT 1 FROM email_messages m WHERE m.contact_id = c.id AND m.bounced_at IS NOT NULL)
         RETURNING c.id`);
       return { done: (((r as any).rows ?? r) as any[]).length, what: "عُلِّمت الجهات المرتدّة فخرجت من كل موجة" };
+    }
+    case "restore_policy_rejected": {
+      // الجهات أولاً — قبل أن تتغيّر حالة رسائلها التي تُعرَف بها.
+      const c = await db.execute<any>(sql`
+        UPDATE email_contacts c SET status = 'active'
+        WHERE c.user_id = ${userId} AND c.status = 'bounced'
+          AND EXISTS (SELECT 1 FROM email_messages m WHERE m.contact_id = c.id AND m.sent_at IS NULL AND ${POLICY_SQL})
+          AND NOT EXISTS (SELECT 1 FROM email_messages m WHERE m.contact_id = c.id AND m.bounced_at IS NOT NULL AND NOT (m.sent_at IS NULL AND ${POLICY_SQL}))
+        RETURNING c.id`);
+      await db.execute(sql`
+        DELETE FROM email_events e USING email_messages m
+        WHERE e.message_id = m.id AND m.user_id = ${userId} AND e.type = 'bounce'
+          AND m.sent_at IS NULL AND ${POLICY_SQL}`);
+      await db.execute(sql`
+        UPDATE email_messages m SET status = 'failed', bounced_at = NULL
+        WHERE m.user_id = ${userId} AND m.status = 'bounced' AND m.sent_at IS NULL AND ${POLICY_SQL}`);
+      await repair(userId, "resync_counters");
+      return { done: (((c as any).rows ?? c) as any[]).length, what: "أُعيدت الجهات نشطة: المزوّد رفض رسالتنا لا عناوينها" };
     }
     case "requeue_stuck": {
       // لا يُعاد إلى الطابور ما لا جسم له: ذاك يُلغى بالإصلاح الآخر.

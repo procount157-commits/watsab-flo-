@@ -149,33 +149,62 @@ export async function reachReport(userId: number): Promise<ReachReport> {
       : { id: "dmarc", group: "auth", title: "DMARC", state: "ok", detail: dmarcRec, weight: 10 });
 
   // ── ٢ · السمعة ──
+  // الارتداد يُعدّ **بالشركة** لا بالرسالة، ومما **خرج فعلاً** وحده.
+  // أول صيغةٍ عدّت كل صفٍّ عليه تاريخ ارتداد وقسمته على الرسائل، فدخل
+  // في البسط ثلاثون رسالة رفضها المزوّد قبل أن تخرج، وخرج رقمٌ لا يصف
+  // القائمة ولا المزوّد. وعلى رقمٍ مثله قلتُ لصاحب العمل «٢٥٪ ارتداد»
+  // والصحيح كان أقل من ١٪ بعد فحص النطاقات.
   const r = rows(await db.execute<any>(sql`
-    SELECT count(*) FILTER (WHERE sent_at IS NOT NULL)::int                         AS sent,
-           count(*) FILTER (WHERE bounced_at IS NOT NULL)::int                      AS bounced,
-           count(*) FILTER (WHERE replied_at IS NOT NULL)::int                      AS replied,
-           count(*) FILTER (WHERE sent_at > now() - interval '30 days')::int         AS sent30,
-           count(*) FILTER (WHERE bounced_at > now() - interval '30 days')::int      AS bounced30
-    FROM email_messages WHERE user_id = ${userId}`))[0] ?? {};
+    WITH w AS (
+      SELECT m.contact_id,
+             bool_or(m.sent_at IS NOT NULL)                                                   AS was_sent,
+             bool_or(m.bounced_at IS NOT NULL AND NOT (m.sent_at IS NULL AND
+                     m.error ~* '(5\.7\.[0-9]|spam|policy|blocked|blacklist|reputation|message rejected)')) AS bounced,
+             bool_or(m.replied_at IS NOT NULL)                                                AS replied
+      FROM email_messages m
+      WHERE m.user_id = ${userId} AND m.contact_id IS NOT NULL AND m.created_at > now() - interval '30 days'
+      GROUP BY m.contact_id
+    )
+    SELECT count(*) FILTER (WHERE was_sent)::int              AS sent30,
+           count(*) FILTER (WHERE was_sent AND bounced)::int  AS bounced30,
+           count(*) FILTER (WHERE was_sent AND replied)::int  AS replied,
+           (SELECT count(*) FROM email_messages m WHERE m.user_id = ${userId} AND m.sent_at IS NOT NULL)::int AS sent,
+           (SELECT count(*) FROM email_messages m WHERE m.user_id = ${userId} AND m.sent_at IS NULL
+              AND m.created_at > now() - interval '7 days'
+              AND m.error ~* '(5\.7\.[0-9]|spam message rejected|content rejected|message rejected)')::int AS policy7
+    FROM w`))[0] ?? {};
   const sent = Number(r.sent ?? 0), bounced30 = Number(r.bounced30 ?? 0), sent30 = Number(r.sent30 ?? 0);
   const bRate = pct(bounced30, sent30);
 
-  checks.push(sent30 < 50
-    ? { id: "bounce", group: "reputation", title: "نسبة الارتداد", state: "ok", detail: `${sent30} رسالة في ٣٠ يوماً — عيّنة أصغر من أن يُحكم عليها`, weight: 8 }
-    : bRate < 2
-      ? { id: "bounce", group: "reputation", title: "نسبة الارتداد", state: "ok", detail: `${bRate}٪ (${bounced30} من ${sent30})`, weight: 8 }
-      : { id: "bounce", group: "reputation", title: "نسبة الارتداد مرتفعة", state: bRate >= 5 ? "fail" : "warn",
-          detail: `${bRate}٪ (${bounced30} من ${sent30})`, weight: 8,
-          why: "فوق ٢٪ إشارةُ قائمةٍ غير منظّفة، وفوق ٥٪ يبدأ المزوّدون بحجز بريدك. والارتداد يضرّ سمعة نطاقك لا نطاقهم.",
-          fix: "نظّف القائمة من «الجمهور»: النطاقات التي لا تستقبل تُستبعَد تلقائياً، وتبقى العناوين الخاطئة كتابياً." });
+  // المزوّد يرفض رسالتنا: أثقل إشارةٍ في هذا القسم، فهي حكمُ من يحمل بريدنا
+  // على ما نرسله — قبل أن يحكم Gmail.
+  const policy7 = Number(r.policy7 ?? 0);
+  checks.push(policy7 === 0
+    ? { id: "policy", group: "reputation", title: "رفض المزوّد لرسائلنا", state: "ok", detail: "لا رفض في ٧ أيام", weight: 10 }
+    : { id: "policy", group: "reputation", title: "المزوّد رفض رسائلنا كإزعاج", state: "fail",
+        detail: `${policy7} رسالة في ٧ أيام رفضها مزوّد البريد نفسه (5.7.x) قبل أن تخرج`, weight: 10,
+        why: "هذا حكمُ من يحمل بريدنا على ما نرسله: نصٌّ واحد يتكرّر مئات المرات يُقرأ عنده إزعاجاً. والاستمرار بعده هو ما يحوّل الرفض إلى حجب الحساب.",
+        fix: "نوّع النص: زاويةٌ وعنوانٌ مختلفان لكل موجة، وموجاتٌ أصغر. والنظام يحجز الإرسال ست ساعات عند كل رفض." });
 
-  const replyRate = pct(Number(r.replied ?? 0), sent);
-  checks.push(sent < 100
-    ? { id: "engage", group: "reputation", title: "التفاعل", state: "ok", detail: `${sent} رسالة — مبكّر على الحكم`, weight: 6 }
+  checks.push(sent30 < 50
+    ? { id: "bounce", group: "reputation", title: "نسبة الارتداد", state: "ok", detail: `${sent30} شركة في ٣٠ يوماً — عيّنة أصغر من أن يُحكم عليها`, weight: 8 }
+    : bRate < 2
+      ? { id: "bounce", group: "reputation", title: "نسبة الارتداد", state: "ok", detail: `${bRate}٪ (${bounced30} شركة من ${sent30})`, weight: 8 }
+      : { id: "bounce", group: "reputation", title: "نسبة الارتداد مرتفعة", state: bRate >= 5 ? "fail" : "warn",
+          detail: `${bRate}٪ (${bounced30} شركة من ${sent30} راسلناها)`, weight: 8,
+          why: "فوق ٢٪ إشارةُ قائمةٍ غير منظّفة، وفوق ٥٪ يبدأ المزوّدون بحجز بريدك. والارتداد يضرّ سمعة نطاقك لا نطاقهم.",
+          fix: "عناوين الأشخاص (name@company) ترتدّ أكثر من عناوين الأقسام بأربعة أضعاف في هذه القائمة — قدّم عناوين الأقسام حتى تهبط النسبة." });
+
+  // والردّ بالشركة كذلك: شركةٌ ردّت مرةً ردّت، ولو راسلناها ثلاثاً.
+  const replied30 = Number(r.replied ?? 0);
+  const replyRate = pct(replied30, sent30);
+  checks.push(sent30 < 100
+    ? { id: "engage", group: "reputation", title: "التفاعل", state: "ok", detail: `${sent30} شركة — مبكّر على الحكم`, weight: 6 }
     : replyRate >= 0.5
-      ? { id: "engage", group: "reputation", title: "نسبة الردّ", state: "ok", detail: `${replyRate}٪ (${r.replied} من ${sent})`, weight: 6 }
-      : { id: "engage", group: "reputation", title: "تفاعلٌ منخفض", state: "warn", detail: `${replyRate}٪ ردّ من ${sent} رسالة`, weight: 6,
+      ? { id: "engage", group: "reputation", title: "نسبة الردّ", state: "ok", detail: `${replyRate}٪ (${replied30} شركة من ${sent30})`, weight: 6 }
+      : { id: "engage", group: "reputation", title: "تفاعلٌ منخفض", state: "warn", detail: `${replyRate}٪ — ${replied30} شركة ردّت من ${sent30}`, weight: 6,
           why: "المزوّدون يقيسون ما يفعله المستلم: ردٌّ أو نقلٌ من الإعلانات إلى الوارد يرفع سمعتك، والتجاهل التام يخفضها.",
-          fix: "أرسل لمن يُرجَّح أن يردّ أولاً — القطاع الذي ردّ، والعناوين الشخصية قبل عناوين الأقسام." });
+          fix: "أرسل لمن يُرجَّح أن يردّ أولاً — عناوين الأقسام ردّت في هذه القائمة بضعف معدّل عناوين الأشخاص." });
 
   // ── ٣ · القائمة ──
   const q = rows(await db.execute<any>(sql`
