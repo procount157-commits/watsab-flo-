@@ -24,6 +24,8 @@ export const MEASURES: Record<string, Measure> = {
   meetings: { label: "صفقات وصلت لاجتماع أو أبعد", read: (w) => one(sql`SELECT count(*)::int AS n FROM deals WHERE user_id = ${w.userId} AND stage IN ('meeting','proposal','negotiation','won') AND updated_at >= ${w.from} AND updated_at < ${w.to}`) },
   new_leads: { label: "عملاء محتملون جدد في الصفقات", read: (w) => one(sql`SELECT count(*)::int AS n FROM deals WHERE user_id = ${w.userId} AND created_at >= ${w.from} AND created_at < ${w.to}`) },
   wa_replies: { label: "عملاء ردّوا على واتساب (أشخاص لا ردود آلية)", read: (w) => one(sql`SELECT count(DISTINCT phone)::int AS n FROM auto_reply_log WHERE user_id = ${w.userId} AND created_at >= ${w.from} AND created_at < ${w.to} AND coalesce(skipped,'') NOT LIKE 'رد آلي%'`) },
+  // A company that replied usefully — interested, asking, considering, later, or referring us on.
+  email_positive: { label: "شركات ردّت رداً نافعاً على الإيميل", read: (w) => one(sql`SELECT count(DISTINCT coalesce(contact_id::text, from_email))::int AS n FROM email_inbound WHERE user_id = ${w.userId} AND coalesce(kind,'reply') = 'reply' AND intent IN ('interested','question','considering','later','referral') AND received_at >= ${w.from} AND received_at < ${w.to}`) },
   email_replies: { label: "ردود على الإيميل", read: (w) => one(sql`SELECT count(*)::int AS n FROM email_inbound WHERE user_id = ${w.userId} AND received_at >= ${w.from} AND received_at < ${w.to}`) },
   // Counters: what the chase must not cost.
   stops: { label: "طلبات إيقاف وضغطات «إيقاف الرسائل»", read: (w) => one(sql`SELECT count(*)::int AS n FROM unsubscribed_phones WHERE user_id = ${w.userId} AND created_at >= ${w.from} AND created_at < ${w.to}`) },
@@ -34,7 +36,7 @@ export const MEASURES: Record<string, Measure> = {
   } },
 };
 
-export type GoalRow = { id: number; title: string; metric: string; target: number; starts_at: Date; deadline: Date; counter_metrics: string[]; anchor: string | null; status: string };
+export type GoalRow = { id: number; title: string; metric: string; target: number; starts_at: Date; deadline: Date; counter_metrics: string[]; anchor: string | null; status: string; assignee?: string | null };
 
 /** Where a goal stands: how far, how fast it has to go now, and what it is costing. Pure over the numbers. */
 export function pace(current: number, target: number, start: Date, deadline: Date, now = new Date()) {
@@ -61,9 +63,9 @@ export async function goalsWithProgress(userId: number, now = new Date()) {
 }
 
 /** The owner sets a goal. Employees have no path here. */
-export async function setGoal(userId: number, g: { title: string; metric: string; target: number; deadline: Date; counters?: string[]; anchor?: string | null }) {
+export async function setGoal(userId: number, g: { title: string; metric: string; target: number; deadline: Date; counters?: string[]; anchor?: string | null; assignee?: string | null; startsAt?: Date }) {
   if (!MEASURES[g.metric]) throw new Error(`مقياس غير معروف: ${g.metric}`);
-  const r = await db.execute<{ id: number }>(sql`INSERT INTO goals (user_id, title, metric, target, deadline, counter_metrics, anchor)
-    VALUES (${userId}, ${g.title}, ${g.metric}, ${g.target}, ${g.deadline}, ${JSON.stringify((g.counters ?? []).filter((k) => MEASURES[k]))}::jsonb, ${g.anchor ?? null}) RETURNING id`);
+  const r = await db.execute<{ id: number }>(sql`INSERT INTO goals (user_id, title, metric, target, deadline, counter_metrics, anchor, assignee, starts_at)
+    VALUES (${userId}, ${g.title}, ${g.metric}, ${g.target}, ${g.deadline}, ${JSON.stringify((g.counters ?? []).filter((k) => MEASURES[k]))}::jsonb, ${g.anchor ?? null}, ${g.assignee ?? null}, ${g.startsAt ?? new Date()}) RETURNING id`);
   return Number(r.rows[0]!.id);
 }

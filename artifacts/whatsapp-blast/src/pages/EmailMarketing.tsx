@@ -51,7 +51,7 @@ const TABS = [
   { key: "register",  label: "سجل الإرسال",    icon: ListChecks },
   { key: "import",    label: "رفع Excel",      icon: Upload },
   { key: "agent",     label: "نورة",           icon: Sparkles },
-  { key: "desk",      label: "المتخصّصون",      icon: Users2 },
+  { key: "desk",      label: "الفريق والمدير",      icon: Users2 },
   { key: "knowledge", label: "المعرفة",        icon: BookOpen },
   { key: "missions",  label: "المهام",         icon: Rocket },
   { key: "sequences", label: "المتابعة",        icon: ListOrdered },

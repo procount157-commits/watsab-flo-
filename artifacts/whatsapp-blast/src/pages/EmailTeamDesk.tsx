@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/components/AgentPanel";
+import { EmailManagerPanel } from "./EmailManagerPanel";
 
 const card = "bg-card border border-card-border rounded-xl";
 const ghost = "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-card-border hover:border-primary/50 transition-colors disabled:opacity-40";
@@ -47,6 +48,7 @@ export function EmailTeamDesk() {
 
   return (
     <div className="space-y-4">
+      <EmailManagerPanel />
       <div className="flex flex-wrap items-center gap-2">
         {WHO.map((w) => {
           const rep = byRole(w.role);

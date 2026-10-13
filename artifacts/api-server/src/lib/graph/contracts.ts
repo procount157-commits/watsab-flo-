@@ -35,7 +35,13 @@ export type EdgeContract = {
   timeout?: string;
 };
 
-export type GraphContract = { id: string; goal: string; oneBreath: string; nodes: NodeContract[]; edges: EdgeContract[] };
+export type GraphContract = {
+  id: string; goal: string; oneBreath: string; nodes: NodeContract[]; edges: EdgeContract[];
+  /** How many working nodes this graph may hold — five in phase one, more once its loop is measured. */
+  maxWorking?: number;
+  /** The loop that closes the graph: results back into the next decision. */
+  loop?: string;
+};
 
 export const WHATSAPP_GRAPH: GraphContract = {
   id: "whatsapp",
@@ -61,23 +67,66 @@ export const WHATSAPP_GRAPH: GraphContract = {
 
 export const EMAIL_GRAPH: GraphContract = {
   id: "email",
-  goal: "clients_won",
-  oneBreath: "سلمى تقسّم القائمة بالقطاع وتخطط ← نورة تكتب ← ماجد يحكم ← صاحب العمل يوافق ← تُرسل ← ليلى تقرأ الردود وتسلّم المهتم.",
+  goal: "goal:email_manager",
+  maxWorking: 8,
+  oneBreath: "صاحب العمل يعطي منصور الهدف ← منصور يقسمه إلى شركاتٍ في اليوم ← سلمى تختار القطاع والمسار ٨٠/٢٠ والزاوية ← نورة تكتب بالإنجليزية ← ماجد يحكم ← صاحب العمل يوافق ← تُرسل ← ليلى تقرأ الردود ← جاسم يحكم على النتائج ← منصور يقرّر الدورة التالية.",
+  loop: "كل ست ساعات: النتائج (جاسم) ← القرار (منصور) ← الموجة (سلمى) ← الكتابة (نورة) ← الحكم (ماجد) ← الإرسال ← الردود (ليلى) ← النتائج. ما لا يُقاس لا يدخل القرار.",
   nodes: [
-    { id: "email_strategist", kind: "agent", responsibility: "موجة لكل قطاع بحملته", reads: ["lists", "sectors", "results"], writes: ["mission"], tools: [], sideEffect: "none", authorisedBy: "none" },
-    { id: "email", kind: "agent", responsibility: "رسالة: ملخص، زر، تفاصيل لمن يرغب", reads: ["mission", "knowledge", "lessons"], writes: ["draft"], tools: ["knowledge.retrieve"], sideEffect: "none", authorisedBy: "none" },
-    { id: "email_guard", kind: "reviewer", responsibility: "يحكم: أرقام من المعرفة فقط، لا مبالغة، الشكل الصحيح؛ وينظّف القوائم", reads: ["draft", "knowledge", "lists", "dns"], writes: ["verdict", "list_membership"], tools: ["guardCheck", "formatIssues", "hygiene"], sideEffect: "compensatable", authorisedBy: "code", reviews: ["email", "email_followup"] },
-    { id: "owner", kind: "human", responsibility: "يوافق على الإطلاق في وضع الموافقة", reads: ["draft", "verdict"], writes: ["approval"], tools: [], sideEffect: "approval", authorisedBy: "owner" },
-    { id: "sender", kind: "code", responsibility: "يرسل في حدود الإحماء والساعة", reads: ["approval", "queue"], writes: ["email_messages"], tools: ["smtp"], sideEffect: "idempotent", authorisedBy: "code" },
-    { id: "email_replies", kind: "agent", responsibility: "يقرأ الرد ويصنفه ويسلّم المهتم", reads: ["inbound", "campaign", "contact"], writes: ["draft_reply", "deal"], tools: ["knowledge.retrieve"], sideEffect: "approval", authorisedBy: "owner" },
+    { id: "owner", kind: "human", responsibility: "يضع الهدف والنسبة والقطاعات، ويوافق على الإطلاق في وضع الموافقة", reads: ["brief", "draft", "verdict"], writes: ["goal", "approval"], tools: [], sideEffect: "approval", authorisedBy: "owner" },
+    { id: "email_manager", kind: "agent", responsibility: "يحوّل هدف صاحب العمل إلى خطة يومية بالأرقام، يوظّف الناقص، ينفّذ أحكام المحلل، يضبط حجم الموجة، ويكتب التقرير اليومي", reads: ["goal", "results", "verdicts", "audience", "capacity", "team"], writes: ["plan", "wave_size", "brief", "paused_missions"], tools: ["planForGoal", "runAutopilot", "reconcile"], sideEffect: "none", authorisedBy: "none" },
+    { id: "email_strategist", kind: "agent", responsibility: "موجة لكل قطاع مستهدف: المسار بنسبة ٨٠/٢٠، والزاوية التالية التي لم يحكم عليها المحلل بالفشل", reads: ["plan", "lists", "sectors", "verdicts"], writes: ["mission"], tools: ["chooseTrack", "nextAngle"], sideEffect: "none", authorisedBy: "none" },
+    { id: "email", kind: "agent", responsibility: "رسالة بالإنجليزية: ملخص، زر، تفاصيل لمن يرغب — بزاوية الموجة ودروس المحلل", reads: ["mission", "knowledge", "lessons"], writes: ["draft"], tools: ["knowledge.retrieve"], sideEffect: "none", authorisedBy: "none" },
+    { id: "email_followup", kind: "agent", responsibility: "متابعة من فتح أو نقر ولم يرد، بزاوية جديدة", reads: ["stage_lists", "mission", "lessons"], writes: ["mission"], tools: [], sideEffect: "none", authorisedBy: "none" },
+    { id: "email_guard", kind: "reviewer", responsibility: "يحكم: أرقام من المعرفة فقط، لا مبالغة، الشكل واللغة؛ وينظّف القوائم", reads: ["draft", "knowledge", "lists", "dns"], writes: ["verdict", "list_membership"], tools: ["guardCheck", "formatIssues", "hygiene"], sideEffect: "compensatable", authorisedBy: "code", reviews: ["email", "email_followup"] },
+    { id: "sender", kind: "code", responsibility: "يرسل في حدود الإحماء والساعة والسمعة", reads: ["approval", "queue"], writes: ["email_messages"], tools: ["smtp"], sideEffect: "idempotent", authorisedBy: "code" },
+    { id: "email_replies", kind: "agent", responsibility: "يقرأ الرد ويصنّفه (نافع، يغلق الباب، ليس رداً) ويسلّم المهتم", reads: ["inbound", "campaign", "contact"], writes: ["intent", "draft_reply", "deal"], tools: ["knowledge.retrieve"], sideEffect: "approval", authorisedBy: "owner" },
+    { id: "email_analyst", kind: "reviewer", responsibility: "يحكم على النتائج بالشركة لكل مسار وقطاع وزاوية: وسِّع، استمر، أعد الكتابة، أوقِف، راقب", reads: ["email_messages", "intent", "missions"], writes: ["verdicts", "lessons"], tools: ["resultsReport", "judge"], sideEffect: "none", authorisedBy: "none", reviews: ["email_strategist", "email"] },
   ],
   edges: [
-    { from: "email_strategist", to: "email", when: "قطاع فيه ١٥ لم يُراسَلوا على الأقل، ولا موجة جارية له", carries: "خطة: الجمهور والزاوية", onFail: "إعادة في الجولة القادمة" },
-    { from: "email", to: "email_guard", when: "مسودة مقروءة", carries: "العناوين والرسالة والمتابعات", onFail: "إعادة في الجولة القادمة" },
+    { from: "owner", to: "email_manager", when: "وضع صاحب العمل هدفاً أو غيّره", carries: "الهدف: المقياس والرقم والموعد", onFail: "يعمل المدير بالسياسة وحدها ويقول إن لا هدف" },
+    { from: "email_analyst", to: "email_manager", when: "كل دورة، بعد أن تكتمل عيّنة", carries: "الأحكام برقمها وسببها", onFail: "لا قرار على عيّنة ناقصة" },
+    { from: "email_manager", to: "email_strategist", when: "كل دورة", carries: "الخطة: شركات في اليوم وحجم الموجة", onFail: "تبقى الخطة السابقة" },
+    { from: "email_strategist", to: "email", when: "قطاع مستهدف فيه ١٥ لم يُراسَلوا، ولا موجة جارية له، والنسبة تسمح", carries: "الجمهور والمسار والزاوية", onFail: "إعادة في الدورة القادمة" },
+    { from: "email_analyst", to: "email", when: "زاوية وُسِّعت أو أُعيدت كتابتها", carries: "درس في ذاكرة الكاتبة", onFail: "—" },
+    { from: "email", to: "email_guard", when: "مسودة مقروءة", carries: "العناوين والرسالة والمتابعات", onFail: "إعادة في الدورة القادمة" },
+    { from: "email_followup", to: "email_guard", when: "مسودة متابعة", carries: "المسودة + ما سبقها", onFail: "لا متابعة" },
     { from: "email_guard", to: "owner", when: "وضع الموافقة، أو وجد ماجد خللاً", carries: "المسودة + ملاحظاته", onFail: "تبقى معلقة" },
     { from: "owner", to: "sender", when: "وافق", carries: "الحملة", onFail: "—" },
     { from: "sender", to: "email_replies", when: "وصل رد", carries: "الرد + الحملة", onFail: "—" },
+    { from: "email_replies", to: "email_analyst", when: "صُنّف الرد", carries: "النية: نافع أو يغلق الباب أو ليس رداً", onFail: "يُعدّ رداً بلا تصنيف" },
+    { from: "sender", to: "email_analyst", when: "ارتداد أو رفض من المزوّد", carries: "الفشل ونوعه", onFail: "—" },
   ],
+};
+
+/**
+ * Where a node stands in its graph, in words its prompt can carry: what it is
+ * for, what it reads, whom it takes work from and hands work to, and what
+ * happens when its hand-off fails. The prompt is generated from the contract,
+ * so the two cannot drift apart. Pure.
+ */
+export function nodeBrief(g: GraphContract, id: string): string {
+  const me = g.nodes.find((n) => n.id === id);
+  if (!me) return "";
+  const name = (x: string) => NODE_AR[x] ?? x;
+  const ins = g.edges.filter((e) => e.to === id), outs = g.edges.filter((e) => e.from === id);
+  return [
+    "═══ موقعك في القراف (عقدٌ مكتوب، لا وصف) ═══",
+    `المسار كله في نفَس: ${g.oneBreath}`,
+    g.loop ? `الحلقة: ${g.loop}` : "",
+    `أنت عقدة «${name(id)}». مسؤوليتك الوحيدة: ${me.responsibility}.`,
+    `تقرأ: ${me.reads.join("، ")}. وتكتب: ${me.writes.join("، ")}.${me.tools.length ? ` أدواتك: ${me.tools.join("، ")}.` : ""}`,
+    me.sideEffect === "none" ? "لا أثر لك خارج النظام: لا ترسل لأحد، ولا تعد أحداً بشيء." : `أثرك الخارجي يأذن به: ${me.authorisedBy === "owner" ? "صاحب العمل" : "الكود"} — لا رأيك.`,
+    me.reviews?.length ? `تراجع عمل: ${me.reviews.map(name).join("، ")} — ولا تراجع عملك أنت.` : "",
+    ins.length ? "يصلك العمل من:" : "", ...ins.map((e) => `• ${name(e.from)} — حين ${e.when}، ويحمل ${e.carries}. إن تعثّر: ${e.onFail}.`),
+    outs.length ? "تسلّم العمل إلى:" : "", ...outs.map((e) => `• ${name(e.to)} — حين ${e.when}، وتسلّم ${e.carries}. إن تعثّر: ${e.onFail}.`),
+    "ما ليس في عقدك ليس عملك: إن رأيته فقله لمن هو عمله، ولا تفعله.",
+  ].filter(Boolean).join("\n");
+}
+
+export const NODE_AR: Record<string, string> = {
+  owner: "صاحب العمل", email_manager: "منصور (المدير)", email_strategist: "سلمى (التخطيط)", email: "نورة (الكتابة)",
+  email_followup: "يوسف (المتابعة)", email_guard: "ماجد (الحارس)", sender: "المُرسِل (كود)", email_replies: "ليلى (الردود)",
+  email_analyst: "جاسم (محلل النتائج)", router: "الفرز (كود)", sales: "البائع", followup: "المتابعة", reviewer: "المراجعة", gate: "البوابة (كود)",
 };
 
 export const GRAPHS = [WHATSAPP_GRAPH, EMAIL_GRAPH];
@@ -96,6 +145,10 @@ export function contractProblems(g: GraphContract): string[] {
     if (n.kind === "agent" && n.sideEffect !== "none" && n.authorisedBy !== "owner") out.push(`${n.id} وكيل يُحدث أثراً خارجياً بلا موافقة صاحب العمل`);
   }
   const working = g.nodes.filter((n) => n.kind === "agent" || n.kind === "reviewer").length;
-  if (working > 5) out.push(`${working} عقد عاملة — الحد في المرحلة الأولى خمس`);
+  const max = g.maxWorking ?? 5;
+  if (working > max) out.push(`${working} عقد عاملة — الحد ${max}`);
+  // A loop that does not close is a pipeline: whoever judges results must hand them back.
+  for (const n of g.nodes) if (n.kind === "reviewer" && n.id !== "reviewer" && !g.edges.some((e) => e.from === n.id)) out.push(`${n.id} يحكم ولا يسلّم حكمه لأحد`);
+  for (const n of g.nodes) if (n.kind !== "human" && n.kind !== "code" && !g.edges.some((e) => e.to === n.id || e.from === n.id)) out.push(`${n.id} معزول — لا حافة له`);
   return out;
 }

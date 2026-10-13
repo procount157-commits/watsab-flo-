@@ -27,7 +27,11 @@ import { asAgent } from "../agent-context";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
 import { EMAIL_TEAM, EMAIL_TEAM_DEFS, activity, ensureEmailTeam, onDuty, teamVoice, type EmailRole } from "./team";
-import { getAutopilot, runAutopilot } from "./autopilot";
+import { getAutopilot, runAutopilot, saveAutopilot } from "./autopilot";
+import { MEASURES } from "../graph/goals";
+import { planForGoal, GOAL_METRICS, STATE_AR, type GoalMetric, type Plan } from "./goal-plan";
+import { warmupCap } from "./health";
+import { signals } from "./service";
 import { pauseCampaign, getSettings } from "./service";
 import { reconcile, repair, type LedgerFinding } from "./ledger";
 import { resultsReport, resultsFacts, VERDICT_AR, type ResultsReport } from "./results";
@@ -98,6 +102,76 @@ async function recordLessons(userId: number, r: ResultsReport): Promise<number> 
   return n;
 }
 
+// ── الهدف: ما يعطيه صاحب العمل لمنصور ─────────────────────────────
+export interface ManagerGoal { id: number; title: string; metric: GoalMetric; target: number; startsAt: Date; deadline: Date; inherited: boolean }
+
+/** هدف المدير: ما سُلِّم له، وإلا هدف الحساب العام إن كان مقياسه مما يقيسه البريد. */
+export async function managerGoal(userId: number): Promise<ManagerGoal | null> {
+  const rows = (await db.execute<any>(sql`
+    SELECT id, title, metric, target, starts_at, deadline, assignee FROM goals
+    WHERE user_id = ${userId} AND status = 'active' AND (assignee = 'email_manager' OR assignee IS NULL)
+    ORDER BY (assignee = 'email_manager') DESC NULLS LAST, id DESC`)).rows;
+  const g = rows.find((r) => r.metric in GOAL_METRICS);
+  if (!g) return null;
+  return { id: Number(g.id), title: g.title, metric: g.metric, target: Number(g.target), startsAt: new Date(g.starts_at), deadline: new Date(g.deadline), inherited: g.assignee !== "email_manager" };
+}
+
+/** صاحب العمل يعطي الهدف. يحلّ محلّ هدف المدير السابق، ولا يمسّ أهداف غيره. */
+export async function giveGoal(userId: number, g: { metric: GoalMetric; target: number; deadline: Date; title?: string }) {
+  if (!(g.metric in GOAL_METRICS)) throw new Error("مقياس غير معروف");
+  if (!(g.target > 0 && g.target <= 100_000)) throw new Error("الرقم بين ١ و١٠٠٬٠٠٠");
+  if (!(g.deadline.getTime() > Date.now() + 86_400_000)) throw new Error("الموعد بعد يوم على الأقل");
+  await db.execute(sql`UPDATE goals SET status = 'replaced' WHERE user_id = ${userId} AND assignee = 'email_manager' AND status = 'active'`);
+  const title = (g.title?.trim() || `${g.target} ${GOAL_METRICS[g.metric].unit} قبل ${g.deadline.toLocaleDateString("en-GB")}`).slice(0, 200);
+  const r = await db.execute<{ id: number }>(sql`INSERT INTO goals (user_id, title, metric, target, deadline, counter_metrics, anchor, assignee)
+    VALUES (${userId}, ${title}, ${g.metric}, ${Math.floor(g.target)}, ${g.deadline}, '["email_bounce_pct"]'::jsonb, ${g.metric === "clients_won" ? "clients_won" : null}, 'email_manager') RETURNING id`);
+  await activity(userId, "email_manager", "goal", `استلمتُ الهدف: ${title}. أحسب الخطة وأبدأ في هذه الدورة.`);
+  return Number(r.rows[0]!.id);
+}
+
+export interface GoalState { goal: ManagerGoal; current: number; plan: Plan; changed: string[] }
+
+/** الهدف ← الخطة ← ما يملكه المدير يُنفَّذ (حجم الموجة)، وما لا يملكه يُرفع. */
+export async function workTheGoal(userId: number, r: ResultsReport, apply = true): Promise<GoalState | null> {
+  const goal = await managerGoal(userId);
+  if (!goal) return null;
+  const w = { userId, from: goal.startsAt, to: new Date(Math.min(Date.now() + 1, goal.deadline.getTime())) };
+  const all = { userId, from: new Date(Date.now() - 365 * 86_400_000), to: new Date(Date.now() + 1) };
+  const [current, meetings, clients, cfg, s, sig] = await Promise.all([
+    MEASURES[goal.metric]!.read(w), MEASURES.meetings!.read(all), MEASURES.clients_won!.read(all),
+    getAutopilot(userId), getSettings(userId), signals(userId).catch(() => null),
+  ]);
+  const capacity = s ? warmupCap(s.dailyCap, sig?.senderAgeDays ?? 365, s.warmup) : 0;
+  const plan = planForGoal({
+    metric: goal.metric, target: goal.target, current, startsAt: goal.startsAt, deadline: goal.deadline,
+    observed: { companies: r.overall.sent, replied: r.overall.replied, positive: r.overall.positive, meetings, clients },
+    dailyCapacity: capacity, readyAudience: r.audience.reduce((a, x) => a + x.ready, 0),
+    waveSize: cfg.waveSize, approvalMode: cfg.mode !== "auto",
+  });
+  const changed: string[] = [];
+  // السمعة قبل الهدف: إن رفض المزوّد نصّنا فالطيار يُصغّر الموجة بنفسه، ولا يكبّرها المدير.
+  const reputationHold = r.decisions.some((d) => d.kind === "policy") || r.overall.bounceRate >= 5;
+  if (apply && plan.state !== "done" && !reputationHold && plan.waveSize !== cfg.waveSize) {
+    await saveAutopilot(userId, { waveSize: plan.waveSize });
+    changed.push(`حجم الموجة ${cfg.waveSize} ← ${plan.waveSize} (الهدف يحتاج ${plan.perDay} شركة يومياً)`);
+  } else if (reputationHold && plan.state === "behind") {
+    changed.push("لم أكبّر الموجة رغم التأخر: السمعة أولاً — المزوّد رفض نصّنا أو الارتداد فوق الحد");
+  }
+  return { goal, current, plan, changed };
+}
+
+export function goalFacts(g: GoalState | null): string {
+  if (!g) return "الهدف: لم يضع صاحب العمل هدفاً لمدير البريد — أعمل بالسياسة وحدها.";
+  const p = g.plan;
+  return [
+    `الهدف${g.goal.inherited ? " (هدف الحساب العام)" : ""}: ${g.goal.title} — ${GOAL_METRICS[g.goal.metric].label}. الحال: ${STATE_AR[p.state]}.`,
+    p.summary,
+    ...g.changed.map((c) => `• نفّذتُ: ${c}`),
+    ...p.blockers.map((b) => `• يمنع الهدف: ${b}`),
+    ...p.assumptions.map((a) => `• ${a}`),
+  ].join("\n");
+}
+
 export interface CycleResult {
   at: Date;
   staffing: Staffing;
@@ -107,6 +181,7 @@ export interface CycleResult {
   autopilot: { ran: boolean; why?: string; waves: number; nurtures: number; stages: number };
   sending: { level: string; reasons: string[]; mode: string; enabled: boolean };
   lessons: number;
+  goal: GoalState | null;
   brief: { verdict: string; did: string[]; decided: string[]; needs: string[] } | null;
 }
 
@@ -114,6 +189,7 @@ export interface CycleResult {
 export function cycleFacts(c: Omit<CycleResult, "brief">): string {
   const r = c.results, sh = mixShare(r.mix.state);
   return [
+    goalFacts(c.goal),
     `الفريق: ${c.staffing.total} موظفاً.${c.staffing.hired.length ? ` عُيّن في هذه الدورة: ${c.staffing.hired.join("، ")}.` : ""}${c.staffing.offDuty.length ? ` متوقفون: ${c.staffing.offDuty.map((o) => `${o.name} — ${o.gap}`).join("؛ ")}.` : " كلهم على رأس العمل."}`,
     `الإرسال: الطيار ${c.sending.enabled ? "يعمل" : "متوقف"}، ${c.sending.mode === "auto" ? "آلي بلا موافقة" : "ينتظر موافقة صاحب العمل على كل حملة"}. صحة المُرسِل: ${c.sending.level}${c.sending.reasons.length ? ` (${c.sending.reasons.slice(0, 2).join("؛ ")})` : ""}.`,
     `النسبة (آخر ${r.days} يوماً): AML ${Math.round(sh.aml * 100)}٪ · خدمات ${Math.round(sh.services * 100)}٪ — المستهدف ${MIX.aml * 100}/${MIX.services * 100}.`,
@@ -141,9 +217,11 @@ const MANAGER_RULES = [
   "٤. إن لم تُطلَق موجةٌ فقل السبب الذي في الوقائع — ولا تعتذر ولا تعد.",
   "٥. «يحتاجك» لما لا يُحلّ بلا يد صاحب العمل فقط. ما قرّرتَه أنت لا يُطلب فيه إذن.",
   "٦. لا تُعدّل الاستهداف ولا النسبة ولا تقترح تعديلهما: هما قرار صاحب العمل.",
+  "٧. الهدف أول سطر في الحكم: كم تحقّق من كم، وهل نحن على المسار. ما «يمنع الهدف» يُكتب في «يحتاجك» بأرقامه كما هي.",
+  "٨. النسبة المفترضة تُسمّى افتراضاً. لا تقدّم تقديراً على أنه قياس.",
   "",
   "اكتب بهذا الشكل بالضبط ولا تزد:",
-  "الحكم: <سطر واحد — حال البريد اليوم برقمين على الأكثر>",
+  "الحكم: <سطر واحد — الهدف: كم من كم وحاله، ثم حال البريد برقم واحد>",
   "فعلتُ:",
   "- <ما نُفّذ في هذه الدورة — نقطتان إلى أربع، كلٌّ برقمه>",
   "قرّرتُ:",
@@ -190,6 +268,8 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
   // ٣ · النتائج  ٤ · القرارات
   const results = await resultsReport(userId);
   const lessons = await recordLessons(userId, results).catch(() => 0);
+  const goal = await workTheGoal(userId, results).catch((err) => { logger.warn({ userId, err: String(err?.message ?? err) }, "خطة الهدف تعذّرت"); return null; });
+  if (goal?.changed.length) await activity(userId, "email_manager", "plan", `الهدف «${goal.goal.title}»: ${goal.changed.join("؛ ")}.`, { goalId: goal.goal.id, perDay: goal.plan.perDay });
   for (const d of results.decisions) await sayOnceDaily(userId, "email_analyst", "decision", d.text);
 
   // ٥ · الاستهداف
@@ -205,7 +285,7 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
   });
 
   const base = {
-    at: new Date(), staffing, repairs, results, paused, autopilot, lessons,
+    at: new Date(), staffing, repairs, results, paused, autopilot, lessons, goal,
     sending: { level: health?.level ?? "غير معروف", reasons: health?.reasons ?? [], mode: cfg.mode, enabled: cfg.enabled },
   };
 
@@ -247,7 +327,10 @@ export async function managerState(userId: number) {
     WHERE user_id = ${userId} AND ((role = 'email_manager') OR (role = 'email_analyst' AND action = 'decision') OR (role = 'email_strategist' AND action IN ('wave','skip','wait')))
     ORDER BY created_at DESC LIMIT 25`);
   const s = await getSettings(userId);
+  const goal = await workTheGoal(userId, results, false).catch(() => null);
   return {
+    goal: goal ? { ...goal.goal, current: goal.current, plan: goal.plan, state: STATE_AR[goal.plan.state], metricLabel: GOAL_METRICS[goal.goal.metric].label } : null,
+    metrics: Object.entries(GOAL_METRICS).map(([key, v]) => ({ key, label: v.label })),
     policy: policyBrief(), results,
     autopilot: { enabled: cfg.enabled, mode: cfg.mode, waveSize: cfg.waveSize, dailyCap: s?.dailyCap ?? null },
     team: team.map((e) => ({ role: e.role, name: e.name, title: e.title, avatar: e.avatar, active: e.isActive, isNew: !EMAIL_TEAM_DEFS.slice(0, 6).some((d) => d.role === e.role) })),

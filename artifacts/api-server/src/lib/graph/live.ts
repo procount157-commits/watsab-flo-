@@ -15,7 +15,7 @@ export type Desk = { key: string; label: string; lead: string; members: string[]
 /** The desks, by role. A role matching none goes to «أخرى». Pure. */
 export const DESKS: Array<{ key: string; label: string; lead: string; match: (r: string) => boolean }> = [
   { key: "sales", label: "مبيعات واتساب", lead: "sales", match: (r) => ["sales", "support", "followup", "proposals"].includes(r) },
-  { key: "email", label: "التسويق بالبريد", lead: "email_strategist", match: (r) => r === "email" || r.startsWith("email_") },
+  { key: "email", label: "التسويق بالبريد", lead: "email_manager", match: (r) => r === "email" || r.startsWith("email_") },
   { key: "ops", label: "التشغيل والبيانات", lead: "ops", match: (r) => ["ops", "monitor", "intake", "collector"].includes(r) },
   { key: "groups", label: "قروبات العملاء", lead: "groups", match: (r) => r === "groups" },
   { key: "instagram", label: "إنستجرام", lead: "ig_manager", match: (r) => r.startsWith("ig_") },
@@ -114,6 +114,9 @@ export async function liveGraph(userId: number) {
   if (ids.has("followup") && ids.has("sender")) edges.push({ from: "followup", to: "sender", kind: "flow", n: w.get("followup")?.d14 ?? 0 });
   if (ids.has("email") && ids.has("email_guard")) edges.push({ from: "email", to: "email_guard", kind: "flow", n: w.get("email")?.d14 ?? 0 });
   if (ids.has("email_guard") && ids.has("sender")) edges.push({ from: "email_guard", to: "sender", kind: "flow", n: w.get("email_guard")?.d14 ?? 0 });
+  // حلقة البريد كما في عقدها: النتائج ← المدير ← التخطيط ← الكتابة، والدروس إلى الكاتبة.
+  for (const [a, b] of [["email_analyst", "email_manager"], ["email_manager", "email_strategist"], ["email_strategist", "email"], ["email_analyst", "email"], ["email_replies", "email_analyst"], ["email_followup", "email_guard"]] as const)
+    if (ids.has(a) && ids.has(b)) edges.push({ from: a, to: b, kind: "flow", n: w.get(a)?.d14 ?? 0 });
   for (const f of flows.rows) if (ids.has(f.a) && ids.has(f.b)) edges.push({ from: f.a, to: f.b, kind: "flow", n: f.n });
 
   const t = totals.rows[0] as any;

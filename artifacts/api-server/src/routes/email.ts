@@ -39,7 +39,9 @@ import { opensReport } from "../lib/email/opens";
 import { runSpecialist, runSpecialistRound, lastReports, SPECIALISTS, type SpecialistRole } from "../lib/email/specialists";
 import { seedLibrary2 } from "../lib/email/library-2";
 import { reachReport, contentSignals } from "../lib/email/deliverability";
-import { managerState, runManagerCycle } from "../lib/email/manager";
+import { managerState, runManagerCycle, giveGoal } from "../lib/email/manager";
+import { teamVoice, EMAIL_TEAM_DEFS } from "../lib/email/team";
+import { EMAIL_GRAPH, contractProblems } from "../lib/graph/contracts";
 import { campaignReadiness } from "../lib/email/readiness";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { register as emailRegister } from "../lib/email/register";
@@ -181,6 +183,25 @@ router.post("/ledger/repair", async (req, res) => {
 // ── منصور: مدير البريد ────────────────────────────────────────────
 /** السياسة، والنسبة الفعلية، والأحكام، وآخر تقرير — بلا نداء نموذج. */
 router.get("/manager", async (req, res) => res.json(await managerState(req.session.userId!)));
+
+/** صاحب العمل يعطي منصور الهدف، فتبدأ دورةٌ تحسب خطته فوراً (بلا تقرير). */
+router.post("/manager/goal", async (req, res) => {
+  const userId = req.session.userId!;
+  const b = req.body ?? {};
+  try {
+    const id = await giveGoal(userId, { metric: String(b.metric) as any, target: Number(b.target), deadline: new Date(String(b.deadline)), title: b.title ? String(b.title) : undefined });
+    void runManagerCycle(userId, { brief: false, force: true }).catch(() => {});
+    res.json({ id, note: "استلم منصور الهدف. يحسب الخطة الآن ويبدأ العمل عليها." });
+  } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+
+/** ما يقرؤه كل موظف في البريد قبل أن يعمل — البرمبت كاملاً كما يُرسل للنموذج، بلا نداء نموذج. */
+router.get("/team/prompts", async (req, res) => {
+  const userId = req.session.userId!;
+  const out = [];
+  for (const d of EMAIL_TEAM_DEFS) out.push({ role: d.role, name: d.name, title: d.title, avatar: d.avatar, prompt: await teamVoice(userId, d.role) });
+  res.json({ graph: { oneBreath: EMAIL_GRAPH.oneBreath, loop: EMAIL_GRAPH.loop, edges: EMAIL_GRAPH.edges, problems: contractProblems(EMAIL_GRAPH) }, team: out });
+});
 
 /** دورةٌ الآن. تجري في الخلفية: فيها نداء نموذج وجولة الطيار. */
 router.post("/manager/run", async (req, res) => {
