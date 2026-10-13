@@ -20,13 +20,15 @@ location /t/ { proxy_pass http://wam_api; proxy_set_header Host $host; }
 # nginx.conf because a map must sit at http level.
 location = / {
     root /usr/share/nginx/html;
-    if ($wam_signed_in = 0) { rewrite ^ /home/index.html last; }
+    if ($wam_crawler = 1) { rewrite ^ /home/index.html last; }
     try_files /index.html =404;
 }
 
 location / {
     root /usr/share/nginx/html;
-    try_files $uri $uri/ /index.html;   # SPA
+    # A folder is served by its own index.html, never listed: /features/ has
+    # only sub-pages, and "$uri/" alone answered it with 403 Forbidden.
+    try_files $uri $uri/index.html /index.html;   # SPA
 }
 
 location ~* \.(js|css|png|jpg|jpeg|gif|svg|webp|woff2?)$ {

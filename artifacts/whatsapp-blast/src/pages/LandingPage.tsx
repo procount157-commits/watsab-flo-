@@ -3,7 +3,7 @@ import { motion, useInView, useMotionValue, useSpring, AnimatePresence } from "f
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import {
-  MessageCircle, Users, BarChart3, Bot, Zap, ChevronDown, Star,
+  MessageCircle, Users, BarChart3, Bot, Zap, ChevronDown,
   CheckCircle2, ArrowLeft, Shield, TrendingUp, Clock, Target,
   Smartphone, Globe, Award, Play, LayoutDashboard, Languages,
 } from "lucide-react";
@@ -33,10 +33,10 @@ const CONTENT = {
       cta: "هنا يأتي دور Flow Hub™.",
     },
     stats: [
-      { label: "رسالة مُرسلة", to: 2000000, suffix: "+" },
-      { label: "عميل نشط",    to: 500,     suffix: "+" },
-      { label: "حملة ناجحة",  to: 3000,    suffix: "+" },
-      { label: "معدل الفتح",  to: 95,      suffix: "%" },
+      { label: "موظفين أذكياء في فريقك", to: 8,   suffix: "" },
+      { label: "خطوات في سلّم المتابعة", to: 7,   suffix: "" },
+      { label: "رسالة اختبار قبل كل حملة كبيرة", to: 30,  suffix: "" },
+      { label: "نقطة في مؤشر حماية رقمك", to: 100, suffix: "" },
     ],
     industries: {
       label: "لمن هو؟",
@@ -50,12 +50,12 @@ const CONTENT = {
       ],
     },
     whyWa: {
-      title: "لماذا واتساب هو الأقوى؟",
-      sub: "رسالة واتساب تصل مباشرة — في المكان الذي يقضي فيه عميلك معظم يومه.",
+      title: "يرسل كإنسان، لا كآلة",
+      sub: "واتساب يحظر الأرقام التي تتصرف كبرنامج. Flow Hub يتصرف كموظف.",
       items: [
-        { stat: "98%", label: "معدل قراءة الرسائل", body: "مقارنةً بـ 20% فقط في البريد الإلكتروني. رسالتك تُقرأ دائماً." },
-        { stat: "5×",  label: "أعلى تحويل للمبيعات", body: "معدل التحويل من واتساب أعلى 5 أضعاف من أي قناة تسويقية أخرى." },
-        { stat: "2.5B", label: "مستخدم يومي", body: "واتساب هو التطبيق الأكثر استخداماً في الشرق الأوسط وشمال أفريقيا." },
+        { stat: "9–9", label: "نافذة إرسال بإيقاع بشري", body: "لا إرسال قبل التاسعة صباحاً ولا بعد التاسعة مساءً، والفجوة بين الرسائل تتغير مع اليوم: أبطأ عند البداية والغداء والمساء." },
+        { stat: "QR",  label: "رقمك العادي، بلا API", body: "اربط رقمك الحالي بمسح QR من هاتفك — لا رقم خاص ولا واتساب API ولا رسوم على كل رسالة." },
+        { stat: "10′", label: "جاهز في عشر دقائق", body: "مديرة المبيعات تجري معك مقابلة من عشرة أسئلة، وتكتب منها ملف شركتك والمعرفة التي يرد منها الفريق." },
       ],
     },
     features: {
@@ -94,13 +94,19 @@ const CONTENT = {
         { label: "الباقة المدارة", price: "1,000", period: "درهم / شهر", features: ["رسائل غير محدودة", "نُعدّ النظام بالكامل", "ندير الحملات نيابةً عنك", "متابعة يومية للأداء", "دعم مباشر 24/7", "تحسين مستمر للنتائج"], cta: "احجز مكالمة", highlight: false },
       ],
     },
-    testimonials: {
-      label: "آراء العملاء",
-      title: "ماذا يقول أصحاب الأعمال؟",
-      items: [
-        { name: "أبو خالد — مطعم مشويات", text: "قبل Flow Hub كنا نخسر عملاء كثيرين بعد الزيارة الأولى. الآن نرسل متابعة أسبوعية وزادت الزيارات المتكررة بشكل واضح جداً." },
-        { name: "أم سارة — بيوتي سنتر",   text: "الشات بوت وفّر وقت الرد على استفسارات متكررة. العميلات يحجزن مباشرة والحجوزات مليانة قبل ما نبدأ الأسبوع." },
-        { name: "محمد — محل ذهب",         text: "أرسلنا عروض عيد الفطر على 2000 رقم في دقائق. كانت أحسن حملة في تاريخ المحل. الاستثمار في Flow Hub من أذكى قراراتنا." },
+    team: {
+      label: "فريق المبيعات الذكي",
+      title: "فريق كامل على رقم واحد",
+      sub: "ثمانية موظفين، لكل واحد اسم ودور ومهارات مكتوبة كإجراءات لا كنصائح. تعدّل شخصياتهم بكلماتك، وتشاهدهم يعملون في لوحة الفريق.",
+      members: [
+        { name: "هال",  role: "المبيعات",        body: "يرد على كل مهتم بلهجته خلال دقائق، ويعرف في أي مرحلة من السبع هو." },
+        { name: "سام",  role: "خدمة العملاء",    body: "يجيب عن الأسئلة المتكررة من معرفة شركتك، ويحوّل ما يحتاج إنساناً إليك." },
+        { name: "شمّة", role: "مديرة المبيعات",  body: "تدرّب الفريق، وتدير الاجتماع، وتجري معك مقابلة التأهيل." },
+        { name: "خالد", role: "المتابعة",        body: "سلّم من سبع خطوات بزوايا مختلفة، يتوقف فور أن يرد العميل." },
+        { name: "ريم",  role: "إيصالات التسليم", body: "تقرأ ما وصل وما قُرئ وما فشل، وتختبر الحملة بثلاثين رسالة قبل أن تنطلق." },
+        { name: "سالم", role: "قوائم المتابعة",  body: "يرتب من يُتابَع اليوم ومن ينتظر، ويوقف من لم يفتح ثلاث رسائل." },
+        { name: "فهد",  role: "حماية الرقم",     body: "مؤشر خطر من صفر إلى مئة يبطئ الإرسال أو يوقفه قبل الحظر لا بعده." },
+        { name: "مارك", role: "المراقبة",        body: "ينبّهك على تيليجرام حين يهتم عميل، وحين يوافق، وحين يحتاج رقمك قراراً." },
       ],
     },
     faq: {
@@ -159,10 +165,10 @@ const CONTENT = {
       cta: "That's where Flow Hub™ comes in.",
     },
     stats: [
-      { label: "Messages Sent",   to: 2000000, suffix: "+" },
-      { label: "Active Clients",  to: 500,     suffix: "+" },
-      { label: "Campaigns Run",   to: 3000,    suffix: "+" },
-      { label: "Open Rate",       to: 95,      suffix: "%" },
+      { label: "AI employees on your team",        to: 8,   suffix: "" },
+      { label: "steps in the follow-up ladder",    to: 7,   suffix: "" },
+      { label: "test messages before a big campaign", to: 30, suffix: "" },
+      { label: "points on your number-safety score", to: 100, suffix: "" },
     ],
     industries: {
       label: "Who is it for?",
@@ -176,12 +182,12 @@ const CONTENT = {
       ],
     },
     whyWa: {
-      title: "Why WhatsApp is the Most Powerful Channel?",
-      sub: "WhatsApp messages reach the customer directly — in the place where they spend most of their day.",
+      title: "It sends like a person, not a machine",
+      sub: "WhatsApp bans numbers that behave like software. Flow Hub behaves like an employee.",
       items: [
-        { stat: "98%", label: "Message Read Rate",     body: "Compared to just 20% for email. Your message is always read." },
-        { stat: "5×",  label: "Higher Sales Conversion", body: "WhatsApp conversion rates are 5x higher than any other marketing channel." },
-        { stat: "2.5B", label: "Daily Users",          body: "WhatsApp is the most used app in the Middle East and North Africa." },
+        { stat: "9–9", label: "A human sending rhythm", body: "Nothing before 9 am or after 9 pm, and the gap between messages changes through the day — slower at the start, at lunch and in the evening." },
+        { stat: "QR",  label: "Your own number, no API", body: "Link your existing number by scanning a QR code — no special number, no WhatsApp API, no fee per message." },
+        { stat: "10′", label: "Ready in ten minutes", body: "The sales manager interviews you with ten questions and writes your company file and the knowledge the team answers from." },
       ],
     },
     features: {
@@ -220,13 +226,19 @@ const CONTENT = {
         { label: "Managed Plan", price: "1,000", period: "AED / month", features: ["Unlimited messages", "We set up the system", "We manage campaigns for you", "Daily performance follow-up", "24/7 direct support", "Continuous optimization"], cta: "Book a Call", highlight: false },
       ],
     },
-    testimonials: {
-      label: "Customer Reviews",
-      title: "What Business Owners Say",
-      items: [
-        { name: "Abu Khalid — BBQ Restaurant", text: "Before Flow Hub, we were losing many first-time customers. Now we send weekly follow-ups and repeat visits have noticeably increased." },
-        { name: "Umm Sara — Beauty Center",    text: "The chatbot saved us time answering repetitive questions. Clients book directly and our schedule is full before the week even starts." },
-        { name: "Mohammed — Gold Shop",        text: "We sent Eid offers to 2,000 numbers in minutes. It was the best campaign in the history of the shop. Investing in Flow Hub was one of our smartest decisions." },
+    team: {
+      label: "The AI sales team",
+      title: "A whole team on one number",
+      sub: "Eight employees, each with a name, a role and skills written as procedures, not advice. Change their personalities in your own words and watch them work on the team board.",
+      members: [
+        { name: "Hal",    role: "Sales",             body: "Answers every interested customer in their own dialect within minutes, and knows which of the seven stages they are in." },
+        { name: "Sam",    role: "Customer service",  body: "Answers the repeated questions from your company's knowledge, and hands you what needs a person." },
+        { name: "Shamma", role: "Sales manager",     body: "Trains the team, runs the meeting, and interviews you to set the company up." },
+        { name: "Khalid", role: "Follow-up",         body: "A seven-step ladder, each step from a new angle, stopping the moment the customer replies." },
+        { name: "Reem",   role: "Delivery receipts", body: "Reads what arrived, what was read and what failed, and tests a campaign on thirty messages before releasing it." },
+        { name: "Salem",  role: "Follow-up lists",   body: "Orders who is followed up today and who waits, and stops anyone who opened none of three messages." },
+        { name: "Fahad",  role: "Number protection", body: "A 0–100 risk score that slows or pauses sending before a ban, not after." },
+        { name: "Mark",   role: "Monitoring",        body: "Alerts you on Telegram when a customer is interested, when they agree, and when your number needs a decision." },
       ],
     },
     faq: {
@@ -764,6 +776,38 @@ export default function LandingPage() {
         </div>
       </Section>
 
+      {/* ── AI SALES TEAM ─────────────────────────────────────────── */}
+      <Section className="py-24 px-4 sm:px-6 bg-gradient-to-b from-transparent via-green-900/10 to-transparent" id="team">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-14 max-w-2xl mx-auto">
+            <p className="text-green-400 text-sm font-semibold uppercase tracking-widest mb-3">{c.team.label}</p>
+            <h2 className="text-3xl sm:text-4xl font-black text-white">{c.team.title}</h2>
+            <p className="text-white/55 mt-4 leading-relaxed">{c.team.sub}</p>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            {c.team.members.map((m, i) => (
+              <motion.div key={i}
+                initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: "-60px" }} transition={{ delay: (i % 4) * 0.08, duration: 0.5 }}
+                whileHover={{ y: -4 }}
+                className="relative bg-white/5 border border-white/10 rounded-2xl p-6 hover:border-green-500/40 transition-colors">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="relative w-12 h-12 rounded-2xl bg-green-500/15 text-green-400 flex items-center justify-center text-xl font-black">
+                    {m.name.slice(0, 1)}
+                    <span className="absolute -bottom-0.5 -end-0.5 w-3 h-3 rounded-full bg-green-400 ring-2 ring-[#0c1a10] animate-pulse" aria-hidden />
+                  </div>
+                  <div>
+                    <p className="font-black text-white text-lg leading-tight">{m.name}</p>
+                    <p className="text-green-400 text-xs font-semibold">{m.role}</p>
+                  </div>
+                </div>
+                <p className="text-white/60 text-sm leading-relaxed">{m.body}</p>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </Section>
+
       {/* ── PRICING ──────────────────────────────────────────────── */}
       <Section className="py-24 px-4 sm:px-6" id="pricing">
         <div className="max-w-6xl mx-auto">
@@ -793,32 +837,6 @@ export default function LandingPage() {
             }
           </div>
           <p className="text-center text-white/30 text-sm mt-10">{c.pricing.note}</p>
-        </div>
-      </Section>
-
-      {/* ── TESTIMONIALS ─────────────────────────────────────────── */}
-      <Section className="py-20 px-4 sm:px-6 bg-gradient-to-b from-transparent to-green-900/10">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-14">
-            <p className="text-green-400 text-sm font-semibold uppercase tracking-widest mb-3">{c.testimonials.label}</p>
-            <h2 className="text-3xl font-black text-white">{c.testimonials.title}</h2>
-          </div>
-          <div className="grid sm:grid-cols-3 gap-5">
-            {c.testimonials.items.map((t, i) => (
-              <motion.div key={i}
-                initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-60px" }} transition={{ delay: i * 0.1 }}
-                className="bg-white/5 border border-white/10 rounded-2xl p-6">
-                <div className="flex gap-0.5 mb-4">
-                  {Array.from({ length: 5 }).map((_, j) => (
-                    <Star key={j} className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                  ))}
-                </div>
-                <p className="text-white/70 text-sm leading-relaxed mb-5">"{t.text}"</p>
-                <p className="text-sm font-bold text-white/90">{t.name}</p>
-              </motion.div>
-            ))}
-          </div>
         </div>
       </Section>
 

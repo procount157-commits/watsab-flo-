@@ -48,7 +48,11 @@ done
 
 echo "→ building and restarting the app"
 docker compose build api
-docker compose up -d --no-deps api web
+docker compose up -d --no-deps api
+# Recreated, not just started: its config files are bind-mounted single
+# files, and git replaces them with new ones on pull — a running nginx keeps
+# reading the old copies until the container is made again.
+docker compose up -d --no-deps --force-recreate web
 
 echo "→ waiting for health"
 for i in $(seq 1 30); do
