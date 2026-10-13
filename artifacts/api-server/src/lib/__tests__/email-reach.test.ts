@@ -50,5 +50,32 @@ check("لكل ملاحظة أثرٌ وإصلاح",
   `${all.filter((c) => c.state !== "ok").length} ملاحظة`);
 check("ولكل بندٍ وزن", all.every((c) => c.weight > 0));
 
+
+// ── محدّدات DKIM: الخطأ الذي كلّف صاحب العمل رحلةً لا لزوم لها ────
+// فحصُ النطاق بحث عن hostingermail1/2/3 — بأرقام — وHostinger تسمّيها
+// hostingermail-a/b/c بأحرفٍ وشَرطة. فأجاب «لا DKIM» عن نطاقٍ موقَّعٍ
+// منذ شهور، وذهب صاحب العمل يُفعّل ما هو مُفعَّل.
+//
+// والأسوأ من الخطأ أنه كان واثقاً: «فُحصت كل المحدّدات المعروفة
+// لمزوّدك» — وهي لم تُفحص.
+const { __selectorsFor } = await import("../email/dns");
+const hostinger = __selectorsFor("smtp.hostinger.com");
+for (const s of ["hostingermail-a", "hostingermail-b", "hostingermail-c"]) {
+  check(`محدّد Hostinger · ${s}`, hostinger.includes(s), hostinger.slice(0, 3).join("، "));
+}
+check("محدّدات Hostinger تسبق غيرها", hostinger[0]!.startsWith("hostingermail"), hostinger[0]);
+for (const [host, want] of [["smtp.gmail.com", "google"], ["smtp.zoho.com", "zoho"], ["smtp.resend.com", "resend"]] as const) {
+  check(`محدّد ${host}`, __selectorsFor(host).includes(want));
+}
+check("مزوّدٌ مجهول يأخذ القائمة كاملة", __selectorsFor("mail.unknown.tld").length > 20);
+
+// مفتاحٌ فارغ ليس توقيعاً: Hostinger تُبقي محدّداتٍ احتياطية قيمتها
+// «v=DKIM1;p=» بلا مفتاح. وفحصٌ يقبلها يقول «موجود» عن توقيعٍ لا يوقّع.
+const { __hasLiveKey } = await import("../email/dns");
+check("مفتاحٌ حقيقي يُقبل", __hasLiveKey(["v=DKIM1;k=rsa;p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs+RijpkYCOFcf5HdHXcw"]));
+check("مفتاحٌ فارغ يُرفض", !__hasLiveKey(["v=DKIM1;p="]));
+check("مفتاحٌ قصيرٌ مبتور يُرفض", !__hasLiveKey(["v=DKIM1;p=MIIBIj"]));
+check("نصٌّ ليس DKIM يُرفض", !__hasLiveKey(["v=spf1 include:_spf.mail.hostinger.com ~all"]));
+
 console.log(`\n${pass}/${total} ${pass === total ? "✅" : "❌ فشل"}`);
 if (pass !== total) process.exit(1);

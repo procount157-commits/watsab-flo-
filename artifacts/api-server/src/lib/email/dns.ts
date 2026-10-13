@@ -19,7 +19,11 @@ export interface DnsReport {
 // hostingermail1/2/3 — ولم تكن في القائمة، فكان الفحص يقول «لم أجد
 // DKIM» وهو جوابٌ صحيح هنا بالصدفة لا بالفحص.
 const SELECTORS = [
-  // Hostinger
+  // Hostinger. وأسماؤها بأحرفٍ وشَرطة لا بأرقام — وهذا بالضبط ما أخطأتُ
+  // فيه: فحصتُ hostingermail1/2/3 فأجاب «لا DKIM» على نطاقٍ موقَّعٍ منذ
+  // شهور، وذهب صاحب العمل يُفعّل ما هو مُفعَّل. الدرس أن قائمة محدّدات
+  // مُخمَّنة تكذب بثقة، فصارت تُجرَّب الصيغتان.
+  "hostingermail-a", "hostingermail-b", "hostingermail-c",
   "hostingermail1", "hostingermail2", "hostingermail3",
   // Google Workspace / Microsoft
   "google", "selector1", "selector2",
@@ -32,7 +36,7 @@ const SELECTORS = [
 
 /** المحدّدات التي يستعملها مزوّدٌ بعينه — تُفحص أولاً فتُسرّع وتُصيب. */
 const BY_HOST: Array<[RegExp, string[]]> = [
-  [/hostinger/i, ["hostingermail1", "hostingermail2", "hostingermail3"]],
+  [/hostinger/i, ["hostingermail-a", "hostingermail-b", "hostingermail-c", "hostingermail1", "hostingermail2", "hostingermail3"]],
   [/google|gmail/i, ["google"]],
   [/outlook|microsoft|office365/i, ["selector1", "selector2"]],
   [/zoho/i, ["zoho", "zmail"]],
@@ -42,6 +46,17 @@ const BY_HOST: Array<[RegExp, string[]]> = [
   [/sendgrid/i, ["s1", "s2"]],
   [/postmark/i, ["pm"]],
 ];
+
+/** محدّدات هذا المزوّد أولاً ثم البقية — مكشوفةٌ للاختبار. */
+export function __selectorsFor(smtpHost?: string | null): string[] {
+  const hinted = BY_HOST.find(([re]) => re.test(smtpHost ?? ""))?.[1] ?? [];
+  return [...hinted, ...SELECTORS.filter((x) => !hinted.includes(x))];
+}
+
+/** هل في هذه السجلات مفتاحٌ يوقّع فعلاً — لا سجلٌّ فارغ. */
+export function __hasLiveKey(records: string[]): boolean {
+  return records.some((x) => /v=DKIM1/i.test(x) && /[;\s]p=[A-Za-z0-9+/]{40,}/.test(x));
+}
 
 async function txt(name: string): Promise<string[]> {
   try { return (await dns.resolveTxt(name)).map((r) => r.join("")); } catch { return []; }
@@ -58,16 +73,19 @@ export async function checkDomain(email: string, smtpHost?: string | null): Prom
   const dmarc = dmarcTxt.find((r) => /^v=DMARC1/i.test(r)) ?? null;
 
   // محدّدات مزوّد الإرسال أولاً حين يُعرَف — ثم البقية.
-  const hinted = BY_HOST.find(([re]) => re.test(smtpHost ?? ""))?.[1] ?? [];
-  const order = [...hinted, ...SELECTORS.filter((x) => !hinted.includes(x))];
+  const order = __selectorsFor(smtpHost);
   let selector: string | null = null;
+  let revoked: string[] = [];
   for (const sel of order) {
-    // بعض المزوّدين يضعون DKIM كـ CNAME يشير إلى مفاتيحهم لا كـ TXT.
-    const [t, c] = await Promise.all([
-      txt(`${sel}._domainkey.${domain}`),
-      dns.resolveCname(`${sel}._domainkey.${domain}`).catch(() => [] as string[]),
-    ]);
-    if (t.some((x) => /v=DKIM1|k=rsa|p=/i.test(x)) || c.length > 0) { selector = sel; break; }
+    // بعض المزوّدين يضعون DKIM كـ CNAME يشير إلى مفاتيحهم لا كـ TXT،
+    // و`resolveTxt` تتبع السلسلة وحدها فتُرجع المفتاح النهائي.
+    const t = await txt(`${sel}._domainkey.${domain}`);
+    if (!t.length) continue;
+    // مفتاحٌ حيّ أم مُبطَل: Hostinger تُبقي ثلاثة محدّدات وتُفرّغ ما لا
+    // توقّع به، فتبقى `v=DKIM1;p=` بلا مفتاح. وفحصٌ يقبل الفارغ يقول
+    // «موجود» عن توقيعٍ لا يوقّع — وهو أسوأ من أن يقول «غير موجود».
+    if (__hasLiveKey(t)) { selector = sel; break; }
+    if (t.some((x) => /v=DKIM1/i.test(x))) revoked.push(sel);
   }
 
   return {
@@ -91,7 +109,11 @@ export async function checkDomain(email: string, smtpHost?: string | null): Prom
     },
     dkim: {
       found: !!selector, selector,
-      note: selector ? `DKIM موجود (selector: ${selector})` : "لم أجد DKIM على المحددات الشائعة — فعّله من مزوّد بريدك وأضف السجل الذي يعطيك",
+      note: selector
+        ? `DKIM يوقّع فعلاً — المحدّد ${selector}${revoked.length ? ` (و${revoked.length} محدّداً احتياطياً بلا مفتاح، وهذا طبيعي)` : ""}`
+        : revoked.length
+          ? `سجلات DKIM موجودة على ${revoked.join("، ")} لكن مفاتيحها فارغة — التوقيع مُبطَل. أعد توليد المفاتيح من لوحة مزوّد بريدك.`
+          : "لم أجد DKIM على المحدّدات المعروفة — فعّله من مزوّد بريدك وأضف السجل الذي يعطيك",
     },
     mx: { found: mx.length > 0, hosts: mx.sort((a, b) => a.priority - b.priority).map((m) => m.exchange) },
   };
