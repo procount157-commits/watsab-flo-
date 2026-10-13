@@ -54,6 +54,20 @@ docker compose up -d --no-deps api
 # reading the old copies until the container is made again.
 docker compose up -d --no-deps --force-recreate web
 
+# ...and reloaded on top of that, because recreating was not enough: the
+# `location ^~ /t/` fix that lets the tracking pixel reach the API sat in
+# the container, correct on disk, while nginx went on serving the config it
+# had read at start — /t/e/TOKEN.gif kept answering 404 from the static
+# root. The failure is silent by nature (no error, no log, just opens that
+# never arrive), so the reload is unconditional and its result is printed.
+sleep 2
+if docker compose exec -T web nginx -t >/dev/null 2>&1; then
+  docker compose exec -T web nginx -s reload >/dev/null 2>&1 && echo "→ nginx reloaded"
+else
+  echo "⚠️  nginx config test failed — the old config is still serving:"
+  docker compose exec -T web nginx -t 2>&1 | tail -3
+fi
+
 echo "→ waiting for health"
 for i in $(seq 1 30); do
   if curl -fsS http://127.0.0.1/api/healthz >/dev/null 2>&1; then
