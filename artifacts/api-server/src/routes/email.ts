@@ -38,6 +38,7 @@ import { retargetPlans } from "../lib/email/retarget";
 import { opensReport } from "../lib/email/opens";
 import { runSpecialist, runSpecialistRound, lastReports, SPECIALISTS, type SpecialistRole } from "../lib/email/specialists";
 import { seedLibrary2 } from "../lib/email/library-2";
+import { reachReport, contentSignals } from "../lib/email/deliverability";
 import { campaignReadiness } from "../lib/email/readiness";
 import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { register as emailRegister } from "../lib/email/register";
@@ -174,6 +175,20 @@ router.post("/ledger/repair", async (req, res) => {
     return res.status(400).json({ error: "إصلاح غير معروف" });
   }
   res.json(await repair(req.session.userId!, what));
+});
+
+// ── الوصول: أن تصل الرسالة الصندوق لا مجلد الإعلانات ─────────────
+router.get("/reach", async (req, res) => res.json(await reachReport(req.session.userId!)));
+
+/** فحص نصِّ حملةٍ بعينها قبل إرسالها — أو نصٍّ يُكتب الآن. */
+router.post("/reach/content", async (req, res) => {
+  const subject = String(req.body?.subject ?? "");
+  const html = String(req.body?.html ?? "");
+  if (!html.trim()) return res.status(400).json({ error: "لا نص" });
+  const checks = contentSignals(subject, html);
+  const max = checks.reduce((a, c) => a + c.weight, 0);
+  const got = checks.reduce((a, c) => a + (c.state === "ok" ? c.weight : c.state === "warn" ? c.weight * 0.5 : 0), 0);
+  res.json({ checks, score: Math.round((got / Math.max(1, max)) * 100) });
 });
 
 /** قوالب المكتبة الثانية لمن زُرع حسابه قبل وجودها. */
@@ -329,7 +344,7 @@ router.post("/settings/test-send", async (req, res) => {
 router.get("/settings/dns", async (req, res) => {
   const s = await getSettings(req.session.userId!);
   if (!s?.fromEmail) return res.status(400).json({ error: "اضبط عنوان المُرسِل أولاً" });
-  res.json(await checkDomain(s.fromEmail));
+  res.json(await checkDomain(s.fromEmail, s.smtpHost));
 });
 
 router.post("/settings/poll", async (req, res) => {

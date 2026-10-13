@@ -10,7 +10,7 @@ import { Link, useRoute, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Mail, Upload, Users, Megaphone, ListOrdered, FileText, Inbox, Settings2, Loader2, Play, Pause,
-  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, ListChecks, Stethoscope, Users2,
+  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, ListChecks, Stethoscope, Users2, ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
@@ -24,6 +24,7 @@ import { DashboardTab } from "./EmailDashboard";
 import { RegisterTab } from "./EmailRegister";
 import { SentTab } from "./EmailSent";
 import { EmailTeamDesk } from "./EmailTeamDesk";
+import { ReachTab } from "./EmailReach";
 import { WarmupCard } from "@/components/EmailHygiene";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -41,6 +42,7 @@ const pct = (n?: number | null) => (n === null || n === undefined ? "—" : `${n
 const TABS = [
   { key: "dashboard", label: "لوحة المتابعة", icon: LayoutDashboard },
   { key: "diagnose",  label: "التشخيص",       icon: Stethoscope },
+  { key: "reach",     label: "الوصول",         icon: ShieldCheck },
   { key: "overview",  label: "ما يحدث الآن",  icon: Mail },
   { key: "lists",     label: "القوائم",        icon: FolderOpen },
   { key: "contacts",  label: "الجمهور",        icon: Users },
@@ -111,6 +113,7 @@ export default function EmailMarketing() {
       {tab === "agent"     && <AgentTab initialFilter={writeFor} onMissionCreated={() => navigate("/email/missions")} />}
       {tab === "knowledge" && <KnowledgeTab />}
       {tab === "missions"  && <MissionsTab />}
+      {tab === "reach"     && <ReachTab />}
       {tab === "desk"      && <EmailTeamDesk />}
       {tab === "sent"      && <SentTab />}
       {tab === "register"  && <RegisterTab />}

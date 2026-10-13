@@ -12,7 +12,17 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="FLOW HUB™" />
     <meta name="twitter:description" content="منصة الإرسال الذكي عبر واتساب" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- أيقونة التبويب. السطر الواحد الذي كان هنا (SVG وحده) يكفي كروم
+         وحده: سفاري لا يقرأ SVG للتبويب، وكل متصفحٍ يطلب /favicon.ico
+         من جذر الموقع مهما كُتب هنا — وذاك كان يسقط إلى صفحة التطبيق
+         فيرجع HTML برمز 200، فيرى المتصفح «أيقونة» ليست صورة ويعرض
+         بديله. ولذلك ملفٌّ حقيقي بكل المقاسات، ورقم نسخةٍ يكسر الذاكرة:
+         أيقونات المتصفحات تُخزَّن بعناد ولا تتحدّث بإعادة التحميل. -->
+    <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
+    <link rel="manifest" href="/site.webmanifest?v=2" />
+    <meta name="theme-color" content="#0E1F18" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />

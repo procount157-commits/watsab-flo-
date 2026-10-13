@@ -94,7 +94,7 @@ export async function caretakerRound(userId: number) {
 
   // 4. The sending domain's records.
   if (s!.fromEmail) {
-    const d = await checkDomain(s!.fromEmail).catch(() => null);
+    const d = await checkDomain(s!.fromEmail, s!.smtpHost).catch(() => null);
     if (d) {
       if (!d.spf.ok) owner.push(`سجل SPF لنطاق ${d.domain}: ${d.spf.note}`);
       if (!d.dkim.found) owner.push(`توقيع DKIM لنطاق ${d.domain}: ${d.dkim.note}`);

@@ -12,8 +12,22 @@ location /api/ {
     proxy_send_timeout 300s;
 }
 
-# Tracking redirects are served by the API too.
-location /t/ { proxy_pass http://wam_api; proxy_set_header Host $host; }
+# ── التتبّع: البادئة تسبق كل قاعدة امتداد ────────────────────────
+# `^~` لا زينة. بكسل الفتح عنوانه /t/e/TOKEN.gif، وnginx يُقدّم مواقع
+# regex على البادئات العادية — فكانت قاعدة الملفات الثابتة أسفل هذا
+# الملف تلتقط كل ما ينتهي بـ.gif وتُجيب 404 من مجلد الموقع، والتطبيق
+# لا يرى الطلب أصلاً. المحوّل (/t/e/TOKEN/c) كان يعمل لأنه بلا امتداد،
+# فبدا التتبّع سليماً وهو نصفه ميت.
+#
+# وهذا بالضبط صنف العطل الذي كلّف ٥٦٠ رسالة بلا قياس على الماك: لا
+# خطأ يظهر، ولا سجل، فقط «٠ فتحات» تُقرأ نتيجةً وهي غياب قياس.
+location ^~ /t/ {
+    proxy_pass http://wam_api;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
 
 # The home page: generated HTML for anyone without a session cookie (a
 # crawler, a visitor), the app shell for someone signed in. The map is in
@@ -30,6 +44,14 @@ location / {
     # only sub-pages, and "$uri/" alone answered it with 403 Forbidden.
     try_files $uri $uri/index.html /index.html;   # SPA
 }
+
+# أيقونة التبويب: الملفات الحقيقية تُقدَّم، وما لا وجود له يُجيب 404 لا
+# صفحةَ تطبيق. كان /favicon.ico يسقط إلى قاعدة SPA فيرجع HTML بترويسة
+# text/html ورمز 200، فيرى المتصفح «أيقونة» ليست صورة ويعرض بديله.
+location = /favicon.ico { root /usr/share/nginx/html; access_log off; expires 7d; try_files $uri =404; }
+location = /favicon.svg { root /usr/share/nginx/html; access_log off; expires 7d; try_files $uri =404; }
+location = /apple-touch-icon.png { root /usr/share/nginx/html; access_log off; expires 7d; try_files $uri =404; }
+location = /site.webmanifest { root /usr/share/nginx/html; access_log off; expires 7d; try_files $uri =404; }
 
 location ~* \.(js|css|png|jpg|jpeg|gif|svg|webp|woff2?)$ {
     root /usr/share/nginx/html;
