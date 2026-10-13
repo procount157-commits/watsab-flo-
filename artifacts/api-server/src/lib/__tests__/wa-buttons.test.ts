@@ -3,7 +3,7 @@
 // interested / not-interested matcher sees it as before.
 
 export {};
-const { nativeFlowButtons, interactiveReplyText } = await import("../wa-buttons");
+const { nativeFlowButtons, interactiveReplyText, cardBody, carouselButtons, carouselReady } = await import("../wa-buttons");
 
 let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(64)} ${d}`); };
@@ -26,6 +26,23 @@ check("at most ten buttons", nativeFlowButtons(Array.from({ length: 14 }, (_, i)
 check("a tap reads as the button's words", interactiveReplyText({ body: { text: "مهتم" }, nativeFlowResponseMessage: { paramsJson: '{"id":"btn:interested:2"}' } }) === "مهتم");
 check("...or from the params when the body is missing", interactiveReplyText({ nativeFlowResponseMessage: { paramsJson: '{"display_text":"غير مهتم"}' } }) === "غير مهتم");
 check("bad params are no text, not a crash", interactiveReplyText({ nativeFlowResponseMessage: { paramsJson: "{" } }) === "" && interactiveReplyText(undefined) === "");
+
+// ── الكاروسيل: إعلانات بجانب بعض ──
+const cards = [
+  { title: "عرض الذهب", description: "عيار ٢١ بسعر اليوم", imageUrl: "/u/a.jpg", buttonText: "اطلب الآن", buttonUrl: "floret.ae" },
+  { title: "طقم الكلوفر", imageUrl: "/u/b.jpg" },
+];
+const cb = carouselButtons(cards);
+check("carousel · every card has the same number of buttons", cb.every((b) => b.length === cb[0]!.length), cb.map((b) => b.length).join(","));
+check("carousel · stop is last on every card", cb.every((b) => b[b.length - 1]!.type === "stop"));
+check("carousel · a card with no link still gets a button", cb[1]![0]!.type === "reply");
+check("carousel · link button opens the page", nativeFlowButtons(cb[0]!)[0]!.name === "cta_url");
+check("carousel · body is title bold then text", cardBody(cards[0]!) === "*عرض الذهب*\nعيار ٢١ بسعر اليوم");
+check("carousel · body cut at 160", cardBody({ title: "x".repeat(300) }).length <= 160);
+check("carousel · two cards with images are ready", carouselReady(cards).ok);
+check("carousel · one card is not a carousel", !carouselReady([cards[0]!]).ok);
+check("carousel · a card without image is refused", !carouselReady([cards[0]!, { title: "بلا صورة" }]).ok);
+check("carousel · no links at all: only stop", carouselButtons([{ title: "a", imageUrl: "x" }, { title: "b", imageUrl: "y" }]).every((b) => b.length === 1));
 
 console.log(`\n${pass}/${total} مرّ`);
 process.exit(pass === total ? 0 : 1);

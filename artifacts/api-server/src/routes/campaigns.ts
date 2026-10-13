@@ -605,7 +605,8 @@ router.post("/", async (req, res) => {
   } = req.body;
   let { contactGroupId } = req.body;
 
-  if (!name || !message) return res.status(400).json({ error: "اسم الحملة ونص الرسالة مطلوبان" });
+  // A carousel may go without the bubble above it; every other message needs its words.
+  if (!name || (!message && messageType !== "carousel")) return res.status(400).json({ error: "اسم الحملة ونص الرسالة مطلوبان" });
 
   try {
     await assertCanCreateCampaign(userId);

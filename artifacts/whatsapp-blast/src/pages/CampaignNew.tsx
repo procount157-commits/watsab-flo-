@@ -45,7 +45,7 @@ const MSG_TYPES = [
   { val: "text",     label: "نص فقط",   icon: "💬", desc: "رسالة نصية" },
   { val: "image",    label: "صورة",     icon: "🖼️", desc: "صورة + نص" },
   { val: "video",    label: "فيديو",    icon: "🎬", desc: "فيديو + نص" },
-  { val: "carousel", label: "كاروسيل", icon: "🎠",  desc: "بطاقات متعددة" },
+  { val: "carousel", label: "كاروسيل", icon: "🎠",  desc: "إعلانات بجانب بعض" },
 ];
 
 const BTN_TYPES: { val: ButtonType; label: string; icon: React.ReactNode }[] = [
@@ -398,28 +398,35 @@ function WAPreview({
             <>
               {/* Carousel */}
               {messageType === "carousel" ? (
-                <div className="w-full overflow-x-auto pb-1 -mx-1 px-1">
-                  <div className="flex gap-2" style={{ width: "max-content" }}>
-                    {carousel.filter(c => c.title).map((card, i) => (
-                      <div key={i} className="w-44 rounded-xl overflow-hidden bg-[#1a3a25] border border-white/5 flex-shrink-0">
-                        {card.imageUrl ? (
-                          <img src={card.imageUrl} className="w-full h-24 object-cover" alt="" />
-                        ) : (
-                          <div className="w-full h-24 bg-white/5 flex items-center justify-center">
-                            <Image className="w-7 h-7 text-white/15" />
-                          </div>
-                        )}
-                        <div className="p-2.5 space-y-1">
-                          <p className="text-xs font-semibold text-white leading-snug">{card.title}</p>
-                          {card.description && <p className="text-[10px] text-white/50 leading-snug">{card.description}</p>}
-                          {card.buttonText && (
-                            <div className="mt-1.5 text-center text-[10px] text-primary bg-primary/10 py-1 rounded-lg font-medium">
-                              {card.buttonText}
+                <div className="w-full space-y-1.5">
+                  {message && (
+                    <div className="max-w-[90%] rounded-xl rounded-tl-sm bg-[#1f2c34] px-3 py-2 shadow-md">
+                      <p className="text-xs text-white/90 whitespace-pre-wrap leading-relaxed">{message}</p>
+                    </div>
+                  )}
+                  <div className="w-full overflow-x-auto pb-1 -mx-1 px-1">
+                    <div className="flex gap-2" style={{ width: "max-content" }}>
+                      {carousel.filter(c => c.title).map((card, i) => (
+                        <div key={i} className="w-48 rounded-xl overflow-hidden bg-[#1f2c34] flex-shrink-0 shadow-md flex flex-col">
+                          {card.imageUrl ? (
+                            <img src={card.imageUrl} className="w-full h-28 object-cover" alt="" />
+                          ) : (
+                            <div className="w-full h-28 bg-white/5 flex flex-col items-center justify-center gap-1">
+                              <Image className="w-7 h-7 text-white/15" />
+                              <span className="text-[9px] text-amber-400/80">الصورة مطلوبة</span>
                             </div>
                           )}
+                          <div className="p-2.5 flex-1">
+                            <p className="text-xs font-semibold text-white leading-snug">{card.title}</p>
+                            {card.description && <p className="text-[10px] text-white/70 leading-snug mt-1 whitespace-pre-wrap">{card.description}</p>}
+                          </div>
+                          {card.buttonText && (
+                            <div className="border-t border-white/10 py-2 text-center text-[11px] text-[#21c063] font-medium">{card.buttonText} ↗</div>
+                          )}
+                          <div className="border-t border-white/10 py-2 text-center text-[11px] text-[#21c063]">إيقاف الرسائل</div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -532,6 +539,7 @@ export default function CampaignNew() {
   // The server adds it too, so a campaign made before this carries it as well.
   const autoStop = true;
   const [carousel, setCarousel] = useState<CarouselCard[]>([
+    { title: "", description: "", imagePath: "", imageFilename: "", imageUrl: "", buttonText: "", buttonUrl: "" },
     { title: "", description: "", imagePath: "", imageFilename: "", imageUrl: "", buttonText: "", buttonUrl: "" },
   ]);
 
@@ -690,7 +698,9 @@ export default function CampaignNew() {
 
     if (isCarousel) {
       const valid = carousel.filter((c) => c.title.trim());
-      if (!valid.length) { toast.error("أضف بطاقة كاروسيل واحدة على الأقل"); return; }
+      if (valid.length < 2) { toast.error("الكاروسيل يحتاج إعلانين على الأقل بجانب بعض"); return; }
+      if (valid.length > 10) { toast.error("الحد ١٠ بطاقات"); return; }
+      if (valid.some((c) => !c.imagePath)) { toast.error("كل بطاقة تحتاج صورة — بدونها لا يظهر الكاروسيل"); return; }
     }
 
     const finalMessage = stripZeroLine(form.message);
@@ -865,12 +875,12 @@ export default function CampaignNew() {
             </div>
           </div>
 
-          {/* Message text + personalization vars */}
-          {!isCarousel && (
+          {/* Message text + personalization vars — for a carousel, the bubble above the cards */}
+          {(
             <div>
               <div className="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
                 <label className="text-sm text-muted-foreground">
-                  {isText ? "نص الرسالة *" : "نص / تعليق *"}
+                  {isCarousel ? "النص فوق الإعلانات (العرض، الشروط…)" : isText ? "نص الرسالة *" : "نص / تعليق *"}
                 </label>
                 <div className="flex items-center gap-1.5">
                   <Link href="/templates">
@@ -1196,9 +1206,10 @@ export default function CampaignNew() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-semibold">🎠 بطاقات الكاروسيل</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">كل بطاقة تُرسل كرسالة منفصلة بالترتيب</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">رسالة واحدة: نص الحملة في فقاعة فوق، وتحته الإعلانات بجانب بعض تُسحب أفقياً. من ٢ إلى ١٠ بطاقات، ولكل بطاقة صورة وزر. زر «إيقاف الرسائل» يُضاف لكل بطاقة تلقائياً.</p>
                 </div>
                 <button type="button"
+                  disabled={carousel.length >= 10}
                   onClick={() => setCarousel([...carousel, { title: "", description: "", imagePath: "", imageFilename: "", imageUrl: "", buttonText: "", buttonUrl: "" }])}
                   className="flex items-center gap-1 text-xs text-primary border border-primary/30 px-2 py-1.5 rounded-lg hover:bg-primary/10 transition-colors">
                   <Plus className="w-3.5 h-3.5" /> بطاقة
@@ -1210,7 +1221,7 @@ export default function CampaignNew() {
                   <div key={i} className="bg-card border border-card-border rounded-xl p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-primary">بطاقة {i + 1}</span>
-                      {carousel.length > 1 && (
+                      {carousel.length > 2 && (
                         <button type="button" onClick={() => setCarousel(carousel.filter((_, j) => j !== i))}
                           className="p-1 text-muted-foreground hover:text-red-400 transition-colors">
                           <Trash2 className="w-3.5 h-3.5" />
