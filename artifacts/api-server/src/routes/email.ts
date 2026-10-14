@@ -381,7 +381,16 @@ router.put("/senders/:id", async (req, res) => {
   try {
     const v = cleanSenderInput(req.body ?? {}, cur);
     const status = req.body?.status === "paused" ? "paused" : req.body?.status === "active" || req.body?.smtpPass ? "active" : cur.status;
-    await db.update(emailSendersTable).set({ ...v, status, ...(status === "active" ? { heldReason: null } : {}) }).where(eq(emailSendersTable.id, id));
+    // A mailbox prepared without its password starts its warm-up the day the password arrives.
+    const firstPass = !cur.smtpPass && !!req.body?.smtpPass;
+    await db.update(emailSendersTable).set({ ...v, status, ...(status === "active" ? { heldReason: null } : {}), ...(firstPass ? { createdAt: new Date() } : {}) }).where(eq(emailSendersTable.id, id));
+    // A new password is tried at once (no mail is sent): a wrong one never joins the rotation.
+    if (req.body?.smtpPass) {
+      const [now] = await db.select().from(emailSendersTable).where(eq(emailSendersTable.id, id)).limit(1);
+      const check = await verifySettings(asSettings((await getSettings(userId)) ?? ({ userId } as any), now!)).catch((e) => ({ ok: false, detail: String(e?.message ?? e) }));
+      if (!check.ok) await db.update(emailSendersTable).set({ status: "broken", heldReason: check.detail.slice(0, 300) }).where(eq(emailSendersTable.id, id));
+      return res.json({ ok: check.ok, check });
+    }
     res.json({ ok: true });
   } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
 });

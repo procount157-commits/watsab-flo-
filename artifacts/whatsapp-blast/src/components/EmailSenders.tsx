@@ -28,7 +28,8 @@ export function EmailSenders({ primary, primaryCap }: { primary?: string | null;
   });
   const update = useMutation({
     mutationFn: ({ id, body }: { id: number; body: any }) => api(`/api/email/senders/${id}`, { method: "PUT", body: JSON.stringify(body) }),
-    onSuccess: () => { refresh(); toast.success("حُفظ"); }, onError: (e: Error) => toast.error(e.message),
+    onSuccess: (d: any) => { refresh(); d?.check ? toast[d.check.ok ? "success" : "error"](d.check.ok ? "نجح الدخول — دخل الصندوق التدوير" : `الدخول فشل: ${d.check.detail}`) : toast.success("حُفظ"); },
+    onError: (e: Error) => toast.error(e.message),
   });
   const test = useMutation({
     mutationFn: (id: number) => api(`/api/email/senders/${id}/test`, { method: "POST" }),
@@ -66,7 +67,7 @@ export function EmailSenders({ primary, primaryCap }: { primary?: string | null;
           <div key={s.id} className="p-3 space-y-2">
             <div className="flex items-center justify-between gap-2 flex-wrap text-sm">
               <span className="flex items-center gap-2">
-                <span className={cn("w-2 h-2 rounded-full", s.status === "broken" ? "bg-red-500" : s.status === "paused" || s.held ? "bg-amber-500" : "bg-green-500")} />
+                <span className={cn("w-2 h-2 rounded-full", !s.hasPassword ? "bg-muted-foreground" : s.status === "broken" ? "bg-red-500" : s.status === "paused" || s.held ? "bg-amber-500" : "bg-green-500")} />
                 <span dir="ltr">{s.fromEmail}</span>
                 <span className="text-[10px] text-muted-foreground">{presets[s.preset]?.label ?? s.smtpHost}</span>
               </span>
@@ -74,6 +75,7 @@ export function EmailSenders({ primary, primaryCap }: { primary?: string | null;
                 اليوم {s.sentToday} / {s.capToday}{s.warmup && s.capToday < s.dailyCap ? ` · تسخين يوم ${s.ageDays + 1} حتى ${s.dailyCap}` : ""}
               </span>
             </div>
+            {!s.hasPassword && <p className="text-xs text-amber-500">بانتظار كلمة المرور: اكتبها في الخانة أدناه واضغط «حفظ» — بعدها يدخل التدوير ويبدأ تسخينه.</p>}
             {s.status === "broken" && <p className="text-xs text-red-500">الدخول فشل: {s.heldReason} — اكتب كلمة المرور الصحيحة.</p>}
             {s.held && s.status === "active" && <p className="text-xs text-amber-500">مُمهَل: {s.heldReason}</p>}
             {s.imapLastError && <p className="text-[11px] text-muted-foreground">قراءة الوارد: {s.imapLastError}</p>}
