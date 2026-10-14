@@ -24,4 +24,4 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/mihwar && chmod 600 ~/.ssh/mihwar
           printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/mihwar -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 root@179.197.242.119 flowhub
+          ssh -i ~/.ssh/mihwar -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 root@187.127.139.117 flowhub
