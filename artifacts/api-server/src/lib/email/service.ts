@@ -18,7 +18,7 @@ import { logger } from "../logger";
 import { notify, esc } from "../telegram";
 import { sendEmail, SendError, isConfigured, messageIdFor } from "./provider";
 import { newToken, renderEmail, firstName, companyName, personalize, unsubscribeUrl } from "./tracking";
-import { publicBase } from "./public-url";
+import { publicBase, durable } from "./public-url";
 import { brandOf } from "./layout";
 import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
@@ -435,15 +435,17 @@ async function drainOne(userId: number) {
 
   const vars = varsFor(contact, s);
   const base = await publicBase(userId);
+  // البكسل عبر أي عنوانٍ حي؛ الروابط والإلغاء عبر عنوانٍ دائم فقط (public-url.ts).
+  const keep = durable(base);
   const rendered = renderEmail(html + (s!.signature ? `<div style="margin-top:20px">${s!.signature}</div>` : ""), vars,
-    { base, token: m.token, secret: SECRET(), pixel: !!s!.tracking, links: !!s!.tracking },
-    { base, token: m.token, fromName: s!.fromName ?? s!.fromEmail!, fromEmail: s!.fromEmail! }, brandOf(s));
+    { base, token: m.token, secret: SECRET(), pixel: !!s!.tracking, links: !!s!.tracking && !!keep },
+    { base: keep, token: m.token, fromName: s!.fromName ?? s!.fromEmail!, fromEmail: s!.fromEmail! }, brandOf(s));
   const subject = personalize(m.subject, vars);
   const messageId = messageIdFor(m.token, s!.fromEmail!);
 
   lastSentAt.set(userId, now);
   try {
-    const r = await sendEmail(s!, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(base, m.token) });
+    const r = await sendEmail(s!, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(keep, m.token) });
     await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId, messageIdHdr: messageId, subject }).where(eq(emailMessagesTable.id, m.id));
     if (contact) await db.update(emailContactsTable).set({ lastSentAt: new Date() }).where(eq(emailContactsTable.id, contact.id));
     if (m.campaignId) await db.update(emailCampaignsTable).set({ sentCount: sql`${emailCampaignsTable.sentCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));

@@ -37,6 +37,7 @@ import { startSmartFollowUps } from "./lib/smart-followup";
 import { startCaretaker } from "./lib/email/caretaker";
 import { startSpecialistRounds } from "./lib/email/specialists";
 import { startTrackingWatch } from "./lib/email/public-url";
+import { startTunnel } from "./lib/email/tunnel";
 import { startManagerLoop } from "./lib/email/manager";
 import { startWaManagerLoop } from "./lib/wa-manager";
 import { startCatalogSync } from "./lib/catalog/floret";
@@ -167,6 +168,8 @@ function startListening() {
     startSpecialistRounds();
     // الفشل الصامت هو ما كلّف ٥٦٠ إرسالاً: عنوانٌ عام يموت فلا يُقال.
     startTrackingWatch();
+    // والنفق يُدار هنا لا باليد: ما شُغِّل باليد مات، وخرجت ١١٠٨ رسالة بلا بكسل.
+    startTunnel(port);
     // منصور: دورة الفريق كاملةً كل ست ساعات، وتقريرٌ واحد في اليوم.
     startManagerLoop();
     // شمّة: مكتب الواتساب — البيانات، النتائج، تقييم كل موظف، ومهمته.

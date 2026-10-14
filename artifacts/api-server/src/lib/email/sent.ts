@@ -18,7 +18,7 @@ import {
 import { renderEmail, personalize } from "./tracking";
 import { brandOf } from "./layout";
 import { getSettings, varsFor } from "./service";
-import { publicBase } from "./public-url";
+import { publicBase, durable } from "./public-url";
 
 const SECRET = () => process.env["SESSION_SECRET"] ?? "wam";
 
@@ -144,10 +144,10 @@ export async function sentPreview(userId: number, messageId: number): Promise<Se
   const base = await publicBase(userId);
   const vars = varsFor(contact, s);
   const tracking = !!s?.tracking;
-  const track = { base, token: m.token, secret: SECRET(), pixel: tracking, links: tracking };
+  const track = { base, token: m.token, secret: SECRET(), pixel: tracking, links: tracking && !!durable(base) };
   const rendered = html
     ? renderEmail(html + (s?.signature ? `<div style="margin-top:20px">${s.signature}</div>` : ""), vars, track,
-        { base, token: m.token, fromName: s?.fromName ?? s?.fromEmail ?? "", fromEmail: s?.fromEmail ?? "" }, brandOf(s))
+        { base: durable(base), token: m.token, fromName: s?.fromName ?? s?.fromEmail ?? "", fromEmail: s?.fromEmail ?? "" }, brandOf(s))
     : { html: "<p style='font:14px Arial'>لا جسم محفوظ لهذه الرسالة — رُدّ عليها مباشرة من صندوق الوارد.</p>", text: "" };
 
   const ev = await db.select({ type: emailEventsTable.type, at: emailEventsTable.createdAt, url: emailEventsTable.url })

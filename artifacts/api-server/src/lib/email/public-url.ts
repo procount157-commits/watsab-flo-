@@ -57,6 +57,18 @@ export async function publicBase(userId: number): Promise<string> {
   return base && isDead(userId) ? "" : base;
 }
 
+// ── عنوانٌ مؤقّت يصلح للبكسل وحده ──────────────────────────────────
+// النفق السريع (trycloudflare) يتغيّر عنوانه مع كل تشغيل. بكسلٌ عبره
+// إن مات يخسر فتحةً واحدة لا أكثر. أما رابطٌ ملفوفٌ عبره أو رابط إلغاء
+// اشتراك فيبقى في بريد العميل شهوراً بعد موت النفق — فيضغطه فلا يصل.
+// فالعنوان المؤقّت يحمل البكسل، والروابط تخرج كما هي، والإلغاء بريداً.
+const EPHEMERAL = /\.(trycloudflare\.com|ngrok-free\.app|ngrok\.io|ngrok\.app|loca\.lt)$/i;
+export function isEphemeral(base: string): boolean {
+  try { return EPHEMERAL.test(new URL(base).hostname); } catch { return false; }
+}
+/** العنوان الذي يجوز أن يُكتب في رابطٍ يبقى: فارغٌ إن كان مؤقّتاً. */
+export function durable(base: string): string { return base && !isEphemeral(base) ? base : ""; }
+
 /** العنوان المضبوط كما هو، حياً كان أو ميتاً — للعرض والفحص. */
 export async function configuredBase(userId: number): Promise<string> {
   const [s] = await db.select({ publicUrl: emailSettingsTable.publicUrl })
