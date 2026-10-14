@@ -39,6 +39,7 @@ import { opensReport } from "../lib/email/opens";
 import { runSpecialist, runSpecialistRound, lastReports, SPECIALISTS, type SpecialistRole } from "../lib/email/specialists";
 import { seedLibrary2 } from "../lib/email/library-2";
 import { reachReport, contentSignals } from "../lib/email/deliverability";
+import { runDesk } from "../lib/data-desk/desk";
 import { managerState, runManagerCycle, giveGoal } from "../lib/email/manager";
 import { teamVoice, EMAIL_TEAM_DEFS } from "../lib/email/team";
 import { EMAIL_GRAPH, contractProblems } from "../lib/graph/contracts";
@@ -904,6 +905,17 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
   }
 
   logger.info({ userId, file: fileName, total: report.total, kept: report.kept, inserted, mxBad, listId, sub: subLists.length, enrolled, whatsapp: whatsapp?.added ?? 0 }, "استيراد بريد");
+
+  // مكتب البيانات يستلم ما رُفع، في الخلفية: ماجد ينظّف، بدور تصنّف وتقول
+  // بماذا عُرف كل قطاع، ومنصور يُخبَر. صاحب العمل يرفع ولا يفعل غير ذلك.
+  if (listId) {
+    void runDesk(userId, { channel: "email", listId, trigger: "upload",
+      intake: { total: report.total, kept: report.kept, invalid: report.invalid, duplicates: report.duplicates, deadDomain: mxBad, roleAddresses: report.roleAddresses, phoneOnly: phoneOnly.length } })
+      .catch((err) => logger.warn({ userId, listId, err: String(err?.message ?? err) }, "مكتب البيانات تعذّر بعد رفع البريد"));
+    for (const g of whatsapp?.groups ?? []) {
+      void runDesk(userId, { channel: "whatsapp", listId: g.id, trigger: "upload" }).catch(() => {});
+    }
+  }
   // The team takes it from here: cleaned, read, recommended, written, prepared
   // for approval — without the owner choosing anything. In the background:
   // the upload answers now, the chain reports in the team's feed.

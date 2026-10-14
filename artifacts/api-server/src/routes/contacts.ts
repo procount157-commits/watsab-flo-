@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { runDesk } from "../lib/data-desk/desk";
 import { db, contactGroupsTable, contactsTable } from "@workspace/db";
 import { eq, count, and, inArray, ne } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
@@ -268,6 +269,15 @@ router.post("/import", upload.single("file"), async (req, res) => {
 
   const verifying = verify && validateInBackground(userId, saved.groups.map((g) => g.id));
   logger.info({ userId, file: fileName, total: parsed.total, added: saved.added, groups: saved.groups.length, verifying }, "استيراد أرقام واتساب");
+
+  // مكتب البيانات يستلم ما رُفع، في الخلفية: سالم ينظّف، ريم تصنّف كل جهةٍ
+  // في قطاعها وتقول بماذا عُرف، وشمّة تُخبَر. ملفٌ مخلوط يُفرَز إلى قوائم
+  // قطاعاته؛ وملفٌ له هوية يُعرض غرباؤه ولا يُنقلون إلا بإذن.
+  const intake = { total: parsed.total, added: saved.added, duplicates: wa.duplicates, landline: wa.skippedLandline, foreign: wa.skippedForeign, noNumber: parsed.noNumber, inOtherLists: saved.inOtherLists };
+  for (const g of saved.groups) {
+    void runDesk(userId, { channel: "whatsapp", listId: g.id, trigger: "upload", intake })
+      .catch((err) => logger.warn({ userId, listId: g.id, err: String(err?.message ?? err) }, "مكتب البيانات تعذّر بعد رفع الأرقام"));
+  }
 
   res.json({
     file: fileName || null,

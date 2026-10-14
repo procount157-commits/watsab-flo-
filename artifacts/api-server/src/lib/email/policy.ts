@@ -31,8 +31,14 @@ export const TRACK_AR: Record<Track, string> = { aml: "مكافحة غسل ال�
  */
 export const TARGETS: Record<Track, string[]> = {
   aml: ["عقارات", "قانونية", "ذهب ومجوهرات"],
-  services: ["مطاعم ومقاهي", "مقاولات", "عقارات"],
+  // المقاولات والمطاعم «وما بعدها»: كل قطاعٍ بعائلته كما في مكتبة الشركة
+  // نفسها — مواد البناء والخدمات الفنية مع المقاولات (نصف قوائم المقاولات
+  // المرفوعة «Technical Services» و«Building Materials»)، والأغذية مع المطاعم.
+  services: ["مقاولات", "مواد بناء", "صيانة وخدمات فنية", "مطاعم ومقاهي", "أغذية", "عقارات"],
 };
+
+/** قطاعٌ يكتب له بزوايا قطاعٍ آخر من عائلته. */
+const FAMILY: Record<string, string> = { "مواد بناء": "مقاولات", "صيانة وخدمات فنية": "مقاولات", "أغذية": "مطاعم ومقاهي" };
 
 export interface Angle { id: string; label: string; goal: string }
 
@@ -108,7 +114,7 @@ export function tracksFor(sector: string | null | undefined): Track[] {
 export const isTargeted = (sector: string | null | undefined): boolean => tracksFor(sector).length > 0;
 
 export function anglesFor(track: Track, sector: string): Angle[] {
-  return ANGLES[track]?.[sector] ?? [];
+  return ANGLES[track]?.[sector] ?? ANGLES[track]?.[FAMILY[sector] ?? ""] ?? [];
 }
 
 /**

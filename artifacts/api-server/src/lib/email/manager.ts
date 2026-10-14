@@ -37,6 +37,9 @@ import { reconcile, repair, type LedgerFinding } from "./ledger";
 import { resultsReport, resultsFacts, VERDICT_AR, type ResultsReport } from "./results";
 import { MIX, TRACK_AR, isTargeted, mixShare, policyBrief, angleById } from "./policy";
 import { rememberLesson } from "./agent";
+import { say } from "../agent-comms";
+import { runDesk, type DeskReport } from "../data-desk/desk";
+import { evaluateDesk, evaluationFacts, type Evaluation } from "../team/evaluate";
 import { verdictFor } from "./service";
 
 /** الإصلاحات التي يأذن بها المدير بلا رجوع: كلها تُعيد السجل إلى ما حدث فعلاً. */
@@ -182,6 +185,8 @@ export interface CycleResult {
   sending: { level: string; reasons: string[]; mode: string; enabled: boolean };
   lessons: number;
   goal: GoalState | null;
+  desk?: DeskReport | null;
+  evaluations?: Evaluation[];
   brief: { verdict: string; did: string[]; decided: string[]; needs: string[] } | null;
 }
 
@@ -200,6 +205,8 @@ export function cycleFacts(c: Omit<CycleResult, "brief">): string {
     ...r.addressTypes.slice(0, 2).map((a) => `• ${a.label}: ارتداد ${a.bounceRate}٪ من ${a.sent}`),
     `الجمهور الجاهز: ${r.audience.map((a) => `${a.sector} ${a.ready}`).join(" · ")}.`,
     `هذه الدورة: ${c.autopilot.waves} موجة جديدة، ${c.autopilot.nurtures} متابعة${c.autopilot.why ? ` — ${c.autopilot.why}` : ""}.`,
+    c.desk ? `البيانات: ${c.desk.headline}${c.desk.clearance.notes.length ? ` التنظيف: ${c.desk.clearance.notes.slice(0, 2).join("؛ ")}.` : ""}${c.desk.model.asked ? ` قرأ المصنّف ${c.desk.model.asked} اسماً وحسم ${c.desk.model.settled}.` : ""}` : "",
+    c.evaluations?.length ? "تقييم الموظفين:" : "", c.evaluations?.length ? evaluationFacts(c.evaluations) : "",
     c.paused.length ? `أوقفتُ لخروجها عن الاستهداف: ${c.paused.join("؛ ")}.` : "",
     c.repairs.length ? `أصلحتُ في السجل: ${c.repairs.map((x) => `${x.what} (${x.done})`).join("؛ ")}.` : "",
     r.decisions.length ? "قراراتٌ نُفّذت:" : "", ...r.decisions.map((d) => `• ${d.text}`),
@@ -265,12 +272,36 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
     }
   }
 
+  // ٢ب · البيانات — ماجد ينظّف ثم بدور تصنّف، وكلٌّ يسلّم التالي برسالة.
+  const desk = await runDesk(userId, { channel: "email", listId: null, trigger: "manager" }).catch((err) => {
+    logger.warn({ userId, err: String(err?.message ?? err) }, "مكتب البيانات داخل دورة المدير تعذّر"); return null;
+  });
+
   // ٣ · النتائج  ٤ · القرارات
   const results = await resultsReport(userId);
   const lessons = await recordLessons(userId, results).catch(() => 0);
   const goal = await workTheGoal(userId, results).catch((err) => { logger.warn({ userId, err: String(err?.message ?? err) }, "خطة الهدف تعذّرت"); return null; });
   if (goal?.changed.length) await activity(userId, "email_manager", "plan", `الهدف «${goal.goal.title}»: ${goal.changed.join("؛ ")}.`, { goalId: goal.goal.id, perDay: goal.plan.perDay });
   for (const d of results.decisions) await sayOnceDaily(userId, "email_analyst", "decision", d.text);
+
+  // ── الكلام على حوافّ القراف ──
+  // الموظفون كانوا يعملون ولا يتكلّمون: فريق البريد كله صفر رسائل في
+  // شهر. والحلقة تدور على تسليمٍ من واحدٍ لآخر، فكل تسليمٍ هنا رسالةٌ
+  // بما يحتاجه مستلمها — تُرى في غرفة الفريق وتدخل تعليماته في عمله التالي.
+  const o = results.overall;
+  await tell(userId, "email_analyst", "email_manager", "report",
+    `حكمي على آخر ${results.days} يوماً: ${o.sent} شركة راسلناها، ${o.positive} ردّاً نافعاً، ارتداد ${o.bounceRate}٪${o.rejected ? `، والمزوّد رفض ${o.rejected} رسالة` : ""}. ${results.decisions.length ? results.decisions.slice(0, 2).map((d) => d.text).join(" ") : "لا قرار جديد: العيّنات لم تكتمل."}`);
+  for (const a of results.angles.filter((x) => x.verdict === "scale" || x.verdict === "rewrite").slice(0, 2)) {
+    await tell(userId, "email_analyst", "email", "directive", `زاوية «${a.label}»: ${VERDICT_AR[a.verdict].label} — ${a.why}. ${a.verdict === "scale" ? "اكتبي القادم لقطاعها على نمطها." : "لا تعيدي صياغتها: غيّري المدخل كله."}`);
+  }
+  if (goal) await tell(userId, "email_manager", "email_strategist", "directive",
+    `خطة هذه الدورة: ${goal.plan.perDay} شركة في اليوم، وموجة بحجم ${goal.plan.waveSize ?? "—"}. النسبة الآن AML ${Math.round(mixShare(results.mix.state).aml * 100)}٪ والمستهدف ${MIX.aml * 100}٪.${results.avoidAngles.length ? ` تجنّبي زوايا حكم عليها جاسم بالفشل (${results.avoidAngles.length}).` : ""}`);
+
+  // ٤ب · التقييم — درجةٌ لكل موظف من أرقامه، ومهمةٌ تصله من المدير.
+  const evaluations = await evaluateDesk(userId, {
+    desk: "email", manager: "email_manager", managerName: "منصور",
+    roles: EMAIL_TEAM.filter((r) => r !== "email_manager"),
+  }).catch(() => [] as Evaluation[]);
 
   // ٥ · الاستهداف
   const paused = await enforceTargeting(userId).catch(() => [] as string[]);
@@ -285,7 +316,7 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
   });
 
   const base = {
-    at: new Date(), staffing, repairs, results, paused, autopilot, lessons, goal,
+    at: new Date(), staffing, repairs, results, paused, autopilot, lessons, goal, desk, evaluations,
     sending: { level: health?.level ?? "غير معروف", reasons: health?.reasons ?? [], mode: cfg.mode, enabled: cfg.enabled },
   };
 
@@ -309,6 +340,12 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
   }
   logger.info({ userId, waves: autopilot.waves, paused: paused.length, repairs: repairs.length, lessons, brief: !!brief }, "دورة مدير البريد");
   return { ...base, brief };
+}
+
+/** رسالةٌ بين موظفَين، مرةً في اليوم للنص نفسه — الدورة كل ست ساعات. */
+async function tell(userId: number, fromRole: string, toRole: string, kind: "report" | "directive" | "handoff", body: string) {
+  const [again] = (await db.execute(sql`SELECT 1 FROM agent_messages WHERE user_id = ${userId} AND from_role = ${fromRole} AND to_role = ${toRole} AND body = ${body.slice(0, 2000)} AND created_at > now() - interval '24 hours' LIMIT 1`)).rows;
+  if (!again) await say({ userId, fromRole, toRole, kind, body }).catch(() => {});
 }
 
 async function sayOnceDaily(userId: number, role: EmailRole, action: string, text: string) {

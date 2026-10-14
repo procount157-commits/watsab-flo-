@@ -23,6 +23,7 @@ import BrowserDesk from "@/pages/BrowserDesk";
 import Meetings from "@/pages/Meetings";
 import SocialDesk from "@/pages/social/SocialDesk";
 import Team from "@/pages/Team";
+import TeamRoom from "@/pages/TeamRoom";
 import GraphLive from "@/pages/GraphLive";
 import Engineer from "@/pages/Engineer";
 import Review from "@/pages/Review";
@@ -189,6 +190,7 @@ function AuthenticatedRoutes() {
           <Route path="/graph"          component={GraphLive} />
           <Route path="/engineer"       component={Engineer} />
           <Route path="/review"         component={Review} />
+          <Route path="/room"           component={TeamRoom} />
           <Route path="/team"           component={Team} />
           <Route path="/deals"          component={Deals} />
           <Route path="/content"        component={ContentCalendar} />

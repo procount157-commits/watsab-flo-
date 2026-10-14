@@ -16,7 +16,9 @@ const recs = recommend([
   { sector: "تقنية", n: 9 },
 ]);
 check("at most three recommendations", recs.length === MAX_RECOMMENDED);
-check("a sector with a written campaign outranks a bigger one without", recs[0]!.sector === "عقارات" && recs[1]!.sector === "سياحة وسفر", recs.map((r) => r.sector).join(" > "));
+// السياسة تغيّرت بقرار صاحب العمل: القطاع غير المستهدف لا يُوصى له بموجة،
+// مهما كبر. تسعمئة شركة سياحة لا تسبق ثلاثين مقاولاً — لا تظهر أصلاً.
+check("an untargeted sector gets no wave, however big", !recs.some((r) => r.sector === "سياحة وسفر") && recs[0]!.sector === "عقارات", recs.map((r) => r.sector).join(" > "));
 check("each carries its campaign and why", recs.every((r) => r.goal.length > 20 && r.why.length > 10 && r.angle.length > 3));
 check("too small a sector gets no campaign", !recommend([{ sector: "تقنية", n: 9 }]).length);
 check("the real-estate recommendation is the AML campaign", recs.find((r) => r.sector === "عقارات")!.goal.includes("AML"));

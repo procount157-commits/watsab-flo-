@@ -24,6 +24,7 @@ const NAV = [
   { href: "/content",       label: "جدول المحتوى",       icon: CalendarRange, badge: "جديد" },
   { href: "/engineer",      label: "غانم — مدير الفريق",  icon: Compass, badge: "جديد" },
   { href: "/review",        label: "تصنيف العملاء",      icon: ListChecks, badge: "جديد" },
+  { href: "/room",          label: "غرفة الفريق",        icon: MessagesSquare, badge: "جديد" },
   { href: "/graph",         label: "الجراف الحي",        icon: Network, badge: "جديد" },
   { href: "/team",          label: "الهيكل والأداء",     icon: Building2, badge: "جديد" },
   { href: "/board",         label: "لوحة الفريق",        icon: LayoutGrid, badge: "جديد" },

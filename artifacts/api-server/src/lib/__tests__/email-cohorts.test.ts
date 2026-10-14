@@ -145,7 +145,7 @@ check("الاستهداف · من راسلناه أمس يُستبعَد بعد�
 // السجل
 const led = await reconcile(USER);
 const find = (id: string) => led.findings.find((f) => f.id === id);
-check("السجل · ثمانية فحوص", led.findings.length === 8, `${led.findings.length}`);
+check("السجل · تسعة فحوص", led.findings.length === 9, `${led.findings.length}`);
 check("السجل · يميّز التراكم من التوقّف", find("queue")!.title.includes("يُصرَّف") || find("queue")!.title.includes("واقف") || find("queue")!.detail.includes("فارغ"), find("queue")?.detail);
 check("السجل · لا خلل في المرتدّة قبل أن نصنعه", (find("active_bounced")?.n ?? -1) === 0, `${find("active_bounced")?.n}`);
 const ab = await make({ email: "ab@t.invalid" });

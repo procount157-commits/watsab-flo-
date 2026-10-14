@@ -40,8 +40,11 @@ for (const t of ["aml", "services"] as const) for (const s of P.TARGETS[t]) {
   check(`زوايا · ${s} / ${t}: اثنتان على الأقل`, a.length >= 2, `${a.length}`);
   check(`زوايا · ${s} / ${t}: بلا رقمٍ مُختلق`, a.every((x) => !/\d{2,}|%|٪|درهم|AED/.test(x.goal)), a.find((x) => /\d{2,}|%|٪|درهم|AED/.test(x.goal))?.id ?? "");
 }
-const ids = (["aml", "services"] as const).flatMap((t) => P.TARGETS[t].flatMap((s) => P.anglesFor(t, s).map((a) => a.id)));
-check("زوايا · المعرّفات فريدة", new Set(ids).size === ids.length, `${ids.length}`);
+const ids = [...new Set((["aml", "services"] as const).flatMap((t) => P.TARGETS[t].flatMap((s) => P.anglesFor(t, s).map((a) => a.id))))];
+// مواد البناء والخدمات الفنية تكتب بزوايا المقاولات، والأغذية بزوايا المطاعم:
+// المعرّف يتكرّر بين قطاعات العائلة عمداً، ويبقى فريداً داخل قطاعه.
+check("زوايا · فريدة داخل كل قطاع", (["aml", "services"] as const).every((t) => P.TARGETS[t].every((s) => { const a = P.anglesFor(t, s).map((x) => x.id); return new Set(a).size === a.length; })));
+check("زوايا · عائلة المقاولات تكتب بزواياها", P.anglesFor("services", "مواد بناء")[0]?.id === P.anglesFor("services", "مقاولات")[0]?.id && P.anglesFor("services", "أغذية")[0]?.id === P.anglesFor("services", "مطاعم ومقاهي")[0]?.id);
 check("زوايا · كلها تُعرف مسارها", ids.every((id) => P.trackOfAngle(id) !== null));
 check("زوايا · AML للمحامين لا تعمّم الخضوع", P.anglesFor("aml", "قانونية").some((a) => /تتوقف|حين يباشرون|ينطبق عليها/.test(a.goal)));
 check("زوايا · AML للعقارات لا تعدّ goAML امتثالاً", /لا التسجيل في goAML وحده/.test(P.anglesFor("aml", "عقارات")[0]!.goal));

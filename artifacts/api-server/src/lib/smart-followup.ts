@@ -30,6 +30,7 @@
 // sent until they switch it to live.
 
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { FOLLOWUP_CRAFT, FOLLOWUP_CHECK, followupIssues } from "./followup-doctrine";
 import {
   db, waThreadMessagesTable, botEmployeesTable, businessProfileTable, followupDeliberationsTable,
   unsubscribedPhonesTable, leadSourcesTable,
@@ -196,7 +197,10 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     firm: profile?.description ?? null,
     rules: [
       vertical === "jewelry" ? HUMAN_VOICE : "",
-      angle,
+      // لماذا سكت قبل ماذا أكتب — صنعة المتابعة لكل المنصات.
+      FOLLOWUP_CRAFT,
+      "",
+      `═══ زاوية هذه الدرجة ═══\n${angle}`,
       vertical === "jewelry" ? "اكتب الرسالة نفسها فقط، بلهجة العميلة، كما تكتبها يد: سطران إلى خمسة، دافئة وشخصية، وفيها شيء يخصها هي." : "اكتب الرسالة نفسها فقط، بلغة العميل ولهجته، سطر إلى ثلاثة.",
       dialectLine(customerDialect),
       vertical === "jewelry" ? "ممنوع منعاً باتاً: وزن أو عيار أو سعر أو توفر لا يوجد نصاً في المعلومات المرفقة. إن لم يكن عندك الرقم فلا تذكره، واعرض أن تتأكد وترد." : "",
@@ -209,7 +213,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
       earlier.length ? `═══ ما قلناه له في المتابعات السابقة — لا تكرره ولا تعِد صياغته ═══\n${earlier.map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
       facts ? `═══ من معرفة الشركة عن موضوعه ═══\n${facts}` : "",
     ],
-    check: ["□ هل فيها شيء جديد لم يُقل في المحادثة ولا في المتابعات السابقة؟", "□ هل تصلح لهذا العميل وحده؟", ...(vertical === "jewelry" ? ["□ هل تُقرأ كأن إنساناً كتبها لها الآن — دافئة، عنها هي، بلا لغة شركات؟"] : [])],
+    check: [...FOLLOWUP_CHECK, "□ هل تصلح لهذا العميل وحده؟", ...(vertical === "jewelry" ? ["□ هل تُقرأ كأن إنساناً كتبها لها الآن — دافئة، عنها هي، بلا لغة شركات؟"] : [])],
   });
   const transcript = turns.map((t) => `${t.fromMe ? "نحن" : "العميل"}: ${t.text.slice(0, 500)}`).join("\n");
   const out = await complete([
@@ -240,6 +244,18 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     if (candidate) { const q2 = checkReply(candidate, ctx); if (q2.score > q.score) { text = candidate; q = q2; } }
   }
   if (blocksSend(q)) return { send: false, text, reason: `أُوقفت: ${q.issues[0]?.note ?? "فحص الكتابة"}` };
+  // عقيدة المتابعة تُفرَض بالكود لا بوعد النموذج: «أتابع معك» و«للتذكير»
+  // تُسقط الرسالة. محاولة إصلاحٍ واحدة، ثم تُحجز للجولة القادمة.
+  let fi = followupIssues(text, { last: rung >= rungs - 1, previous });
+  if (fi.length) {
+    const fixed = await complete([
+      { role: "system", content: "أنت محرر رسائل متابعة. تُصلح ما يُطلب فقط وتعيد الرسالة المصحّحة وحدها، بلغتها ولهجتها." },
+      { role: "user", content: `الرسالة:\n${text}\n\nأصلح: ${fi.join("؛ ")}.\nلا تُضف معلومةً ولا رقماً. لا تبدأ بتذكير ولا اعتذار.` },
+    ], 20_000).catch(() => null);
+    const cand = fixed?.text?.trim().replace(/^["«“]+|["»”]+$/g, "").trim();
+    if (cand && !followupIssues(cand, { last: rung >= rungs - 1, previous }).length && !blocksSend(checkReply(cand, ctx))) { text = cand; fi = []; }
+  }
+  if (fi.length) return { send: false, text, reason: `أُوقفت: ${fi[0]}`, retry: true };
   const copy = earlier.find((e) => overlap(e, text) > 0.6);
   if (copy) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة" };
   return { send: true, text, reason: q.issues.length ? `أُرسلت مع ملاحظات: ${q.issues.map((i) => i.note).join("، ")}`.slice(0, 300) : "جاهزة", photo: shop?.photo && shop.piece && normalizeArabic(text).includes(normalizeArabic(shop.piece.name.split(" ").slice(0, 2).join(" "))) ? shop.photo : null };

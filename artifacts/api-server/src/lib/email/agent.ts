@@ -25,6 +25,7 @@ import { logger } from "../logger";
 import { count, describe, resolve } from "./segments";
 import { passages } from "./knowledge-docs";
 import { COLD_CRAFT } from "./prompts";
+import { FOLLOWUP_CRAFT } from "../followup-doctrine";
 import { getSettings } from "./service";
 import { teamVoice, onDuty, type EmailRole } from "./team";
 import { asLanguage, languageRule } from "./language";
@@ -252,6 +253,8 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       "",
       // الشكل كان موجوداً والصنعة ناقصة: بنيةٌ صحيحة بأثرٍ بارد.
       COLD_CRAFT,
+      // والمتابعات التي تُكتب مع الحملة — ومهمات يوسف كلها — بصنعة المتابعة.
+      (input.role ?? "email") === "email_followup" ? FOLLOWUP_CRAFT : "المتابعات [متابعة] أدناه: كلٌّ تحمل شيئاً لم يكن في الرسالة الأولى، أقصر منها، بطلبٍ واحد — وبلا «just following up» ولا «checking in» ولا اعتذار عن المتابعة.",
       "",
       "المطلوب: حملة بريد لجمهور محدد. اكتبي بهذا الشكل بالضبط ولا شيء خارجه:",
       "[عنوان] <العنوان الأول>",

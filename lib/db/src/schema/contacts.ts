@@ -33,6 +33,10 @@ export const contactsTable = pgTable("contacts", {
   phone: varchar("phone", { length: 50 }).notNull(),
   name: varchar("name", { length: 255 }),
   status: varchar("status", { length: 20 }).default("active").notNull(),
+  /** القطاع، وبماذا عُرف: own (اسم الجهة نفسه) | model (قرأه المصنّف) | hint (ورثته من اسم الملف). */
+  sector: varchar("sector", { length: 40 }),
+  sectorBy: varchar("sector_by", { length: 8 }),
+  classifiedAt: timestamp("classified_at", { withTimezone: true }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

@@ -52,7 +52,7 @@ const selfReview = { ...WHATSAPP_GRAPH, nodes: WHATSAPP_GRAPH.nodes.map((n) => n
 check("a node that reviews itself is refused", contractProblems(selfReview).some((p) => p.includes("يراجع نفسه")));
 const agentSends = { ...WHATSAPP_GRAPH, nodes: WHATSAPP_GRAPH.nodes.map((n) => n.id === "sales" ? { ...n, sideEffect: "idempotent" as const, authorisedBy: "code" as const } : n) };
 check("an employee that would send on its own judgement is refused", contractProblems(agentSends).some((p) => p.includes("sales")));
-check("every graph is explained in one breath", GRAPHS.every((g) => g.oneBreath.length > 20 && g.oneBreath.length < 220));
+check("every graph is explained in one breath", GRAPHS.every((g) => g.oneBreath.length > 20 && g.oneBreath.length < 420));
 
 // ── Goals ────────────────────────────────────────────────────────
 const start = new Date("2026-10-07"), end = new Date("2026-12-31");

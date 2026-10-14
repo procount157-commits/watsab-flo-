@@ -46,8 +46,14 @@ export type GraphContract = {
 export const WHATSAPP_GRAPH: GraphContract = {
   id: "whatsapp",
   goal: "clients_won",
-  oneBreath: "رسالة عميل ← يُفرز آلياً ← هال يكتب ← المراجعة تحكم ← فهد يسمح ← تُرسل؛ ومن سكت يكتب له خالد على نفس الطريق.",
+  maxWorking: 8,
+  oneBreath: "صاحب العمل يرفع القائمة ← سالم ينظّفها ← ريم تصنّف كل جهةٍ في قطاعها ← الحملة تخرج لقطاعها ← رسالة العميل تُفرز آلياً ← هال يكتب ← المراجعة تحكم ← فهد يسمح ← تُرسل؛ ومن سكت يكتب له خالد؛ وشمّة تقيّم الجميع وتعطي كلاً مهمته.",
+  loop: "كل ست ساعات: البيانات (سالم ← ريم) ← النتائج بالرقم لا بالرسالة ← تقييم كل موظف من أرقامه ← مهمةٌ لكلٍّ من شمّة ← مراجعة: هل تحرّك الرقم بعد المهمة السابقة. ما لا يُقاس لا يدخل التقييم.",
   nodes: [
+    { id: "owner", kind: "human", responsibility: "يرفع القوائم، يُطلق الحملات، ويشغّل المتابعة الحيّة", reads: ["brief", "evaluations", "desk_report"], writes: ["lists", "campaign", "followup_mode"], tools: [], sideEffect: "approval", authorisedBy: "owner" },
+    { id: "chief", kind: "agent", responsibility: "تُدير المكتب: تقيّم كل موظف من أرقامه، تعطي كلاً مهمةً واحدة، تراجع هل تحرّكت درجته، وتكتب التقرير اليومي", reads: ["receipts", "results", "desk_report", "evaluations"], writes: ["evaluations", "directives", "brief"], tools: ["evaluateDesk", "waResults", "runDeskAll"], sideEffect: "none", authorisedBy: "none", reviews: ["sales", "followup", "intake", "collector"] },
+    { id: "intake", kind: "agent", responsibility: "ينظّف كل قائمة عند رفعها: المكرّر، من طلب الإيقاف، الأسماء الوهمية — ويقول ما أُصلح وما أُخرج ولماذا", reads: ["lists", "unsubscribed"], writes: ["list_membership", "clearance"], tools: ["cleanWa", "dedupe"], sideEffect: "none", authorisedBy: "none" },
+    { id: "collector", kind: "agent", responsibility: "تصنّف كل جهةٍ في قطاعها وتقول بماذا عُرف (اسمها، قراءتها، أو اسم الملف)، وتفرز الملف المخلوط إلى قوائم قطاعاته", reads: ["lists", "clearance", "targets"], writes: ["sector", "sector_by", "desk_report"], tools: ["classifyRow", "modelPrompt", "fileStrangers"], sideEffect: "none", authorisedBy: "none" },
     { id: "router", kind: "code", responsibility: "يفرز الرسالة: نية، رد آلي، إيقاف، بشري يتولاها", reads: ["incoming", "thread", "lead_card"], writes: ["lead_card.intent"], tools: [], sideEffect: "none", authorisedBy: "none" },
     { id: "sales", kind: "agent", responsibility: "يكتب رداً واحداً يكمل موضوع الحملة ويقدّم البيع مرحلة", reads: ["thread", "outreach", "lead_card", "knowledge"], writes: ["draft"], tools: ["knowledge.retrieve"], sideEffect: "none", authorisedBy: "none" },
     { id: "followup", kind: "agent", responsibility: "يكتب متابعة واحدة بزاوية جديدة لمن تكلم ثم سكت، أو يرفض", reads: ["thread", "outreach", "lead_card", "knowledge", "earlier_followups"], writes: ["draft"], tools: ["knowledge.retrieve"], sideEffect: "none", authorisedBy: "none" },
@@ -56,6 +62,12 @@ export const WHATSAPP_GRAPH: GraphContract = {
     { id: "sender", kind: "code", responsibility: "يرسل ما سُمح به مرة واحدة فقط", reads: ["send_permit", "draft"], writes: ["thread"], tools: ["whatsapp.send"], sideEffect: "idempotent", authorisedBy: "code" },
   ],
   edges: [
+    { from: "owner", to: "intake", when: "رُفع ملف أرقام", carries: "القائمة الخام وما قاله المستورد عنها", onFail: "تبقى القائمة كما رُفعت وتُنظَّف في دورة المديرة" },
+    { from: "intake", to: "collector", when: "انتهى التنظيف", carries: "القائمة النظيفة وما أُصلح وأُخرج", onFail: "تُصنَّف في الدورة القادمة" },
+    { from: "collector", to: "chief", when: "انتهى التصنيف", carries: "تقرير القائمة: القطاعات، وبماذا عُرف كلٌّ، والغرباء، والمجهول", onFail: "—" },
+    { from: "chief", to: "sales", when: "حملةٌ حُكم عليها بإعادة الكتابة أو الإيقاف، أو درجته تحتاج مهمة", carries: "الحكم برقمه، والمهمة", onFail: "تُعاد في الدورة القادمة" },
+    { from: "chief", to: "followup", when: "سقطت متابعاتٌ أكثر مما كُتب، أو درجته تحتاج مهمة", carries: "أكثر أسباب السقوط، والمهمة", onFail: "تُعاد في الدورة القادمة" },
+    { from: "chief", to: "owner", when: "مرةً في اليوم", carries: "التقرير: الحكم، ما فُعل، المهام، وما يحتاج يده", onFail: "ينتظر في صندوق الإشعارات" },
     { from: "router", to: "sales", when: "شخص لا رد آلي، بلا إيقاف، ولا بشري يتولاها", carries: "الرسالة + بطاقة العميل", onFail: "لا رد، بإيصال السبب" },
     { from: "sales", to: "reviewer", when: "مسودة جاهزة", carries: "المسودة + سياقها", onFail: "إعادة بعد دقيقة، مرتين ثم حجز" },
     { from: "followup", to: "reviewer", when: "مسودة متابعة جاهزة", carries: "المسودة + المتابعات السابقة", onFail: "رفض بإيصال، ينتهي السلم لهذا الشخص" },
@@ -68,8 +80,8 @@ export const WHATSAPP_GRAPH: GraphContract = {
 export const EMAIL_GRAPH: GraphContract = {
   id: "email",
   goal: "goal:email_manager",
-  maxWorking: 8,
-  oneBreath: "صاحب العمل يعطي منصور الهدف ← منصور يقسمه إلى شركاتٍ في اليوم ← سلمى تختار القطاع والمسار ٨٠/٢٠ والزاوية ← نورة تكتب بالإنجليزية ← ماجد يحكم ← صاحب العمل يوافق ← تُرسل ← ليلى تقرأ الردود ← جاسم يحكم على النتائج ← منصور يقرّر الدورة التالية.",
+  maxWorking: 9,
+  oneBreath: "صاحب العمل يرفع الملف ← ماجد ينظّفه ← بدور تصنّف كل جهةٍ في قطاعها ومسارها ← صاحب العمل يعطي منصور الهدف ← منصور يقسمه إلى شركاتٍ في اليوم ← سلمى تختار القطاع والمسار ٨٠/٢٠ والزاوية ← نورة تكتب بالإنجليزية ← ماجد يحكم ← صاحب العمل يوافق ← تُرسل ← ليلى تقرأ الردود ← جاسم يحكم على النتائج ← منصور يقرّر الدورة التالية.",
   loop: "كل ست ساعات: النتائج (جاسم) ← القرار (منصور) ← الموجة (سلمى) ← الكتابة (نورة) ← الحكم (ماجد) ← الإرسال ← الردود (ليلى) ← النتائج. ما لا يُقاس لا يدخل القرار.",
   nodes: [
     { id: "owner", kind: "human", responsibility: "يضع الهدف والنسبة والقطاعات، ويوافق على الإطلاق في وضع الموافقة", reads: ["brief", "draft", "verdict"], writes: ["goal", "approval"], tools: [], sideEffect: "approval", authorisedBy: "owner" },
@@ -78,11 +90,16 @@ export const EMAIL_GRAPH: GraphContract = {
     { id: "email", kind: "agent", responsibility: "رسالة بالإنجليزية: ملخص، زر، تفاصيل لمن يرغب — بزاوية الموجة ودروس المحلل", reads: ["mission", "knowledge", "lessons"], writes: ["draft"], tools: ["knowledge.retrieve"], sideEffect: "none", authorisedBy: "none" },
     { id: "email_followup", kind: "agent", responsibility: "متابعة من فتح أو نقر ولم يرد، بزاوية جديدة", reads: ["stage_lists", "mission", "lessons"], writes: ["mission"], tools: [], sideEffect: "none", authorisedBy: "none" },
     { id: "email_guard", kind: "reviewer", responsibility: "يحكم: أرقام من المعرفة فقط، لا مبالغة، الشكل واللغة؛ وينظّف القوائم", reads: ["draft", "knowledge", "lists", "dns"], writes: ["verdict", "list_membership"], tools: ["guardCheck", "formatIssues", "hygiene"], sideEffect: "compensatable", authorisedBy: "code", reviews: ["email", "email_followup"] },
+    { id: "email_data", kind: "agent", responsibility: "تصنّف كل جهةٍ في قطاعها وتقول بماذا عُرف (نشاطها أو اسمها، قراءتها، أو اسم الملف)، وأين تذهب: AML، المحاسبة والضرائب، ثانوية، منافس، مجهولة", reads: ["lists", "clearance", "targets"], writes: ["sector", "sector_by", "desk_report"], tools: ["classifyRow", "modelPrompt"], sideEffect: "none", authorisedBy: "none" },
     { id: "sender", kind: "code", responsibility: "يرسل في حدود الإحماء والساعة والسمعة", reads: ["approval", "queue"], writes: ["email_messages"], tools: ["smtp"], sideEffect: "idempotent", authorisedBy: "code" },
     { id: "email_replies", kind: "agent", responsibility: "يقرأ الرد ويصنّفه (نافع، يغلق الباب، ليس رداً) ويسلّم المهتم", reads: ["inbound", "campaign", "contact"], writes: ["intent", "draft_reply", "deal"], tools: ["knowledge.retrieve"], sideEffect: "approval", authorisedBy: "owner" },
     { id: "email_analyst", kind: "reviewer", responsibility: "يحكم على النتائج بالشركة لكل مسار وقطاع وزاوية: وسِّع، استمر، أعد الكتابة، أوقِف، راقب", reads: ["email_messages", "intent", "missions"], writes: ["verdicts", "lessons"], tools: ["resultsReport", "judge"], sideEffect: "none", authorisedBy: "none", reviews: ["email_strategist", "email"] },
   ],
   edges: [
+    { from: "owner", to: "email_guard", when: "رُفع ملف عناوين", carries: "القائمة وما قاله المستورد عنها", onFail: "تُنظَّف في دورة المدير" },
+    { from: "email_guard", to: "email_data", when: "انتهى التنظيف", carries: "ما أُصلح (أخطاء النطاقات) وما استُبعد (الوهمي والميت)", onFail: "تُصنَّف في الدورة القادمة" },
+    { from: "email_data", to: "email_manager", when: "انتهى التصنيف", carries: "تقرير القائمة: كم يدخل كل مسار، وكم قطاعه موروثٌ من اسم الملف، وكم مجهول", onFail: "—" },
+    { from: "email_data", to: "email_strategist", when: "جمهورٌ جديد صُنّف", carries: "القطاعات الجاهزة بأعدادها", onFail: "الموجة من المصنَّف سابقاً" },
     { from: "owner", to: "email_manager", when: "وضع صاحب العمل هدفاً أو غيّره", carries: "الهدف: المقياس والرقم والموعد", onFail: "يعمل المدير بالسياسة وحدها ويقول إن لا هدف" },
     { from: "email_analyst", to: "email_manager", when: "كل دورة، بعد أن تكتمل عيّنة", carries: "الأحكام برقمها وسببها", onFail: "لا قرار على عيّنة ناقصة" },
     { from: "email_manager", to: "email_strategist", when: "كل دورة", carries: "الخطة: شركات في اليوم وحجم الموجة", onFail: "تبقى الخطة السابقة" },
@@ -126,7 +143,7 @@ export function nodeBrief(g: GraphContract, id: string): string {
 export const NODE_AR: Record<string, string> = {
   owner: "صاحب العمل", email_manager: "منصور (المدير)", email_strategist: "سلمى (التخطيط)", email: "نورة (الكتابة)",
   email_followup: "يوسف (المتابعة)", email_guard: "ماجد (الحارس)", sender: "المُرسِل (كود)", email_replies: "ليلى (الردود)",
-  email_analyst: "جاسم (محلل النتائج)", router: "الفرز (كود)", sales: "البائع", followup: "المتابعة", reviewer: "المراجعة", gate: "البوابة (كود)",
+  email_analyst: "جاسم (محلل النتائج)", email_data: "بدور (التصنيف)", chief: "شمّة (المديرة)", intake: "سالم (التنظيف)", collector: "ريم (التصنيف)", router: "الفرز (كود)", sales: "البائع", followup: "المتابعة", reviewer: "المراجعة", gate: "البوابة (كود)",
 };
 
 export const GRAPHS = [WHATSAPP_GRAPH, EMAIL_GRAPH];

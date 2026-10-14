@@ -71,6 +71,8 @@ export const emailContactsTable = pgTable("email_contacts", {
   source:        varchar("source", { length: 60 }),
   /** Canonical sector, worked out from the name and activity (lib/email/sector.ts). */
   sector:        varchar("sector", { length: 60 }),
+  /** بماذا عُرف القطاع: own | model | hint. */
+  sectorBy:      varchar("sector_by", { length: 8 }),
   /** active | unsubscribed | bounced | complained */
   status:        varchar("status", { length: 20 }).notNull().default("active"),
   tags:          jsonb("tags").notNull().default([]),
