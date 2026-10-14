@@ -324,6 +324,16 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
   let brief: CycleResult["brief"] = null;
   if (opts.brief !== false) {
     brief = await writeBrief(userId, cycleFacts(base));
+    // القرارات وما يحتاج صاحب العمل من الكود — النموذج يكتب الحكم وما فُعل.
+    if (brief) {
+      const decided = [
+        ...results.decisions.map((d) => d.text),
+        ...paused.map((p) => `أوقفتُ لخروجها عن الاستهداف: ${p}`),
+        ...(evaluations ?? []).filter((e) => e.task).map((e) => `${e.name}: ${e.task}`),
+      ];
+      brief.decided = decided.length ? decided.slice(0, 5) : ["لا قرار جديد: العيّنات لم تكتمل."];
+      brief.needs = results.needsOwner.length ? results.needsOwner.slice(0, 4) : ["لا شيء."];
+    }
     if (brief) {
       const text = [brief.verdict, "فعلتُ:", ...brief.did.map((x) => `• ${x}`), "قرّرتُ:", ...brief.decided.map((x) => `• ${x}`), "يحتاجك:", ...brief.needs.map((x) => `• ${x}`)].join("\n");
       await activity(userId, "email_manager", "brief", text, { waves: autopilot.waves, mix: results.mix.state });

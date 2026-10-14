@@ -186,7 +186,11 @@ export async function evaluateDesk(userId: number, opts: { desk: string; manager
       INSERT INTO employee_evaluations (user_id, role, desk, manager, score, prev_score, grade, facts, finding, task)
       VALUES (${userId}, ${e.role}, ${opts.desk}, ${opts.manager}, ${s.score}, ${prevScore}, ${s.grade}, ${JSON.stringify(f)}::jsonb, ${finding}, ${task})`);
     receipt({ userId, node: opts.manager, action: "team.evaluate", subject: e.role, evidence: { score: s.score, grade: s.grade, prevScore }, why: finding.slice(0, 300) });
-    if (opts.announce !== false && e.isActive && (task || moved)) {
+    // المهمة نفسها لا تُعاد كل ست ساعات: تصل مرةً، ثم لا يُكتب له إلا إن
+    // تغيّرت المهمة أو تحرّكت درجته. أول تشغيلٍ كان سيرسل للخامل الرسالة
+    // ذاتها أربع مرات في اليوم.
+    const repeat = !!task && p?.task === task && !moved;
+    if (opts.announce !== false && e.isActive && (task || moved) && !repeat) {
       await say({ userId, fromRole: opts.manager, toRole: e.role, kind: "directive",
         body: [`تقييمك هذا الأسبوع: ${s.score ?? "—"}/100 (${GRADE_AR[s.grade]}).`, moved ? `${moved}.` : "", finding, task ?? "استمر."].filter(Boolean).join(" ") });
     }

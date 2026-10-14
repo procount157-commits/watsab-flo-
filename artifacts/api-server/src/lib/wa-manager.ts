@@ -185,7 +185,7 @@ const RULES = [
   "٢. الردّ النافع غير الردّ: «مرحبا» و«من معي؟» ردٌّ وليس نافعاً. لا تسمّي حملةً ناجحة بعدد من ردّوا.",
   "٣. طلب الإيقاف يُقرأ قبل الردود: حملةٌ ردّ عليها كثيرون وطلب الإيقاف منها ثلاثةٌ من كل مئة حملةٌ تُوقَف.",
   "٤. الموظف يُذكر باسمه ودرجته وما أُعطي — لا بصفاتٍ عامة. «هال يحتاج تطويراً» ليست جملة.",
-  "٥. «يحتاجك» لما لا يُحلّ بلا يد صاحب العمل: تشغيل المتابعة الحيّة، قائمةٌ تُرفع، حملةٌ تُطلَق. لا تطلبي إذناً فيما قرّرتِه.",
+  "٥. لا تكتبي مهاماً ولا أرقاماً من عندك: المهام وما يحتاج صاحب العمل تُضاف من الكود بعد تقريرك. اكتبي الحكم وما فُعل فقط.",
   "٦. لا تُطلقين حملةً ولا تَعِدين بها. الإرسال قرار صاحب العمل، وسلامة الرقم عمل فهد.",
   "",
   "اكتبي بهذا الشكل بالضبط ولا تزيدي:",
@@ -252,6 +252,14 @@ export async function runWaManagerCycle(userId: number, opts: { brief?: boolean;
   let brief: WaCycle["brief"] = null;
   if (opts.brief !== false) {
     brief = await writeBrief(userId, waFacts(base));
+    // «قرّرتُ» و«يحتاجك» من الكود لا من النموذج: أول تقريرٍ على منصةٍ
+    // أخرى كتب مهاماً لم تُعطَ («١٥ استفساراً يومياً لمدة أسبوع»). النموذج
+    // يكتب الحكم وما فُعل؛ والقرارات هي ما قرّره الكود فعلاً، حرفياً.
+    if (brief) {
+      brief.decided = evaluations.filter((e) => e.task).slice(0, 5).map((e) => `${e.name}: ${e.task}`);
+      if (!brief.decided.length) brief.decided = ["لا مهمة جديدة — من يحتاج مهمةً أُعطيها في دورةٍ سابقة ولم تتغيّر."];
+      brief.needs = results.needsOwner.length ? results.needsOwner.slice(0, 4) : ["لا شيء."];
+    }
     if (brief) {
       const text = [brief.verdict, "فعلتُ:", ...brief.did.map((x) => `• ${x}`), "قرّرتُ:", ...brief.decided.map((x) => `• ${x}`), "يحتاجك:", ...brief.needs.map((x) => `• ${x}`)].join("\n");
       receipt({ userId, node: WA_MANAGER_ROLE, graph: "whatsapp", action: "manager.brief", evidence: { reached: results.overall.reached, positive: results.overall.positive, weak: evaluations.filter((e) => e.grade === "weak").length }, why: text.slice(0, 900) });
