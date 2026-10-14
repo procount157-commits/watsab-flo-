@@ -302,7 +302,11 @@ export function startWaManagerLoop(): void {
       SELECT DISTINCT e.user_id FROM bot_employees e
       WHERE e.role = ${WA_MANAGER_ROLE} AND e.is_active
         AND EXISTS (SELECT 1 FROM contact_groups g WHERE g.user_id = e.user_id)
-        AND NOT EXISTS (SELECT 1 FROM business_profile b WHERE b.user_id = e.user_id AND b.team_paused)`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
+        AND NOT EXISTS (SELECT 1 FROM business_profile b WHERE b.user_id = e.user_id AND b.team_paused)
+        -- النسخة المنقولة إلى الخادم مرآةٌ موقوفة الإرسال لسنوات حتى يقرّر
+        -- صاحب العمل التحويل: لا تُدار فيها حلقةٌ ثانية على البيانات نفسها،
+        -- ولا تُستهلك فيها حصة النموذج التي يعمل بها الماك.
+        AND NOT EXISTS (SELECT 1 FROM email_settings s WHERE s.user_id = e.user_id AND s.guard_hold_until > now() + interval '365 days')`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
     for (const u of rows.rows) {
       const userId = Number(u.user_id);
       const due = Date.now() - (lastBrief.get(userId) ?? 0) > 20 * 3_600_000;
