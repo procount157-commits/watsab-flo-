@@ -24,7 +24,7 @@ import { seedSkills } from "../skills";
 import { logger } from "../logger";
 import { count, describe, resolve } from "./segments";
 import { passages } from "./knowledge-docs";
-import { COLD_CRAFT } from "./prompts";
+import { COLD_CRAFT, HOOK_CRAFT } from "./prompts";
 import { FOLLOWUP_CRAFT } from "../followup-doctrine";
 import { getSettings } from "./service";
 import { teamVoice, onDuty, type EmailRole } from "./team";
@@ -190,6 +190,13 @@ export function toHtml(text: string): string {
       // it went out as bracketed text in one campaign.
       const bare = /^\[([^\]\[]{3,40})\]$/.exec(l);
       if (bare && !/^(ملخص|تفاصيل|summary|details)$/i.test(bare[1]!.trim())) { flushText(); flushList(); out.push(`<p class="cta"><a href="#cta">${bare[1]!.trim()}</a></p>`); continue; }
+      // The preview line beside the subject in the inbox: hidden in the body.
+      const pre = /^\[(?:معاينة|preview)\]\s*(.+)$/i.exec(l);
+      if (pre) { flushText(); flushList(); out.push(`<p class="pre" style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:transparent">${pre[1]!.trim()}</p>`); continue; }
+      const hook = /^\[(?:عنوان كبير|headline)\]\s*(.+)$/i.exec(l);
+      if (hook) { flushText(); flushList(); out.push(`<h2 class="hook">${hook[1]!.trim()}</h2>`); continue; }
+      const note = /^\[(?:إبراز|highlight)\]\s*(.+)$/i.exec(l);
+      if (note) { flushText(); flushList(); out.push(`<div class="note">${note[1]!.trim()}</div>`); continue; }
       const lead = /^\[(?:ملخص|summary)\]\s*(.*)$/i.exec(l);
       if (lead) { flushText(); flushList(); if (lead[1]!.trim()) out.push(`<p class="lead">${lead[1]!.trim()}</p>`); continue; }
       if (/^\[(?:تفاصيل|details)\]\s*$/i.test(l)) { flushText(); flushList(); out.push(`<hr class="more">`); continue; }
@@ -253,6 +260,7 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       "",
       // الشكل كان موجوداً والصنعة ناقصة: بنيةٌ صحيحة بأثرٍ بارد.
       COLD_CRAFT,
+      HOOK_CRAFT,
       // والمتابعات التي تُكتب مع الحملة — ومهمات يوسف كلها — بصنعة المتابعة.
       (input.role ?? "email") === "email_followup" ? FOLLOWUP_CRAFT : "المتابعات [متابعة] أدناه: كلٌّ تحمل شيئاً لم يكن في الرسالة الأولى، أقصر منها، بطلبٍ واحد — وبلا «just following up» ولا «checking in» ولا اعتذار عن المتابعة.",
       "",
@@ -260,6 +268,8 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       "[عنوان] <العنوان الأول>",
       "[عنوان] <عنوان ثانٍ بزاوية مختلفة تماماً — سنختبرهما على شريحة>",
       "[الرسالة]",
+      "[معاينة] <PREVIEW TEXT, 6–12 words: completes the subject, never repeats it — the second reason to open>",
+      "[عنوان كبير] <HEADLINE, 4–9 words: the outcome they want or the risk they avoid — about them, not us>",
       "Hello {{first_name|there}},",
       "",
       "[ملخص] <THE WHOLE EMAIL IN 2–3 LINES, at most 45 words: their situation (name {{company|your company}}), why it matters now, and the ONE thing we offer. Someone who reads only this line must know what we want and why it is worth their time.>",
@@ -270,6 +280,8 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       "- <point 1: what the requirement or problem actually is — from the knowledge only>",
       "- <point 2: what we would check or do for them>",
       "- <point 3 (optional): what they get out of it>",
+      "",
+      "[إبراز] <ONE line, the single strongest fact in this email — from the knowledge only; omit the line if there is none>",
       "",
       "<ONE short paragraph, max 2 sentences: the reference (law/regulator) or a concrete example — only if it is in the knowledge>",
       "",

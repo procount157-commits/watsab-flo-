@@ -111,6 +111,7 @@ export function unsubscribeUrl(base: string, token: string): string | null {
 /** A readable plain-text part from the HTML, for clients and filters that want one. */
 export function htmlToText(html: string): string {
   return html
+    .replace(/<p[^>]*class="pre"[^>]*>[\s\S]*?<\/p>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<br\s*\/?>/gi, "\n")
@@ -132,7 +133,8 @@ export function renderEmail(html: string, vars: Record<string, string | null | u
     const lines = dir === "rtl"
       ? `أُرسلت هذه الرسالة من ${esc(footer.fromName)} إلى شركتكم. إن لم ترغبوا في رسائل أخرى: <a href="${url}" style="color:#64748b">إلغاء الاشتراك</a>.`
       : `You received this email from ${esc(/[\u0600-\u06FF]/.test(footer.fromName) ? brand.name : footer.fromName)} as a business contact. Prefer not to hear from us? <a href="${url}" style="color:#64748b">Unsubscribe</a>.`;
-    const full = wrapBranded(styleBody(body, brand, dir), brand, lines, preheaderOf(personalize(html, vars)), dir).replace("</body>", `${pixelTag(track)}</body>`);
+    // The preview line goes in the wrapper's own hidden preheader, once.
+    const full = wrapBranded(styleBody(body.replace(/<p[^>]*class="pre"[^>]*>[\s\S]*?<\/p>/i, ""), brand, dir), brand, lines, preheaderOf(personalize(html, vars)), dir).replace("</body>", `${pixelTag(track)}</body>`);
     return { html: full, text: htmlToText(personalize(html, vars)) + `\n\n—\n${brand.name}${brand.phone ? ` · ${brand.phone}` : ""}${brand.website ? ` · ${brand.website}` : ""}\n${unsubscribeUrl(footer.base, footer.token) ?? ""}`.trimEnd() };
   }
   const dir = directionOf(body), lang = dir === "rtl" ? "ar" : "en";

@@ -18,7 +18,7 @@ const en = renderEmail(`<p>Hello {{first_name|there}},</p><p>Your books may be b
 check("the header carries the brand and the logo", en.includes("PRO COUNT") && en.includes("apple-touch-icon.png") && en.includes("#111c33"));
 check("an English message reads left to right", en.includes('dir="ltr"') && en.includes('lang="en"'));
 check("the button is a table cell in the accent colour", /<td style="border-radius:8px;background:#0284c7"><a href="https:\/\/wa\.me/.test(en));
-check("the box is a highlighted cell", en.includes("border-left:4px solid #0284c7") && en.includes("Key point"));
+check("the box is a highlighted cell", en.includes("border-left:5px solid #0284c7") && en.includes("Key point"));
 check("paragraphs get their style inline", /<p style="margin:0 0 14px;text-align:left">/.test(en));
 check("the footer has the website, phone and unsubscribe", en.includes("www.pro-count.ae") && en.includes("+971 54 232 8336") && en.includes("Unsubscribe"));
 check("an Arabic sender name is not printed in an English footer", !/from بروكاونت/.test(en) && en.includes("from PRO COUNT"));

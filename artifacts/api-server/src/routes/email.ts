@@ -24,7 +24,7 @@ import { cleanRows, detectColumns, checkMx, splitBy, type ImportRow } from "../l
 import { draftReply, sendReply, pollMailbox } from "../lib/email/inbound";
 import { readWorkbook, parseTables, whatsappEntries } from "../lib/phone-import";
 import { saveToNewGroup, validateInBackground } from "../lib/contact-save";
-import { folderForSector, listSector } from "../lib/folders";
+import { folderForSector, listSector, ownFolder } from "../lib/folders";
 import { deleteContacts, deleteList } from "../lib/email/delete";
 import { diagnose } from "../lib/email/diagnose";
 import { sentList, sentSummary, sentPreview, type SentFilter } from "../lib/email/sent";
@@ -48,6 +48,7 @@ import { dashboard as emailDashboard } from "../lib/email/dashboard";
 import { register as emailRegister } from "../lib/email/register";
 import { createWithCreator, SERVICES as CREATOR_SERVICES } from "../lib/email/creator";
 import { getAutopilot, saveAutopilot, runAutopilot } from "../lib/email/autopilot";
+import { autoState, mapFolder, endOfMonthUae } from "../lib/email/auto-desk";
 import { teamStatus, activity as teamActivity } from "../lib/email/team";
 import { addDoc, extractText, learn as learnDoc, ask as askKnowledge, library as knowledgeLibrary } from "../lib/email/knowledge-docs";
 import { classifySector, SECTORS, UNCLASSIFIED } from "../lib/email/sector";
@@ -814,7 +815,11 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
   // this business can reach — just through the other door.
   const phoneOnly = report.phoneOnly ?? [];
 
-  const sectorOverride = typeof body.sector === "string" && body.sector.trim() ? body.sector.trim().slice(0, 60) : null;
+  // مجلدٌ مسمّى رُفع كاملاً: اسمه هو قطاع ملفاته — إن عُرف. اسمٌ لا يُعرف
+  // («ملفات قديمة») لا يُفرض قطاعاً، فتُصنَّف كل شركةٍ باسمها ونشاطها.
+  const folderName = typeof body.folderName === "string" && body.folderName.trim() ? body.folderName.trim().slice(0, 80) : null;
+  const sectorOverride = typeof body.sector === "string" && body.sector.trim() ? body.sector.trim().slice(0, 60)
+    : folderName ? mapFolder(folderName).sector : null;
   const listNameHint = String(body.listName ?? "");
 
   // Upsert the contacts; existing ones keep their status.
@@ -854,8 +859,8 @@ router.post("/contacts/import", upload.single("file"), async (req, res) => {
     else {
       // A new list goes into the folder chosen, or its sector's folder — the
       // owner's own folder when one reads as that sector.
-      const folderId = Number(body.folderId) || null;
-      folder = folderId ? { id: folderId, name: "" } : await folderForSector(userId, "email", sectorOverride ?? listSector(listName, fileName, report.rows.slice(0, 300).map((r) => r.company))).catch(() => null);
+      const folderId = Number(body.folderId) || (folderName ? await ownFolder(userId, folderName, sectorOverride) : null);
+      folder = folderId ? { id: folderId, name: folderName ?? "" } : await folderForSector(userId, "email", sectorOverride ?? listSector(listName, fileName, report.rows.slice(0, 300).map((r) => r.company))).catch(() => null);
       const [l] = await db.insert(emailListsTable).values({ userId, name: listName, description: source, folderId: folder?.id ?? null }).returning();
       listId = l!.id;
     }
@@ -1425,6 +1430,23 @@ router.post("/creator", async (req, res) => {
   try {
     res.json(await createWithCreator(req.session.userId!, { service: String(b.service ?? ""), language: ["ar", "en", "both"].includes(b.language) ? b.language : undefined,
       listIds: ids(b.listIds), folderIds: ids(b.folderIds), sectors: Array.isArray(b.sectors) ? b.sectors.map(String).slice(0, 10) : [], take: Number(b.take) || undefined, notes: typeof b.notes === "string" ? b.notes.slice(0, 2000) : "" }));
+  } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+
+// ── صفحة التشغيل: ارفع، أعطِ الهدف، واترك الباقي (auto-desk.ts) ──
+router.get("/auto", async (req, res) => res.json(await autoState(req.session.userId!)));
+router.post("/auto/map", (req, res) => {
+  const names: unknown[] = Array.isArray(req.body?.names) ? req.body.names.slice(0, 50) : [];
+  res.json(names.map((n) => mapFolder(String(n))));
+});
+/** «أريد ٥٠ lead هذا الشهر»: ردود نافعة حتى آخر الشهر — والمدير يقسمها على الأيام. */
+router.post("/auto/goal", async (req, res) => {
+  const target = Math.floor(Number(req.body?.target));
+  try {
+    const deadline = endOfMonthUae();
+    const id = await giveGoal(req.session.userId!, { metric: "email_positive", target, deadline,
+      title: `${target} lead (رد نافع) حتى ${deadline.toLocaleDateString("en-GB", { timeZone: "Asia/Dubai" })}` });
+    res.json({ id, deadline });
   } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
 });
 

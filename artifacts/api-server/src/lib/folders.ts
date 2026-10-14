@@ -41,3 +41,17 @@ export async function folderForSector(userId: number, kind: "wa" | "email", sect
   const [f] = await db.insert(listFoldersTable).values({ userId, kind, name: sector }).returning();
   return { id: f!.id, name: f!.name };
 }
+
+/**
+ * مجلد البريد باسمه كما سمّاه صاحب العمل: الموجود إن وُجد، وإلا مجلد
+ * قطاعه إن كان له مجلد، وإلا يُنشأ باسمه هو — لا باسم القطاع.
+ */
+export async function ownFolder(userId: number, name: string, sector: string | null): Promise<number> {
+  const folders = await db.select().from(listFoldersTable).where(and(eq(listFoldersTable.userId, userId), eq(listFoldersTable.kind, "email")));
+  const hit = folders.find((f) => f.name.trim() === name.trim());
+  if (hit) return hit.id;
+  const bySector = sector ? await folderForSector(userId, "email", sector, false) : null;
+  if (bySector) return bySector.id;
+  const [f] = await db.insert(listFoldersTable).values({ userId, kind: "email", name: name.trim() }).returning();
+  return f!.id;
+}

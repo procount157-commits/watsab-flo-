@@ -75,6 +75,15 @@ export function skimFirst(html: string): string {
   return without.slice(0, at) + cta[0] + without.slice(at);
 }
 
+/** The accent mixed toward white — a background the eye finds without shouting. Hex only; anything else falls back to grey. */
+export function tint(hex: string, toWhite: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return "#f1f5f9";
+  const n = parseInt(m[1]!, 16);
+  const mix = (c: number) => Math.round(c + (255 - c) * toWhite).toString(16).padStart(2, "0");
+  return `#${mix(n >> 16)}${mix((n >> 8) & 255)}${mix(n & 255)}`;
+}
+
 export function styleBody(html: string, brand: Brand, dir: "rtl" | "ltr"): string {
   const align = dir === "rtl" ? "right" : "left";
   html = skimFirst(html);
@@ -93,9 +102,13 @@ export function styleBody(html: string, brand: Brand, dir: "rtl" | "ltr"): strin
     `<td width="50%" style="vertical-align:middle"><div style="border-top:1px solid #dbe2ea;height:1px;line-height:1px;font-size:0">&nbsp;</div></td>` +
     `<td style="white-space:nowrap;vertical-align:middle;padding:0 12px;font:600 11px/1 ${dir === "rtl" ? FONT_AR : FONT};letter-spacing:${dir === "rtl" ? "0" : "1.2px"};text-transform:uppercase;color:#94a3b8">${dir === "rtl" ? "التفاصيل لمن يرغب" : "In more detail"}</td>` +
     `<td width="50%" style="vertical-align:middle"><div style="border-top:1px solid #dbe2ea;height:1px;line-height:1px;font-size:0">&nbsp;</div></td></tr></table>`);
+  // The headline: the first thing the eye lands on, with a bar in the accent colour above it.
+  out = out.replace(/<h2([^>]*)class="hook"([^>]*)>([\s\S]*?)<\/h2>/gi, (_m, _a, _b, inner) =>
+    `<div style="width:44px;height:4px;background:${brand.accent};border-radius:2px;margin:0 0 14px;${dir === "rtl" ? "margin-left:auto" : ""}"></div>` +
+    `<h2 style="margin:0 0 18px;font:800 24px/1.3 ${dir === "rtl" ? FONT_AR : FONT};color:${brand.color};text-align:${align};letter-spacing:-0.2px">${inner}</h2>`);
   // The box.
   out = out.replace(/<div[^>]*class="note"[^>]*>([\s\S]*?)<\/div>/gi, (_m, inner) =>
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0"><tr><td style="background:#f1f5f9;border-${dir === "rtl" ? "right" : "left"}:4px solid ${brand.accent};border-radius:6px;padding:14px 16px;font:14px/1.65 ${dir === "rtl" ? FONT_AR : FONT};color:#1e293b">${inner}</td></tr></table>`);
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:20px 0"><tr><td style="background:${tint(brand.accent, 0.9)};border-${dir === "rtl" ? "right" : "left"}:5px solid ${brand.accent};border-radius:8px;padding:16px 18px;font:600 15px/1.6 ${dir === "rtl" ? FONT_AR : FONT};color:${brand.color}">${inner}</td></tr></table>`);
   for (const [tag, style] of [
     ["p", `margin:0 0 14px;text-align:${align}`],
     ["h2", `margin:0 0 12px;font:700 20px/1.35 ${FONT};color:${brand.color};text-align:${align}`],
@@ -152,6 +165,10 @@ export function wrapBranded(bodyHtml: string, brand: Brand, footerHtml: string, 
 
 /** The first words a client shows beside the subject. */
 export function preheaderOf(html: string): string {
+  // The writer's own preview line, when she wrote one.
+  const own = /<p[^>]*class="pre"[^>]*>([\s\S]*?)<\/p>/i.exec(html);
+  if (own) return own[1]!.replace(/<[^>]+>/g, "").replace(/\{\{[^}]*\}\}/g, "").replace(/\s+/g, " ").trim().slice(0, 110);
+  html = html.replace(/<h2[^>]*class="hook"[^>]*>[\s\S]*?<\/h2>/i, "");
   const paras = html.split(/<\/p>|<br\s*\/?>|\n/i).map((x) => x.replace(/<[^>]+>/g, " ").replace(/\{\{[^}]*\}\}/g, "").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
   // "Hello team," says nothing beside the subject; the sentence after it does.
   if (paras.length > 1 && paras[0]!.length < 45 && /[,،:]$/.test(paras[0]!)) paras.shift();

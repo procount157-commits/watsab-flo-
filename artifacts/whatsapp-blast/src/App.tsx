@@ -24,6 +24,7 @@ import Meetings from "@/pages/Meetings";
 import SocialDesk from "@/pages/social/SocialDesk";
 import Team from "@/pages/Team";
 import TeamRoom from "@/pages/TeamRoom";
+import EmailAuto from "@/pages/EmailAuto";
 import GraphLive from "@/pages/GraphLive";
 import Engineer from "@/pages/Engineer";
 import Review from "@/pages/Review";
@@ -203,6 +204,7 @@ function AuthenticatedRoutes() {
           <Route path="/inbox"          component={WaInbox} />
           <Route path="/extractor"      component={WaExtractor} />
           <Route path="/wa-link"        component={WaLinkGenerator} />
+          <Route path="/email-auto"     component={EmailAuto} />
           <Route path="/email/:tab/:id" component={EmailMarketing} />
           <Route path="/email/:tab?"    component={EmailMarketing} />
           <Route path="/arena"          component={SalesArena} />

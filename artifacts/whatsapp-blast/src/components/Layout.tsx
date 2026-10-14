@@ -34,6 +34,7 @@ const NAV = [
   { href: "/browser",       label: "مكتب التصفّح",       icon: Globe },
   { href: "/employees",     label: "فريق البوتات",       icon: Users2 },
   { href: "/follow-ups",    label: "بوت المتابعة",       icon: Clock },
+  { href: "/email-auto",    label: "تشغيل البريد",       icon: Mail, badge: "جديد" },
   { href: "/email",         label: "التسويق بالبريد",    icon: Mail },
   { href: "/instagram",     label: "إنستجرام",           icon: Instagram },
   { href: "/tiktok",        label: "تيك توك",            icon: Music2, badge: "جديد" },
