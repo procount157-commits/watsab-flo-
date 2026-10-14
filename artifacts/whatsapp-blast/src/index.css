@@ -96,9 +96,10 @@
   * { @apply border-border; }
   body {
     @apply font-sans antialiased bg-background text-foreground;
-    direction: rtl;
   }
-  html { direction: rtl; }
+  /* The app is Arabic; only the landing page in English sets dir="ltr". */
+  html:not([dir="ltr"]),
+  html:not([dir="ltr"]) body { direction: rtl; }
 }
 
 @layer utilities {

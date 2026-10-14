@@ -1,8 +1,8 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/sonner";
 import { Loader2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import Layout from "@/components/Layout";
 import LoginPage from "@/pages/LoginPage";
@@ -231,6 +231,23 @@ function Router() {
   );
 }
 
+// ── Document language ──────────────────────────────────────────────
+// The landing page at "/" is English first and sets the document's lang, dir
+// and title itself (LandingPage.tsx). Everything else is the Arabic app, so on
+// any other route they go back to Arabic — after a visit to the English
+// landing, the dashboard must not be left with <html lang="en" dir="ltr">.
+function DocumentLanguage() {
+  const [location] = useLocation();
+  useLayoutEffect(() => {
+    if (location === "/") return;
+    const html = document.documentElement;
+    html.lang = "ar";
+    html.dir = "rtl";
+    document.title = "FLOW HUB™ — منصة الإرسال عبر واتساب";
+  }, [location]);
+  return null;
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -238,6 +255,7 @@ function App() {
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           {/* WorkerBridge mounts once and lives for the entire session */}
           <WorkerBridge />
+          <DocumentLanguage />
           <Router />
           <Toaster position="top-center" richColors />
         </WouterRouter>

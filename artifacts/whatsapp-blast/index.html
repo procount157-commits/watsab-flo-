@@ -1,17 +1,34 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="en" dir="ltr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>FLOW HUB™ — منصة الإرسال عبر واتساب</title>
-    <meta name="description" content="FLOW HUB™ — منصة احترافية لإرسال رسائل واتساب الجماعية وإدارة الحملات والعملاء. الأفضل للمطاعم، محلات الذهب، صوالين الحلاقة، والبيوتي سنتر." />
+    <title>FLOW HUB™ — WhatsApp Marketing Platform</title>
+    <meta name="description" content="FLOW HUB™ — a professional platform for bulk WhatsApp messaging and campaign and contact management, with an AI sales team that replies and follows up. Made for restaurants, gold and jewelry shops, barbershops and beauty centers." />
     <meta name="robots" content="index, follow" />
-    <meta property="og:title" content="FLOW HUB™ — منصة واتساب الاحترافية" />
-    <meta property="og:description" content="أرسل آلاف الرسائل عبر واتساب باحترافية. إدارة الحملات والعملاء من منصة واحدة." />
+    <!-- The page at "/" is the marketing landing: English unless the visitor
+         chose Arabic there. Every other path is the Arabic app. React keeps
+         lang/dir/title in step afterwards (LandingPage.tsx, App.tsx); this only
+         sets them before the first paint. -->
+    <script>
+      (function () {
+        var ar = location.pathname.replace(/\/+$/, "") !== "";
+        if (!ar) { try { ar = localStorage.getItem("flowhub-landing-lang") === "ar"; } catch (e) {} }
+        if (ar) {
+          var h = document.documentElement;
+          h.lang = "ar"; h.dir = "rtl";
+          document.title = "FLOW HUB™ — منصة الإرسال عبر واتساب";
+        }
+      })();
+    </script>
+    <meta property="og:title" content="FLOW HUB™ — The Professional WhatsApp Platform" />
+    <meta property="og:description" content="Send thousands of WhatsApp messages professionally. Manage campaigns and customers from one platform." />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="ar_AE" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="FLOW HUB™" />
-    <meta name="twitter:description" content="منصة الإرسال الذكي عبر واتساب" />
+    <meta name="twitter:description" content="Smart WhatsApp messaging platform" />
     <!-- أيقونة التبويب. السطر الواحد الذي كان هنا (SVG وحده) يكفي كروم
          وحده: سفاري لا يقرأ SVG للتبويب، وكل متصفحٍ يطلب /favicon.ico
          من جذر الموقع مهما كُتب هنا — وذاك كان يسقط إلى صفحة التطبيق

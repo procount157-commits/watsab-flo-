@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion, useInView, useMotionValue, useSpring, AnimatePresence } from "framer-motion";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import {
   MessageCircle, Users, BarChart3, Bot, Zap, ChevronDown,
-  CheckCircle2, ArrowLeft, Shield, TrendingUp, Clock, Target,
+  CheckCircle2, ArrowLeft, ArrowRight, Shield, TrendingUp, Clock, Target,
   Smartphone, Globe, Award, Play, LayoutDashboard, Languages,
 } from "lucide-react";
 
@@ -153,7 +153,7 @@ const CONTENT = {
     badge: "Smart WhatsApp Messaging Platform",
     headline: "Scale Your WhatsApp Marketing Effortlessly",
     sub: "Manage campaigns, contacts and customer engagement from one platform.",
-    subEn: "منصة الإرسال الذكي عبر واتساب",
+    subEn: "",
     ctaStart: "Start Your Trial Now",
     ctaDemo: "See How It Works",
     ctaContact: "Contact Us",
@@ -173,10 +173,10 @@ const CONTENT = {
     industries: {
       label: "Who is it for?",
       title: "WhatsApp Follow-Up Makes the Difference",
-      body: "A customer who opens WhatsApp dozens of times daily is far easier to reach than one who never checks their email.",
+      body: "A customer who opens WhatsApp dozens of times a day is far easier to reach than one who will never open your email.",
       items: [
-        { icon: "🍽️", title: "Restaurants & Cafes",    body: "How many customers visited this month and never came back? Send offers and coupons to past visitors — retarget them smartly." },
-        { icon: "💍", title: "Gold & Jewelry Shops",    body: "Your customer buys when they remember your store. Notify them about new collections and be the first to reach them." },
+        { icon: "🍽️", title: "Restaurants & Cafes",    body: "How many customers visited this month and never came back? Send offers and discount coupons to past visitors — and win them back." },
+        { icon: "💍", title: "Gold & Jewelry Shops",    body: "Gold customers buy when they remember your store. Tell them about new collections and be the first one they hear from." },
         { icon: "✂️", title: "Barbershops",             body: "Clients need your service regularly but forget. Send automatic reminders and special offers — turn visitors into loyal clients." },
         { icon: "💅", title: "Beauty Centers",           body: "Repeat bookings are the lifeblood of your business. Send new packages and reactivate clients who've been away." },
       ],
@@ -199,19 +199,19 @@ const CONTENT = {
         { title: "Smart Chatbot",            body: "Automatic keyword replies. Build a full conversation tree with no technical knowledge needed." },
         { title: "Reports & Analytics",      body: "Track messages sent, success rates, and campaign activity — all in one dashboard." },
         { title: "Retargeting",              body: "Identify non-responsive contacts and re-send a different message at a better time." },
-        { title: "Account Protection",       body: "Random delays and hidden text fingerprints in every message to prevent bans." },
+        { title: "Account Protection",       body: "Random delays and a hidden text fingerprint in every message to help prevent bans." },
       ],
     },
     differentiators: {
       title: "What Makes Flow Hub™ Different?",
       items: [
-        "Professional WhatsApp campaign management from an Arabic dashboard",
+        "Professional WhatsApp campaign management from an Arabic-language dashboard",
         "Organize customers, contacts, and data in one place",
         "Import contacts from Excel or directly from WhatsApp",
         "Follow up and retarget customers intelligently",
         "Clear reports to measure what works",
-        "Technical support throughout your subscription",
-        "Platform built specifically for Arabic businesses",
+        "Ongoing technical support for as long as you subscribe",
+        "Built specifically for businesses in the Arab world",
         "Automatic ban protection on every send",
       ],
     },
@@ -244,7 +244,7 @@ const CONTENT = {
     faq: {
       title: "Frequently Asked Questions",
       items: [
-        { q: "Do I need technical experience?",          a: "Not at all. The platform is designed for regular business owners. Setup takes minutes and everything is clear." },
+        { q: "Do I need technical experience?",          a: "Not at all. The platform is built for everyday business owners. Setup takes minutes and every step is explained." },
         { q: "Do I need WhatsApp Business?",             a: "No, it works with regular WhatsApp. Connect your account via QR code and start sending immediately." },
         { q: "Can I import contacts from Excel?",        a: "Yes, upload an Excel file directly or paste numbers as text. The system handles hundreds of thousands of contacts." },
         { q: "Will my account get banned?",              a: "The platform uses smart delays and hidden fingerprints to minimize ban risk. Hundreds of clients use it daily safely." },
@@ -253,7 +253,7 @@ const CONTENT = {
       ],
     },
     cta: {
-      title: "A customer who bought once is the easiest customer to buy again.",
+      title: "A customer who has bought once is the easiest one to sell to again.",
       body: "The difference between a business that grows and one that declines is the ability to stay in front of the customer consistently. Flow Hub™ helps you build that relationship and turn it into repeat sales.",
       btnStart: "Get Started",
       btnDemo: "Book a Live Demo",
@@ -337,7 +337,7 @@ function FaqItem({ q, a }: { q: string; a: string }) {
   return (
     <div className="border-b border-white/10 last:border-0">
       <button onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between py-5 text-right gap-4 group">
+        className="w-full flex items-center justify-between py-5 text-start gap-4 group">
         <span className="font-semibold text-white group-hover:text-green-400 transition-colors">{q}</span>
         <ChevronDown className={`w-5 h-5 text-green-400 flex-shrink-0 transition-transform duration-300 ${open ? "rotate-180" : ""}`} />
       </button>
@@ -414,7 +414,7 @@ function SubscribeModal({ planName, salesWaNum, onClose, lang }: {
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
         className="relative bg-[#0c1a10] border border-green-500/30 rounded-2xl p-6 w-full max-w-md shadow-2xl shadow-green-900/40 z-10">
-        <button onClick={onClose} className="absolute top-4 left-4 text-white/40 hover:text-white text-xl leading-none">✕</button>
+        <button onClick={onClose} className="absolute top-4 end-4 text-white/40 hover:text-white text-xl leading-none">✕</button>
         {sent ? (
           <div className="text-center py-6">
             <div className="w-14 h-14 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -474,14 +474,14 @@ function PriceCard({ label, price, period, badge, features, cta, highlight, dela
         : "bg-white/5 border border-white/10"}`}
     >
       {badge && (
-        <div className="absolute -top-4 right-6 bg-green-500 text-black text-xs font-bold px-4 py-1.5 rounded-full">
+        <div className="absolute -top-4 start-6 bg-green-500 text-black text-xs font-bold px-4 py-1.5 rounded-full">
           {badge}
         </div>
       )}
       <p className="text-sm text-white/60 mb-2">{label}</p>
       <div className="mb-1">
         <span className="text-4xl font-black text-white">{price}</span>
-        <span className="text-white/40 text-sm mr-2">{period}</span>
+        <span className="text-white/40 text-sm ms-2">{period}</span>
       </div>
       <div className="h-px bg-white/10 my-6" />
       <ul className="space-y-3 flex-1 mb-8">
@@ -502,12 +502,56 @@ function PriceCard({ label, price, period, badge, features, cta, highlight, dela
   );
 }
 
+// ── Language ──────────────────────────────────────────────────────
+// English is the default for every visitor. The old key ("flowhub-lang") was
+// written on every render, so everyone who ever visited has "ar" stored and it
+// says nothing about what they chose; this key is written only when the
+// visitor presses the language button, and index.html reads it too so the
+// document's lang/dir are right before React starts.
+type Lang = "ar" | "en";
+const LANG_KEY = "flowhub-landing-lang";
+
+function readLang(): Lang {
+  try { return localStorage.getItem(LANG_KEY) === "ar" ? "ar" : "en"; } catch { return "en"; }
+}
+
+const DOC_META: Record<Lang, { title: string; description: string }> = {
+  en: {
+    title: "FLOW HUB™ — WhatsApp Marketing Platform",
+    description: "FLOW HUB™ — a professional platform for bulk WhatsApp messaging and campaign and contact management, with an AI sales team that replies and follows up. Made for restaurants, gold and jewelry shops, barbershops and beauty centers.",
+  },
+  ar: {
+    title: "FLOW HUB™ — منصة الإرسال عبر واتساب",
+    description: "FLOW HUB™ — منصة احترافية لإرسال رسائل واتساب الجماعية وإدارة الحملات والعملاء. الأفضل للمطاعم، محلات الذهب، صوالين الحلاقة، والبيوتي سنتر.",
+  },
+};
+
+// Plans come from the admin panel, where the period label is typed in Arabic
+// only ("درهم / شهر"). In English it is rebuilt from the period itself.
+const YEAR_RE  = /year|annual|سن|عام/;
+const MONTH_RE = /month|شهر/;
+function periodEn(plan: DynamicPlan): string {
+  const label = plan.period_label || "";
+  if (label && !/[\u0600-\u06FF]/.test(label)) return label;
+  const text = `${plan.period} ${label}`.toLowerCase();
+  const currency = /ريال|sar/.test(text) ? "SAR" : "AED";
+  if (YEAR_RE.test(text))  return `${currency} / year`;
+  if (MONTH_RE.test(text)) return `${currency} / month`;
+  if (/week|أسبوع|اسبوع/.test(text)) return `${currency} / week`;
+  return currency;
+}
+function planNameEn(plan: DynamicPlan): string {
+  if (plan.name_en?.trim()) return plan.name_en;
+  const text = `${plan.period} ${plan.period_label || ""}`.toLowerCase();
+  if (YEAR_RE.test(text))  return "Annual Plan";
+  if (MONTH_RE.test(text)) return "Monthly Plan";
+  return "Plan";
+}
+
 // ── MAIN PAGE ─────────────────────────────────────────────────────
 export default function LandingPage() {
   const { user } = useAuth();
-  const [lang, setLang] = useState<"ar" | "en">(() =>
-    (localStorage.getItem("flowhub-lang") as "ar" | "en") || "ar"
-  );
+  const [lang, setLang] = useState<Lang>(readLang);
   const [videoOpen,   setVideoOpen]   = useState(false);
   const [waNum,       setWaNum]       = useState("971588951186");
   const [salesWaNum,  setSalesWaNum]  = useState("971588951186");
@@ -516,10 +560,16 @@ export default function LandingPage() {
 
   const c = CONTENT[lang];
 
-  // Save lang preference
-  useEffect(() => {
-    localStorage.setItem("flowhub-lang", lang);
-  }, [lang]);
+  // The document follows the page's language while the landing is shown. The
+  // rest of the app is Arabic; App.tsx puts lang/dir/title back on any other
+  // route.
+  useLayoutEffect(() => {
+    const html = document.documentElement;
+    html.lang = lang;
+    html.dir = c.dir;
+    document.title = DOC_META[lang].title;
+    document.querySelector('meta[name="description"]')?.setAttribute("content", DOC_META[lang].description);
+  }, [lang, c.dir]);
 
   // Load settings + dynamic plans
   useEffect(() => {
@@ -540,7 +590,15 @@ export default function LandingPage() {
   const openSubscribe = (planName: string) => setSubscribeModal({ open: true, planName });
   const closeSubscribe = () => setSubscribeModal({ open: false, planName: "" });
 
-  const toggleLang = () => setLang((l) => (l === "ar" ? "en" : "ar"));
+  // Only an explicit choice is remembered.
+  const toggleLang = () => {
+    const next: Lang = lang === "ar" ? "en" : "ar";
+    setLang(next);
+    try { localStorage.setItem(LANG_KEY, next); } catch {}
+  };
+
+  const waLink = (text: string) => `https://wa.me/${waNum}?text=${encodeURIComponent(text)}`;
+  const ArrowFwd = lang === "ar" ? ArrowLeft : ArrowRight;
 
   return (
     <div
@@ -559,10 +617,12 @@ export default function LandingPage() {
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Language Toggle */}
-            <button onClick={toggleLang}
+            <button onClick={toggleLang} aria-label={lang === "ar" ? "التبديل إلى الإنجليزية" : "Switch to Arabic"}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white/60 hover:text-white border border-white/15 hover:border-white/30 rounded-lg transition-all">
               <Languages className="w-3.5 h-3.5" />
-              {lang === "ar" ? "EN" : "ع"}
+              {lang === "ar"
+                ? <span lang="en">English</span>
+                : <span lang="ar" style={{ fontFamily: "'Cairo', sans-serif" }}>العربية</span>}
             </button>
             <a href={`https://wa.me/${waNum}`} target="_blank" rel="noopener noreferrer"
               className="hidden sm:flex items-center gap-2 text-sm text-white/70 hover:text-white transition-colors">
@@ -620,16 +680,18 @@ export default function LandingPage() {
             transition={{ duration: 0.7, delay: 0.2 }}
             className="text-xl text-white/50 mb-3 font-medium">{c.sub}</motion.p>
 
-          <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.7, delay: 0.25 }}
-            className="text-base text-white/30 mb-10" dir={lang === "ar" ? "ltr" : "rtl"}>
-            {c.subEn}
-          </motion.p>
+          {c.subEn ? (
+            <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7, delay: 0.25 }}
+              className="text-base text-white/30 mb-10" dir="ltr" lang="en">
+              {c.subEn}
+            </motion.p>
+          ) : <div className="mb-7" />}
 
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.35 }}
             className="flex flex-wrap items-center justify-center gap-4">
-            <a href={`https://wa.me/${waNum}?text=${lang === "ar" ? "أريد الاشتراك في Flow Hub" : "I want to subscribe to Flow Hub"}`}
+            <a href={waLink(lang === "ar" ? "أريد الاشتراك في Flow Hub" : "Hi, I'd like to subscribe to Flow Hub")}
               target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-2.5 px-6 sm:px-7 py-4 bg-green-500 hover:bg-green-400 text-black font-black rounded-xl text-base transition-all shadow-2xl shadow-green-500/30 hover:shadow-green-400/40 hover:scale-105">
               <MessageCircle className="w-5 h-5 fill-black" />
@@ -820,11 +882,12 @@ export default function LandingPage() {
             {plans.length > 0
               ? plans.map((plan, i) => (
                   <PriceCard key={plan.id}
-                    label={lang === "ar" ? plan.name : (plan.name_en || plan.name)}
+                    label={lang === "ar" ? plan.name : planNameEn(plan)}
                     price={Number(plan.price).toLocaleString(lang === "ar" ? "ar-SA" : "en-US")}
-                    period={plan.period_label || plan.period}
-                    badge={lang === "ar" ? (plan.badge || undefined) : (plan.badge_en || plan.badge || undefined)}
-                    features={lang === "ar" ? plan.features : (plan.features_en || plan.features)}
+                    period={lang === "ar" ? (plan.period_label || plan.period) : periodEn(plan)}
+                    badge={lang === "ar" ? (plan.badge || undefined) : (plan.badge_en || undefined)}
+                    features={lang === "ar" ? plan.features
+                      : (plan.features_en ?? []).filter((f) => f.trim() && !/[\u0600-\u06FF]/.test(f))}
                     cta={lang === "ar" ? "اشترك الآن" : "Subscribe Now"}
                     highlight={plan.is_featured}
                     delay={i * 0.1}
@@ -864,16 +927,16 @@ export default function LandingPage() {
               <h2 className="text-2xl sm:text-3xl font-black text-white mb-4">{c.cta.title}</h2>
               <p className="text-white/55 mb-8 leading-relaxed">{c.cta.body}</p>
               <div className="flex flex-wrap items-center justify-center gap-4">
-                <a href={`https://wa.me/${waNum}?text=${lang === "ar" ? "أريد الاشتراك في Flow Hub" : "I want to subscribe to Flow Hub"}`}
+                <a href={waLink(lang === "ar" ? "أريد الاشتراك في Flow Hub" : "Hi, I'd like to subscribe to Flow Hub")}
                   target="_blank" rel="noopener noreferrer"
                   className="flex items-center gap-2.5 px-7 py-4 bg-green-500 hover:bg-green-400 text-black font-black rounded-xl text-base transition-all shadow-2xl shadow-green-500/30 hover:scale-105">
                   <MessageCircle className="w-5 h-5 fill-black" />
                   {c.cta.btnStart}
                 </a>
-                <a href={`https://wa.me/${waNum}?text=${lang === "ar" ? "أريد حجز عرض مباشر" : "I want to book a live demo"}`}
+                <a href={waLink(lang === "ar" ? "أريد حجز عرض مباشر" : "Hi, I'd like to book a live demo of Flow Hub")}
                   target="_blank" rel="noopener noreferrer"
                   className="flex items-center gap-2.5 px-7 py-4 bg-white/10 hover:bg-white/18 border border-white/20 text-white font-bold rounded-xl text-base transition-all">
-                  <ArrowLeft className="w-5 h-5" />
+                  <ArrowFwd className="w-5 h-5" />
                   {c.cta.btnDemo}
                 </a>
               </div>
@@ -928,7 +991,7 @@ export default function LandingPage() {
               <Smartphone className="w-12 h-12 text-green-400 mx-auto mb-4" />
               <h3 className="text-xl font-bold text-white mb-2">{c.modal.title}</h3>
               <p className="text-white/50 text-sm mb-6">{c.modal.body}</p>
-              <a href={`https://wa.me/${waNum}?text=${lang === "ar" ? "أريد مشاهدة العرض التوضيحي" : "I want to see the demo"}`}
+              <a href={waLink(lang === "ar" ? "أريد مشاهدة العرض التوضيحي" : "Hi, I'd like to see the Flow Hub demo")}
                 target="_blank" rel="noopener noreferrer"
                 className="flex items-center justify-center gap-2 px-6 py-3 bg-green-500 hover:bg-green-400 text-black font-bold rounded-xl text-sm transition-colors">
                 <MessageCircle className="w-4 h-4 fill-black" />
