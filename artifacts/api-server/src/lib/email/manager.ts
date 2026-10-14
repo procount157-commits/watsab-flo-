@@ -31,6 +31,7 @@ import { getAutopilot, runAutopilot, saveAutopilot } from "./autopilot";
 import { MEASURES } from "../graph/goals";
 import { planForGoal, GOAL_METRICS, STATE_AR, type GoalMetric, type Plan } from "./goal-plan";
 import { warmupCap } from "./health";
+import { capacityToday } from "./senders";
 import { signals } from "./service";
 import { pauseCampaign, getSettings } from "./service";
 import { reconcile, repair, type LedgerFinding } from "./ledger";
@@ -144,7 +145,8 @@ export async function workTheGoal(userId: number, r: ResultsReport, apply = true
     MEASURES[goal.metric]!.read(w), MEASURES.meetings!.read(all), MEASURES.clients_won!.read(all),
     getAutopilot(userId), getSettings(userId), signals(userId).catch(() => null),
   ]);
-  const capacity = s ? warmupCap(s.dailyCap, sig?.senderAgeDays ?? 365, s.warmup) : 0;
+  // كل الصناديق معاً: الأول بتسخينه، والإضافيون بتسخينهم.
+  const capacity = s ? (await capacityToday(userId, warmupCap(s.dailyCap, sig?.senderAgeDays ?? 365, s.warmup))).total : 0;
   const plan = planForGoal({
     metric: goal.metric, target: goal.target, current, startsAt: goal.startsAt, deadline: goal.deadline,
     observed: { companies: r.overall.sent, replied: r.overall.replied, positive: r.overall.positive, meetings, clients },

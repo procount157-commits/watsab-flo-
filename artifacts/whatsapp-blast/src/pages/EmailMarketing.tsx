@@ -26,6 +26,7 @@ import { SentTab } from "./EmailSent";
 import { EmailTeamDesk } from "./EmailTeamDesk";
 import { ReachTab } from "./EmailReach";
 import { WarmupCard } from "@/components/EmailHygiene";
+import { EmailSenders } from "@/components/EmailSenders";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const card = "bg-card border border-card-border rounded-xl";
@@ -633,6 +634,7 @@ function SettingsTab() {
         <p className="text-[11px] text-muted-foreground">ابدأ بحصة صغيرة (٤٠ في الساعة، ٣٠٠ في اليوم) لعنوان جديد وارفعها بعد أسبوعين من ارتداد منخفض. الإرسال داخل ساعات العمل فقط.</p>
       </div>
       <WarmupCard skipRisky={f.skipRisky ?? true} onSkipRisky={(v) => setF({ ...f, skipRisky: v })} />
+      <EmailSenders primary={f.fromEmail} primaryCap={f.dailyCap} />
       <div className={cn(card, "p-4 space-y-3")}>
         <p className="text-sm font-semibold">اللغة والمتابعة</p>
         <div className="grid md:grid-cols-2 gap-3">

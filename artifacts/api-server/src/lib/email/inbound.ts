@@ -18,8 +18,9 @@ import { simpleParser } from "mailparser";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   db, emailSettingsTable, emailContactsTable, emailMessagesTable, emailInboundTable,
-  botEmployeesTable, businessProfileTable, type EmailSettings,
+  botEmployeesTable, businessProfileTable, type EmailSettings, emailSendersTable, type EmailSender,
 } from "@workspace/db";
+import { senderFor, asSettings } from "./senders";
 import { classifyMail, mayBecomeLead, KIND_AR, INTENT_AR, toSharedIntent, type MailKind, type EmailIntent } from "./classify";
 import { thread, threadBrief, openingsUsed } from "./thread";
 import { replyInstructions, OUTPUT_SHAPE } from "./prompts";
@@ -387,8 +388,11 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
 export async function sendReply(userId: number, inboundId: number, subject?: string, body?: string): Promise<{ messageId: number }> {
   const [inb] = await db.select().from(emailInboundTable).where(and(eq(emailInboundTable.id, inboundId), eq(emailInboundTable.userId, userId))).limit(1);
   if (!inb) throw new Error("الرسالة غير موجودة");
-  const s = await getSettings(userId);
-  if (!isConfigured(s)) throw new Error("إعدادات البريد غير مكتملة");
+  const base = await getSettings(userId);
+  if (!isConfigured(base)) throw new Error("إعدادات البريد غير مكتملة");
+  // The reply leaves from the mailbox the customer wrote back to.
+  const via = await senderFor(userId, inb.fromEmail).catch(() => null);
+  const s = via ? asSettings(base!, via) : base;
   const subj = (subject ?? inb.draftSubject ?? `Re: ${inb.subject ?? ""}`).slice(0, 300);
   const text = body ?? inb.draftReply ?? "";
   if (!text.trim()) throw new Error("الرد فارغ");
@@ -397,7 +401,7 @@ export async function sendReply(userId: number, inboundId: number, subject?: str
   const html = `<div dir="auto" style="font:15px/1.8 Arial,sans-serif;color:#111827;white-space:pre-wrap">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>`;
   const messageId = messageIdFor(token, s!.fromEmail!);
   const [m] = await db.insert(emailMessagesTable).values({
-    userId, contactId: inb.contactId, toEmail: inb.fromEmail, subject: subj, token, status: "queued", messageIdHdr: messageId,
+    userId, contactId: inb.contactId, toEmail: inb.fromEmail, subject: subj, token, status: "queued", messageIdHdr: messageId, senderId: via?.id ?? null,
   }).returning();
   try {
     const r = await sendEmail(s!, { to: inb.fromEmail, toName: inb.fromName, subject: subj, html, text, messageId, unsubscribeUrl: null, inReplyTo: inb.messageIdHdr });
@@ -413,11 +417,35 @@ export async function sendReply(userId: number, inboundId: number, subject?: str
 }
 
 // ── IMAP ──────────────────────────────────────────────────────────
+/** One inbox to read: where it is, where the last read stopped, and where to write the next stop. */
+export interface Inbox {
+  userId: number; host: string; port: number; user: string; pass: string; own: string[]; lastUid: number;
+  save: (patch: { lastUid?: number; error?: string | null }) => Promise<unknown>;
+}
+
 export async function pollMailbox(s: EmailSettings): Promise<number> {
   // The replies arrive in the mailbox that sends, almost always: an empty
   // IMAP username or password means the sender's own.
   const user = s.imapUser?.trim() || s.smtpUser, pass = s.imapPass || s.smtpPass;
   if (!s.imapHost || !user || !pass) return 0;
+  return pollInbox({
+    userId: s.userId, host: s.imapHost, port: s.imapPort ?? 993, user, pass, own: [s.fromEmail ?? ""], lastUid: s.imapLastUid,
+    save: (p) => db.update(emailSettingsTable).set({ ...(p.lastUid != null ? { imapLastUid: p.lastUid } : {}), ...(p.error !== undefined ? { imapLastError: p.error } : {}) }).where(eq(emailSettingsTable.userId, s.userId)),
+  });
+}
+
+/** Each extra sending mailbox's inbox: its replies and its bounces come back there, not to the first. */
+export async function pollSenderInbox(x: EmailSender): Promise<number> {
+  if (!x.imapHost) return 0;
+  return pollInbox({
+    userId: x.userId, host: x.imapHost, port: x.imapPort ?? 993, user: x.smtpUser, pass: x.smtpPass, own: [x.fromEmail], lastUid: x.imapLastUid,
+    save: (p) => db.update(emailSendersTable).set({ ...(p.lastUid != null ? { imapLastUid: p.lastUid } : {}), ...(p.error !== undefined ? { imapLastError: p.error } : {}) }).where(eq(emailSendersTable.id, x.id)),
+  });
+}
+
+async function pollInbox(ib: Inbox): Promise<number> {
+  const s = { userId: ib.userId, imapHost: ib.host, imapPort: ib.port, imapLastUid: ib.lastUid };
+  const user = ib.user, pass = ib.pass;
   const client = new ImapFlow({
     host: s.imapHost, port: s.imapPort ?? 993, secure: (s.imapPort ?? 993) === 993,
     auth: { user, pass }, logger: false,
@@ -431,7 +459,7 @@ export async function pollMailbox(s: EmailSettings): Promise<number> {
       // First run: start from the newest message rather than the whole mailbox.
       if (s.imapLastUid === 0) {
         const uidNext = Number(mailbox?.uidNext ?? 1);
-        await db.update(emailSettingsTable).set({ imapLastUid: Math.max(0, uidNext - 1) }).where(eq(emailSettingsTable.userId, s.userId));
+        await ib.save({ lastUid: Math.max(0, uidNext - 1) });
         return 0;
       }
       let maxUid = s.imapLastUid;
@@ -441,7 +469,7 @@ export async function pollMailbox(s: EmailSettings): Promise<number> {
         try {
           const parsed = await simpleParser(msg.source as Buffer);
           const fromAddr = parsed.from?.value?.[0];
-          if (!fromAddr?.address || fromAddr.address.toLowerCase() === (s.fromEmail ?? "").toLowerCase()) continue;
+          if (!fromAddr?.address || ib.own.some((o) => o && o.toLowerCase() === fromAddr.address!.toLowerCase())) continue;
           // الترويسات التي يحتاجها المصنّف ليعرف الآلة من الإنسان.
           // RFC 3834 يُلزم كل مجيبٍ آليٍّ مؤدّب بـ Auto-Submitted، وهي
           // أصدق من أي نمطٍ في العنوان أو النص.
@@ -462,13 +490,13 @@ export async function pollMailbox(s: EmailSettings): Promise<number> {
         }
       }
       if (maxUid !== s.imapLastUid) {
-        await db.update(emailSettingsTable).set({ imapLastUid: maxUid, imapLastError: null }).where(eq(emailSettingsTable.userId, s.userId));
+        await ib.save({ lastUid: maxUid, error: null });
       }
     } finally { lock.release(); }
     await client.logout();
   } catch (err: any) {
     const msg = String(err?.message ?? err).slice(0, 300);
-    await db.update(emailSettingsTable).set({ imapLastError: msg }).where(eq(emailSettingsTable.userId, s.userId)).catch(() => {});
+    await ib.save({ error: msg })?.catch?.(() => {});
     logger.warn({ userId: s.userId, err: msg }, "IMAP poll failed");
     try { await client.logout(); } catch {}
   }
@@ -478,6 +506,8 @@ export async function pollMailbox(s: EmailSettings): Promise<number> {
 export async function pollAllMailboxes(): Promise<void> {
   const rows = await db.select().from(emailSettingsTable).where(sql`${emailSettingsTable.imapHost} is not null and coalesce(nullif(${emailSettingsTable.imapUser}, ''), ${emailSettingsTable.smtpUser}) is not null`);
   for (const s of rows) await pollMailbox(s).catch(() => {});
+  const extra = await db.select().from(emailSendersTable).where(and(isNotNull(emailSendersTable.imapHost), sql`${emailSendersTable.status} <> 'paused'`)).catch(() => []);
+  for (const x of extra) await pollSenderInbox(x).catch(() => {});
 }
 
 /** Drafts whose moment has come. A person who edited or sent one first has already moved it out of "drafted". */

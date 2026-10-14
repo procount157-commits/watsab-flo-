@@ -24,6 +24,7 @@ import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
 import { byRisk, domainSignals, verifyDomains, holdRiskyQueued } from "./hygiene";
 import { activity } from "./team";
+import { pickSender, markSent, markBroken, holdBouncingSenders, capacityToday } from "./senders";
 import { receipt } from "../graph/receipts";
 
 /**
@@ -362,17 +363,15 @@ async function drainOne(userId: number) {
     return;
   }
 
-  // Pace: the jittered gap for this account, and the caps.
-  const gap = sendGapMs(s!.hourlyCap, v.throttle);
-  if (now - (lastSentAt.get(userId) ?? 0) < gap) return;
-
-  const hour = new Date(now - 3_600_000), day = new Date(now - 24 * 3_600_000);
-  const [[h], [d]] = await Promise.all([
-    db.select({ n: sql<number>`count(*)` }).from(emailMessagesTable).where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.status, "sent"), gte(emailMessagesTable.sentAt, hour))),
-    db.select({ n: sql<number>`count(*)` }).from(emailMessagesTable).where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.status, "sent"), gte(emailMessagesTable.sentAt, day))),
-  ]);
-  const dailyCap = warmupCap(s!.dailyCap, sig.senderAgeDays, s!.warmup);
-  if (Number(h?.n) >= s!.hourlyCap || Number(d?.n) >= dailyCap) return;
+  // Pace and caps, per mailbox: the next message goes out of whichever
+  // mailbox has used least of its day, within its hour and its gap. The
+  // first mailbox keeps the account's caps and warm-up; the others their own.
+  await holdBouncingSenders(userId).then((held) => Promise.all(held.map((x) =>
+    activity(userId, "email_guard", "hold", `أمهلتُ الصندوق ${x.email} يوماً: ارتداد ${x.pct}٪. الصناديق الأخرى تكمل.`)))).catch(() => {});
+  const pick = await pickSender(userId, s!, {
+    dailyCap: warmupCap(s!.dailyCap, sig.senderAgeDays, s!.warmup), hourlyCap: s!.hourlyCap, gapMs: sendGapMs(s!.hourlyCap, v.throttle),
+  }, v.throttle, now);
+  if (!pick) return;
 
   // Next in line: campaigns that are sending, and any sequence rung.
   const sending = db.select({ id: emailCampaignsTable.id }).from(emailCampaignsTable)
@@ -433,27 +432,38 @@ async function drainOne(userId: number) {
     return;
   }
 
-  const vars = varsFor(contact, s);
+  const es = pick.settings;
+  const vars = varsFor(contact, es);
   const base = await publicBase(userId);
   // البكسل عبر أي عنوانٍ حي؛ الروابط والإلغاء عبر عنوانٍ دائم فقط (public-url.ts).
   const keep = durable(base);
-  const rendered = renderEmail(html + (s!.signature ? `<div style="margin-top:20px">${s!.signature}</div>` : ""), vars,
-    { base, token: m.token, secret: SECRET(), pixel: !!s!.tracking, links: !!s!.tracking && !!keep },
-    { base: keep, token: m.token, fromName: s!.fromName ?? s!.fromEmail!, fromEmail: s!.fromEmail! }, brandOf(s));
+  const rendered = renderEmail(html + (es.signature ? `<div style="margin-top:20px">${es.signature}</div>` : ""), vars,
+    { base, token: m.token, secret: SECRET(), pixel: !!es.tracking, links: !!es.tracking && !!keep },
+    { base: keep, token: m.token, fromName: es.fromName ?? es.fromEmail!, fromEmail: es.fromEmail! }, brandOf(es));
   const subject = personalize(m.subject, vars);
-  const messageId = messageIdFor(m.token, s!.fromEmail!);
+  const messageId = messageIdFor(m.token, es.fromEmail!);
 
   lastSentAt.set(userId, now);
+  markSent(userId, pick.sender?.id ?? null, now);
   try {
-    const r = await sendEmail(s!, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(keep, m.token) });
-    await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId, messageIdHdr: messageId, subject }).where(eq(emailMessagesTable.id, m.id));
+    const r = await sendEmail(es, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(keep, m.token) });
+    await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId, messageIdHdr: messageId, subject, senderId: pick.sender?.id ?? null }).where(eq(emailMessagesTable.id, m.id));
     if (contact) await db.update(emailContactsTable).set({ lastSentAt: new Date() }).where(eq(emailContactsTable.id, contact.id));
     if (m.campaignId) await db.update(emailCampaignsTable).set({ sentCount: sql`${emailCampaignsTable.sentCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
     await recordEvent(userId, m.id, "sent");
     receipt({ userId, node: "sender", graph: "email", action: "send.email", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : m.sequenceJobId ? `sequence-job:${m.sequenceJobId}` : null, outputRef: `email-message:${m.id}` });
   } catch (err) {
     const e = err as SendError;
-    await db.update(emailMessagesTable).set({ status: "failed", error: String(e?.message ?? err).slice(0, 400) }).where(eq(emailMessagesTable.id, m.id));
+    // The first mailbox's login refused stops the account as it always did.
+    if (!pick.sender && e?.kind === "config") (e as any).kind = "policy";
+    // A mailbox whose login the server refused is broken, not the message:
+    // the message goes back in the queue for another mailbox.
+    if (pick.sender && e?.kind === "config") {
+      await markBroken(pick.sender.id, String(e?.message ?? err));
+      await activity(userId, "email_guard", "hold", `الصندوق ${pick.sender.fromEmail} رفض خادمه الدخول — عطّلته حتى تصحّح كلمة مروره في الإعدادات. الصناديق الأخرى تكمل.`).catch(() => {});
+      return;
+    }
+    await db.update(emailMessagesTable).set({ status: "failed", error: String(e?.message ?? err).slice(0, 400), senderId: pick.sender?.id ?? null }).where(eq(emailMessagesTable.id, m.id));
     if (m.campaignId) await db.update(emailCampaignsTable).set({ failedCount: sql`${emailCampaignsTable.failedCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
     await recordEvent(userId, m.id, "failed", { meta: { error: String(e?.message ?? err).slice(0, 200) } });
     // رفضُ **العنوان** وحده ارتدادٌ في كل شيء إلا الاسم. ورفضُ المزوّد
@@ -552,7 +562,8 @@ export async function overview(userId: number) {
   return {
     configured: isConfigured(s),
     sender: s ? { provider: s.provider, fromName: s.fromName, fromEmail: s.fromEmail, hourlyCap: s.hourlyCap, dailyCap: s.dailyCap,
-      dailyCapToday: warmupCap(s.dailyCap, (await signals(userId)).senderAgeDays, s.warmup), warmup: s.warmup,
+      dailyCapToday: (await capacityToday(userId, warmupCap(s.dailyCap, (await signals(userId)).senderAgeDays, s.warmup))).total, warmup: s.warmup,
+      mailboxes: (await capacityToday(userId, 0)).senders,
       tracking: s.tracking, imap: !!s.imapHost, autoReply: s.autoReply } : null,
     trackingBase: (await publicBase(userId)) || null,
     contacts: { total: Number(totals?.contacts ?? 0), active: Number(totals?.active ?? 0), unsubscribed: Number(totals?.unsub ?? 0), bounced: Number(totals?.bounced ?? 0), lists: Number(lists?.n ?? 0) },

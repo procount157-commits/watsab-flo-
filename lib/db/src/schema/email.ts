@@ -196,6 +196,34 @@ export const emailSequenceJobsTable = pgTable("email_sequence_jobs", {
   createdAt:  timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_email_seq_jobs_due").on(t.status, t.dueAt), index("idx_email_seq_jobs_contact").on(t.userId, t.contactId, t.status)]);
 
+// ── صناديق الإرسال الإضافية (migration 056). الأول في email_settings. ──
+export const emailSendersTable = pgTable("email_senders", {
+  id:            serial("id").primaryKey(),
+  userId:        integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  label:         varchar("label", { length: 80 }),
+  preset:        varchar("preset", { length: 20 }).notNull().default("custom"),
+  smtpHost:      varchar("smtp_host", { length: 200 }).notNull(),
+  smtpPort:      integer("smtp_port").notNull().default(587),
+  smtpSecure:    boolean("smtp_secure").notNull().default(false),
+  smtpUser:      varchar("smtp_user", { length: 200 }).notNull(),
+  smtpPass:      varchar("smtp_pass", { length: 400 }).notNull(),
+  fromName:      varchar("from_name", { length: 120 }),
+  fromEmail:     varchar("from_email", { length: 200 }).notNull(),
+  imapHost:      varchar("imap_host", { length: 200 }),
+  imapPort:      integer("imap_port").default(993),
+  imapLastUid:   integer("imap_last_uid").notNull().default(0),
+  imapLastError: text("imap_last_error"),
+  hourlyCap:     integer("hourly_cap").notNull().default(15),
+  dailyCap:      integer("daily_cap").notNull().default(80),
+  warmup:        boolean("warmup").notNull().default(true),
+  /** active | paused | broken */
+  status:        varchar("status", { length: 12 }).notNull().default("active"),
+  heldUntil:     timestamp("held_until", { withTimezone: true }),
+  heldReason:    text("held_reason"),
+  createdAt:     timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [unique().on(t.userId, t.fromEmail), index("idx_email_senders_user").on(t.userId)]);
+export type EmailSender = typeof emailSendersTable.$inferSelect;
+
 export const emailMessagesTable = pgTable("email_messages", {
   id:            serial("id").primaryKey(),
   userId:        integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
@@ -207,6 +235,8 @@ export const emailMessagesTable = pgTable("email_messages", {
   /** queued | ab_hold | sent | failed | bounced */
   status:        varchar("status", { length: 20 }).notNull().default("queued"),
   variant:       varchar("variant", { length: 1 }),
+  /** الصندوق الذي خرجت منه؛ فارغ = الصندوق الأول في email_settings. */
+  senderId:      integer("sender_id"),
   providerId:    varchar("provider_id", { length: 200 }),
   token:         varchar("token", { length: 48 }).notNull().unique(),
   messageIdHdr:  varchar("message_id_hdr", { length: 300 }),

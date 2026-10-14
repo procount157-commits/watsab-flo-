@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, sql, gte } from "drizzle-orm";
 import {
-  db, listFoldersTable, emailSettingsTable, emailContactsTable, emailListsTable, emailListMembersTable,
+  db, listFoldersTable, emailSettingsTable, emailSendersTable, emailContactsTable, emailListsTable, emailListMembersTable,
   emailTemplatesTable, emailCampaignsTable, emailSequencesTable, emailSequenceJobsTable,
   emailMessagesTable, emailEventsTable, emailInboundTable, emailSegmentsTable, emailMissionsTable,
   botEmployeesTable, agentMemoryTable, emailKnowledgeDocsTable, type EmailStep,
@@ -19,6 +19,7 @@ import { hygieneReport, verifyDomains, cleanList, warmupPlan } from "../lib/emai
 import { warmupCap } from "../lib/email/health";
 import { getSettings, overview, startCampaign, pauseCampaign, enrolInSequence, cancelSequencesFor, recordEvent, verdictFor, signals, varsFor } from "../lib/email/service";
 import { verifySettings, sendEmail, isConfigured, messageIdFor } from "../lib/email/provider";
+import { sendersView, cleanSenderInput, asSettings, PRESETS } from "../lib/email/senders";
 import { checkDomain } from "../lib/email/dns";
 import { cleanRows, detectColumns, checkMx, splitBy, type ImportRow } from "../lib/email/importer";
 import { draftReply, sendReply, pollMailbox } from "../lib/email/inbound";
@@ -348,6 +349,56 @@ router.put("/settings", async (req, res) => {
   // The first configured account gets the ready-made sequence and templates.
   if (!cur) await seedEmailDefaults(userId).catch(() => {});
   res.json({ settings: mask(row), configured: isConfigured(row) });
+});
+
+// ── صناديق الإرسال الإضافية ───────────────────────────────────────
+// كلمة المرور يكتبها صاحب العمل هنا، ولا تعود في أي ردّ.
+router.get("/senders", async (req, res) => {
+  res.json({ senders: await sendersView(req.session.userId!), presets: PRESETS });
+});
+
+router.post("/senders", async (req, res) => {
+  const userId = req.session.userId!;
+  try {
+    const v = cleanSenderInput(req.body ?? {});
+    const s = await getSettings(userId);
+    if (s?.fromEmail && s.fromEmail.toLowerCase() === v.fromEmail) return res.status(400).json({ error: "هذا هو الصندوق الأول نفسه — موجود في الإعدادات" });
+    const [row] = await db.insert(emailSendersTable).values({ userId, ...v }).returning();
+    // يُفحص الدخول فوراً، فلا يدخل التدوير صندوقٌ لا يعمل.
+    const check = await verifySettings(asSettings(s ?? ({ userId } as any), row!)).catch((e) => ({ ok: false, detail: String(e?.message ?? e) }));
+    if (!check.ok) await db.update(emailSendersTable).set({ status: "broken", heldReason: check.detail.slice(0, 300) }).where(eq(emailSendersTable.id, row!.id));
+    res.json({ id: row!.id, check });
+  } catch (err: any) {
+    const dup = /unique|duplicate/i.test(String(err?.message ?? err));
+    res.status(400).json({ error: dup ? "هذا الصندوق مضاف من قبل" : String(err?.message ?? err) });
+  }
+});
+
+router.put("/senders/:id", async (req, res) => {
+  const userId = req.session.userId!, id = Number(req.params.id);
+  const [cur] = await db.select().from(emailSendersTable).where(and(eq(emailSendersTable.id, id), eq(emailSendersTable.userId, userId))).limit(1);
+  if (!cur) return res.status(404).json({ error: "غير موجود" });
+  try {
+    const v = cleanSenderInput(req.body ?? {}, cur);
+    const status = req.body?.status === "paused" ? "paused" : req.body?.status === "active" || req.body?.smtpPass ? "active" : cur.status;
+    await db.update(emailSendersTable).set({ ...v, status, ...(status === "active" ? { heldReason: null } : {}) }).where(eq(emailSendersTable.id, id));
+    res.json({ ok: true });
+  } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+});
+
+router.post("/senders/:id/test", async (req, res) => {
+  const userId = req.session.userId!, id = Number(req.params.id);
+  const [cur] = await db.select().from(emailSendersTable).where(and(eq(emailSendersTable.id, id), eq(emailSendersTable.userId, userId))).limit(1);
+  if (!cur) return res.status(404).json({ error: "غير موجود" });
+  const s = await getSettings(userId);
+  const check = await verifySettings(asSettings(s ?? ({ userId } as any), cur)).catch((e) => ({ ok: false, detail: String(e?.message ?? e) }));
+  await db.update(emailSendersTable).set(check.ok ? { status: cur.status === "broken" ? "active" : cur.status, heldReason: cur.status === "broken" ? null : cur.heldReason } : { status: "broken", heldReason: check.detail.slice(0, 300) }).where(eq(emailSendersTable.id, id));
+  res.json(check);
+});
+
+router.delete("/senders/:id", async (req, res) => {
+  await db.delete(emailSendersTable).where(and(eq(emailSendersTable.id, Number(req.params.id)), eq(emailSendersTable.userId, req.session.userId!)));
+  res.json({ ok: true });
 });
 
 router.post("/settings/test", async (req, res) => {

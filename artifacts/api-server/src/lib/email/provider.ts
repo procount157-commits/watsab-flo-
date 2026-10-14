@@ -40,10 +40,13 @@ export type SendFailure = "address" | "policy" | "transient" | "config";
 
 const POLICY_RE  = /(5\.7\.\d|spam|policy|blocked|blacklist|block list|reputation|denied|not allowed|content rejected|message rejected|suspicious|abuse|dmarc|spf|dkim|authentication)/i;
 const ADDRESS_RE = /(5\.1\.\d|5\.2\.[12]|user unknown|unknown user|no such (user|recipient|mailbox|address)|mailbox (unavailable|not found|does not exist|disabled)|recipient (address )?rejected|address rejected|does not exist|invalid (recipient|mailbox|address)|account (disabled|inactive)|undeliverable)/i;
+const AUTH_RE    = /(invalid login|authentication failed|auth(entication)? unsuccessful|username and password not accepted|535[ -]5\.7\.[038]|534[ -]5\.7\.9|application-specific password|smtp auth.*disabled)/i;
 const RATE_RE    = /(rate|too many|limit|quota|throttl|try again|temporar)/i;
 
 /** نوع الفشل من رمز الخادم ونصّه. السياسة تُسأل قبل العنوان: «5.7.1» ليست عن المستلم. */
 export function classifySendFailure(code: string, message: string): SendFailure {
+  // The server refused our login: the mailbox's password or permissions, not the message.
+  if (AUTH_RE.test(message) || code === "535" || code === "534") return "config";
   if (RATE_RE.test(message) && !/5\.1\.\d/.test(message)) return "transient";
   if (!code.startsWith("5")) return "transient";
   if (POLICY_RE.test(message)) return "policy";
@@ -81,7 +84,8 @@ function listUnsubscribe(url: string | null, from: string): Record<string, strin
 
 const transports = new Map<string, Transporter>();
 function smtpTransport(s: EmailSettings): Transporter {
-  const key = `${s.smtpHost}|${s.smtpPort}|${s.smtpUser}|${s.smtpSecure}`;
+  // The password is in the key, so a corrected password is not answered by the old pool.
+  const key = `${s.smtpHost}|${s.smtpPort}|${s.smtpUser}|${s.smtpSecure}|${s.smtpPass}`;
   let t = transports.get(key);
   if (!t) {
     t = nodemailer.createTransport({
@@ -114,7 +118,7 @@ export async function sendEmail(s: EmailSettings, m: OutgoingEmail): Promise<Sen
       // arrived needs to see that, not just "sent".
       return { providerId: info.messageId ?? null, serverReply: String(info.response ?? "").slice(0, 300), accepted: (info.accepted ?? []).map(String), rejected: (info.rejected ?? []).map(String) };
     } catch (err: any) {
-      const code = String(err?.responseCode ?? "");
+      const code = String(err?.responseCode ?? (err?.code === "EAUTH" ? "535" : ""));
       const msg = String(err?.message ?? err).slice(0, 300);
       // 5xx from the server is the address or the message; 4xx and network
       // errors are the moment.
