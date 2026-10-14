@@ -420,6 +420,8 @@ export async function sendReply(userId: number, inboundId: number, subject?: str
 /** One inbox to read: where it is, where the last read stopped, and where to write the next stop. */
 export interface Inbox {
   userId: number; host: string; port: number; user: string; pass: string; own: string[]; lastUid: number;
+  /** An extra mailbox may be a person's working inbox: only replies to our campaigns and bounces are taken from it. */
+  onlyOurs?: boolean;
   save: (patch: { lastUid?: number; error?: string | null }) => Promise<unknown>;
 }
 
@@ -438,9 +440,18 @@ export async function pollMailbox(s: EmailSettings): Promise<number> {
 export async function pollSenderInbox(x: EmailSender): Promise<number> {
   if (!x.imapHost) return 0;
   return pollInbox({
-    userId: x.userId, host: x.imapHost, port: x.imapPort ?? 993, user: x.smtpUser, pass: x.smtpPass, own: [x.fromEmail], lastUid: x.imapLastUid,
+    userId: x.userId, host: x.imapHost, port: x.imapPort ?? 993, user: x.smtpUser, pass: x.smtpPass, own: [x.fromEmail], lastUid: x.imapLastUid, onlyOurs: true,
     save: (p) => db.update(emailSendersTable).set({ ...(p.lastUid != null ? { imapLastUid: p.lastUid } : {}), ...(p.error !== undefined ? { imapLastError: p.error } : {}) }).where(eq(emailSendersTable.id, x.id)),
   });
+}
+
+/** Is this mail about our campaigns: a bounce, a reply in our thread, or from someone we wrote to? */
+async function isOurs(userId: number, from: string, inReplyTo: string | null, references: string | string[] | null, subject: string): Promise<boolean> {
+  if (/^(mailer-daemon|postmaster|mail-daemon)@/i.test(from) || /undeliver|delivery status|returned mail|failure notice|delivery failure/i.test(subject)) return true;
+  const ids = [inReplyTo, ...(Array.isArray(references) ? references : String(references ?? "").split(/\s+/))].filter((x): x is string => !!x && x.length > 3);
+  const r = await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM email_messages WHERE user_id = ${userId} AND status IN ('sent','bounced')
+    AND (lower(to_email) = lower(${from}) ${ids.length ? sql`OR message_id_hdr IN (SELECT jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))` : sql``})`);
+  return Number((r.rows[0] as any)?.n ?? 0) > 0;
 }
 
 async function pollInbox(ib: Inbox): Promise<number> {
@@ -478,6 +489,9 @@ async function pollInbox(ib: Inbox): Promise<number> {
             const val = (parsed.headers as Map<string, unknown> | undefined)?.get(k);
             if (val != null) hdrs[k] = typeof val === "string" ? val : String((val as any)?.value ?? val);
           }
+          // A person's own mail in a shared mailbox is theirs, not the campaign's:
+          // it is not read into the system, nor answered by an agent.
+          if (ib.onlyOurs && !(await isOurs(s.userId, fromAddr.address, parsed.inReplyTo ?? null, parsed.references ?? null, parsed.subject ?? ""))) continue;
           const r = await handleInbound(s.userId, {
             from: fromAddr.address, fromName: fromAddr.name || null, headers: hdrs,
             subject: parsed.subject ?? null, text: parsed.text ?? null, html: typeof parsed.html === "string" ? parsed.html : null,
