@@ -131,7 +131,11 @@ export async function factsFor(userId: number, roles: string[], days = 7): Promi
       SELECT role, sum(said)::int AS said, sum(heard)::int AS heard FROM (
         SELECT from_role AS role, count(*) AS said, 0 AS heard FROM agent_messages WHERE user_id = ${userId} AND created_at > now() - (${days} || ' days')::interval GROUP BY 1
         UNION ALL
-        SELECT to_role, 0, count(*) FROM agent_messages WHERE user_id = ${userId} AND to_role IS NOT NULL AND created_at > now() - (${days} || ' days')::interval GROUP BY 1
+        -- «قيل له» من زميل، لا من مديره ولا من صاحب العمل: أول تشغيلٍ رفع درجة
+        -- ثلاثة موظفين من ٧٥ إلى ٨٨ «بعد المهمة» — والذي رفعها رسالة المهمة نفسها.
+        SELECT to_role, 0, count(*) FROM agent_messages WHERE user_id = ${userId} AND to_role IS NOT NULL
+          AND from_role NOT IN ('chief', 'email_manager', 'engineer', 'owner', 'ig_manager', 'tt_manager', 'li_manager')
+          AND created_at > now() - (${days} || ' days')::interval GROUP BY 1
       ) x GROUP BY role`),
     accuracyByRole(userId, Math.max(days, 14)),
   ]);
