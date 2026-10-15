@@ -132,9 +132,36 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
   const cityByPhone = new Map((await db.execute<{ d: string; city: string }>(sql`
     SELECT regexp_replace(phone, '\D', '', 'g') AS d, city FROM email_contacts
     WHERE user_id = ${userId} AND nullif(phone, '') IS NOT NULL AND nullif(city, '') IS NOT NULL`)).rows.map((x) => [x.d, x.city] as const));
+  // Numbers the data desk has not classified yet (it works in the background
+  // and a restart cuts it short): read by their own name, here and now, and
+  // the sector kept on the number. A list where most numbers are companies
+  // sends the rest to «غير مصنف»; a list of people (a shop's customers) is
+  // left as it is.
+  const quick = new Map<number, string>();
+  const byGroup = new Map<number, Array<{ id: number; s: string | null }>>();
+  for (const r of rows) {
+    if (r.sector || busy.has(Number(r.group_id))) continue;
+    const g = byId.get(Number(r.group_id))!;
+    if (g.segment) continue;
+    const arr = byGroup.get(g.id) ?? [];
+    arr.push({ id: Number(r.id), s: classifySector({ company: r.name ?? "" }) });
+    byGroup.set(g.id, arr);
+  }
+  for (const [gid, arr] of byGroup) {
+    const known = arr.filter((x) => x.s).length;
+    const companies = known >= Math.max(5, arr.length * 0.3) || GENERIC_LIST.test(fixMojibake(byId.get(gid)!.name));
+    if (!companies) continue;
+    for (const x of arr) quick.set(x.id, x.s ?? UNCLASSIFIED);
+  }
+  const bySector = new Map<string, number[]>();
+  for (const [id, sec] of quick) if (sec !== UNCLASSIFIED) bySector.set(sec, [...(bySector.get(sec) ?? []), id]);
+  for (const [sec, ids] of bySector) for (let i = 0; i < ids.length; i += 1000) {
+    await db.update(contactsTable).set({ sector: sec, sectorBy: "own" } as any).where(inArray(contactsTable.id, ids.slice(i, i + 1000)));
+  }
+
   const placements: Placement[] = rows.filter((r) => !busy.has(Number(r.group_id))).map((r) => {
     const g = byId.get(Number(r.group_id))!;
-    return { contactId: Number(r.id), from: g.id, sector: r.sector ?? g.segment ?? fallbackSector(g.name, r.name), source: emirateOf(cityByPhone.get(String(r.phone ?? "").replace(/\D/g, ""))) };
+    return { contactId: Number(r.id), from: g.id, sector: r.sector ?? g.segment ?? quick.get(Number(r.id)) ?? fallbackSector(g.name, r.name), source: emirateOf(cityByPhone.get(String(r.phone ?? "").replace(/\D/g, ""))) };
   });
 
   let moved = 0, made = 0;
