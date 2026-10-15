@@ -40,6 +40,9 @@ const RULES: Array<[string, RegExp]> = [
   ["ملابس وأزياء",       /(fashion|garments?|textiles?|tailor|abaya|clothing|shoes|ملابس|ازياء|اقمشه|خياطه|عبايات)/],
   ["إلكترونيات",         /(electronics?|mobile phones?|mobiles\b|الكترونيات|هواتف|جوالات)/],
   ["استشارات",           /(consultan|consulting|management|advisory|استشارات|استشاري)/],
+  // Shops and retail: after every specific trade (gold, clothes, phones, food
+  // are matched above), so a «محلات ذهب» list stays gold.
+  ["متاجر وتجزئة",       /(retail|\bstores?\b|\bshops?\b|\bmart\b|boutique|outlet|showroom|متجر|متاجر|تجزئه|محل|محلات|بوتيك)/],
   ["تجارة عامة",         /(general trading|trading|import|export|traders?|تجاره عامه|تجاره|استيراد|تصدير)/],
 ];
 

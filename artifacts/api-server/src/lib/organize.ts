@@ -148,10 +148,16 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
     byGroup.set(g.id, arr);
   }
   for (const [gid, arr] of byGroup) {
+    const listName = fixMojibake(byId.get(gid)!.name);
+    // A file named for its sector («الإمارات-متاجر-وتجزئة») gives that sector
+    // to the numbers whose own names say nothing.
+    const fileSector = classifySector({ company: listName });
     const known = arr.filter((x) => x.s).length;
-    const companies = known >= Math.max(5, arr.length * 0.3) || GENERIC_LIST.test(fixMojibake(byId.get(gid)!.name));
+    // A file's name counts only when some of its names are companies too: a
+    // shop's customer list («عملاء المحل») is people, whatever it is called.
+    const companies = (!!fileSector && known >= Math.max(3, arr.length * 0.05)) || known >= Math.max(5, arr.length * 0.3) || GENERIC_LIST.test(listName);
     if (!companies) continue;
-    for (const x of arr) quick.set(x.id, x.s ?? UNCLASSIFIED);
+    for (const x of arr) quick.set(x.id, x.s ?? fileSector ?? UNCLASSIFIED);
   }
   const bySector = new Map<string, number[]>();
   for (const [id, sec] of quick) if (sec !== UNCLASSIFIED) bySector.set(sec, [...(bySector.get(sec) ?? []), id]);
