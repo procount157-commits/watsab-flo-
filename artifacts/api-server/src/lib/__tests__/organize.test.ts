@@ -1,7 +1,7 @@
 // مجلدٌ لكل قطاع، قائمةٌ لكل ملف، وكل جهةٍ مرةً واحدة. دوالّ صِرفة، بأسماء القوائم الحقيقية.
 export {};
 process.env.DATABASE_URL ??= "postgres://unused@localhost/unused";
-const { fixMojibake, sourceName, listSource, plan, emirateOf, NO_EMIRATE } = await import("../organize");
+const { fixMojibake, sourceName, listSource, plan, emirateOf, NO_EMIRATE, fallbackSector } = await import("../organize");
 let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(52)} ${d}`); };
 
@@ -32,6 +32,11 @@ const E: Array<[string, string]> = [["Dubai", "دبي"], ["dubai", "دبي"], ["
   ["الفجيرة", "الفجيرة"], ["Fujairah", "الفجيرة"], ["ام القيوين", "أم القيوين"], ["Umm Al Quwain", "أم القيوين"], ["Umm al Qaiwain", "أم القيوين"], ["", NO_EMIRATE], ["Riyadh", NO_EMIRATE]];
 const wrong = E.filter(([c, e]) => emirateOf(c) !== e);
 check("الإمارة · كل المدن الحقيقية في إمارتها", wrong.length === 0, wrong.map(([c]) => `${c}→${emirateOf(c)}`).join(" · "));
+
+check("غير مصنّف · قائمة «00-الكل» تُصنَّف", fallbackSector("00-الكل", "Max Fat Loss") !== null, String(fallbackSector("00-الكل", "Max Fat Loss")));
+check("غير مصنّف · الاسم يُقرأ من جديد", fallbackSector("00-الكل", "Dubai Dentist - Dr. Lukman") !== "غير مصنف", String(fallbackSector("00-الكل", "Dubai Dentist - Dr. Lukman")));
+check("غير مصنّف · ALL و«يحتاج مراجعة» عامّة", fallbackSector("uae-real-estate-companies-ALL", "x") !== null && fallbackSector("الإمارات-يحتاج-مراجعة", "x") !== null);
+check("غير مصنّف · زبائن فلوريت يبقون", fallbackSector("مستخرج من واتساب - 3", "أم سعيد") === null && fallbackSector("من إعلان: دردش معنا", "Fatima") === null);
 
 console.log(`\n${pass}/${total} ${pass === total ? "✅" : "❌"}`);
 process.exit(pass === total ? 0 : 1);

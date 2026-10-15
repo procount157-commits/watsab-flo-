@@ -18,6 +18,7 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db, contactGroupsTable, contactsTable, emailListsTable, emailListMembersTable } from "@workspace/db";
 import { folderForSector, fileUnfiledLists } from "./folders";
+import { classifySector, UNCLASSIFIED } from "./email/sector";
 import { logger } from "./logger";
 
 /** Arabic read as Latin-1 on an old upload («Ø§ÙÙÙ») back to Arabic. Pure. */
@@ -72,6 +73,19 @@ export function emirateOf(city: string | null | undefined): string {
   return NO_EMIRATE;
 }
 
+/** A list whose name says nothing of what is in it («00-الكل», «…-ALL», «…-موسّع»). Pure. */
+export const GENERIC_LIST = /الكل|\ball\b|موس[ّ]?ع|يحتاج|ليست|عام$|^\d+[-_ ]/iu;
+
+/**
+ * The sector of a contact the data desk left unclassified, when it sits in a
+ * list with a name that says nothing: its own name once more, else
+ * «غير مصنّف». Elsewhere (a shop's customers) it stays unsorted. Pure.
+ */
+export function fallbackSector(listName: string, name: string | null | undefined, industry?: string | null): string | null {
+  if (!GENERIC_LIST.test(fixMojibake(listName))) return null;
+  return classifySector({ company: name ?? "", industry: industry ?? "" }) ?? UNCLASSIFIED;
+}
+
 export interface Placement { contactId: number; from: number; sector: string | null; source: string }
 /** Where each contact goes: (sector, source) → one list. Contacts with no sector are left. Pure. */
 export function plan(rows: Placement[]): Map<string, { sector: string; source: string; ids: number[] }> {
@@ -111,8 +125,8 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
   // 2. Each contact with a sector to the list of its sector and its file.
   const groups = await db.select().from(contactGroupsTable).where(eq(contactGroupsTable.userId, userId));
   const byId = new Map(groups.map((g) => [g.id, g]));
-  const rows = (await db.execute<{ id: number; group_id: number; sector: string | null; phone: string | null }>(sql`
-    SELECT c.id, c.group_id, c.sector, c.phone FROM contacts c JOIN contact_groups g ON g.id = c.group_id WHERE g.user_id = ${userId}`)).rows;
+  const rows = (await db.execute<{ id: number; group_id: number; sector: string | null; phone: string | null; name: string | null }>(sql`
+    SELECT c.id, c.group_id, c.sector, c.phone, c.name FROM contacts c JOIN contact_groups g ON g.id = c.group_id WHERE g.user_id = ${userId}`)).rows;
   // A number's emirate: the city of the same company in the email section
   // (both came from the same files; the number list keeps no city of its own).
   const cityByPhone = new Map((await db.execute<{ d: string; city: string }>(sql`
@@ -120,7 +134,7 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
     WHERE user_id = ${userId} AND nullif(phone, '') IS NOT NULL AND nullif(city, '') IS NOT NULL`)).rows.map((x) => [x.d, x.city] as const));
   const placements: Placement[] = rows.filter((r) => !busy.has(Number(r.group_id))).map((r) => {
     const g = byId.get(Number(r.group_id))!;
-    return { contactId: Number(r.id), from: g.id, sector: r.sector ?? g.segment ?? null, source: emirateOf(cityByPhone.get(String(r.phone ?? "").replace(/\D/g, ""))) };
+    return { contactId: Number(r.id), from: g.id, sector: r.sector ?? g.segment ?? fallbackSector(g.name, r.name), source: emirateOf(cityByPhone.get(String(r.phone ?? "").replace(/\D/g, ""))) };
   });
 
   let moved = 0, made = 0;
@@ -154,8 +168,8 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
 // ── Email ─────────────────────────────────────────────────────────
 export async function organizeEmail(userId: number): Promise<OrganizeReport> {
   // Every address in a top-level list, with its sector and the file it came from.
-  const rows = (await db.execute<{ contact_id: number; list_id: number; list_name: string; sector: string | null; city: string | null }>(sql`
-    SELECT m.contact_id, m.list_id, l.name AS list_name, c.sector, c.city
+  const rows = (await db.execute<{ contact_id: number; list_id: number; list_name: string; sector: string | null; city: string | null; company: string | null; industry: string | null }>(sql`
+    SELECT m.contact_id, m.list_id, l.name AS list_name, c.sector, c.city, c.company, c.industry
     FROM email_list_members m JOIN email_lists l ON l.id = m.list_id JOIN email_contacts c ON c.id = m.contact_id
     WHERE l.user_id = ${userId} AND l.parent_list_id IS NULL
     ORDER BY m.contact_id, l.id`)).rows;
@@ -169,7 +183,8 @@ export async function organizeEmail(userId: number): Promise<OrganizeReport> {
     const id = Number(r.contact_id);
     if (seen.has(id)) continue;
     seen.add(id);
-    if (r.sector) placements.push({ contactId: id, from: Number(r.list_id), sector: r.sector, source: emirateOf(r.city) });
+    const sector = r.sector ?? fallbackSector(r.list_name, r.company, r.industry);
+    if (sector) placements.push({ contactId: id, from: Number(r.list_id), sector, source: emirateOf(r.city) });
     else keepUnsorted.push({ contactId: id, listId: Number(r.list_id) });
   }
 
