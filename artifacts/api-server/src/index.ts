@@ -42,7 +42,7 @@ import { startManagerLoop } from "./lib/email/manager";
 import { startWaManagerLoop } from "./lib/wa-manager";
 import { startCatalogSync } from "./lib/catalog/floret";
 import { startListKeeper } from "./lib/list-keeper";
-import { startListFiling } from "./lib/folders";
+import { startOrganizing } from "./lib/organize";
 import { startEngineerRounds } from "./lib/graph/engineer";
 
 // ── Process-level crash guard ─────────────────────────────────────
@@ -162,8 +162,8 @@ function startListening() {
     startCaretaker();
     startCatalogSync();
     startListKeeper();
-    // كل قائمة واتساب في مجلد، من أي طريقٍ جاءت.
-    startListFiling();
+    // مجلدٌ لكل قطاع، قائمةٌ لكل ملف، وكل رقمٍ وإيميلٍ مرةً واحدة.
+    startOrganizing();
     startEngineerRounds();
     startAutopilotWorker();
     // أربعة محلّلين، جولةٌ يومية بفاصلٍ بينهم: الحساب المجاني يعطي
