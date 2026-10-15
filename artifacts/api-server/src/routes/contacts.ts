@@ -14,6 +14,7 @@ import { registerOnConnectHook } from "../lib/whatsapp";
 registerOnConnectHook((userId) => { setTimeout(() => void validatePending(userId).catch(() => {}), 30_000); });
 import { findDuplicates, removeDuplicates } from "../lib/dedupe";
 import { folderForSector, listSector, fileUnfiledLists } from "../lib/folders";
+import { importRows } from "../lib/email/intake";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -222,6 +223,19 @@ router.post("/import", upload.single("file"), async (req, res) => {
   const parsed = parseTables(tables, country);
   const foreign = b.foreign === "true" || b.foreign === true;
   const wa = whatsappEntries(parsed.rows, { mobileOnly, allMobiles, foreign });
+  if (!wa.entries.length && parsed.rows.some((r) => r.email || r.emails?.length)) {
+    // No WhatsApp numbers, but addresses: the file belongs to the email section.
+    const rawRows = parsed.rows.flatMap((r) => {
+      const found = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+      const common = { name: "", company: r.company ?? "", phone: "", industry: r.industry ?? "", city: r.city ?? "" };
+      return found.map((addr, i) => ({ ...common, email: addr, name: i === 0 ? (r.person ?? "") : "" }));
+    });
+    const name = String(b.name ?? "").trim() || (fileName ? fileName.replace(/\.[a-z0-9]+$/i, "") : `إيميلات ${new Date().toISOString().slice(0, 10)}`);
+    const out = await importRows(userId, rawRows, parsed, fileName, { listName: name, saveWhatsapp: false });
+    if (out.status !== 200) return res.status(out.status).json(out.json);
+    return res.json({ file: fileName || null, total: parsed.total, added: 0, groups: [], emailOnly: true,
+      email: { inserted: out.json.inserted, list: out.json.list?.name ?? name, folder: out.json.folder ?? null } });
+  }
   if (!wa.entries.length) {
     return res.status(400).json({
       error: parsed.total ? "لم أجد أرقام واتساب في الملف" : "الملف فارغ",
@@ -279,6 +293,21 @@ router.post("/import", upload.single("file"), async (req, res) => {
       .catch((err) => logger.warn({ userId, listId: g.id, err: String(err?.message ?? err) }, "مكتب البيانات تعذّر بعد رفع الأرقام"));
   }
 
+  // The same file's email addresses go to the email section, under the same
+  // name and sorted the same way — the owner uploads once, from either place.
+  let email: null | { inserted: number; list: string; folder: string | null; error?: string } = null;
+  if (parsed.rows.some((r) => r.email || r.emails?.length)) {
+    const rawRows = parsed.rows.flatMap((r) => {
+      const found = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+      const common = { name: "", company: r.company ?? "", phone: r.whatsapp?.e164 ?? "", industry: r.industry ?? "", city: r.city ?? "" };
+      return found.map((addr, i) => ({ ...common, email: addr, name: i === 0 ? (r.person ?? "") : "" }));
+    });
+    const out = await importRows(userId, rawRows, parsed, fileName, { listName, saveWhatsapp: false }).catch((err) => ({ status: 500, json: { error: String(err?.message ?? err) } }));
+    email = out.status === 200
+      ? { inserted: out.json.inserted, list: out.json.list?.name ?? listName, folder: out.json.folder ?? null }
+      : { inserted: 0, list: listName, folder: null, error: out.json?.error ?? "تعذّر حفظ الإيميلات" };
+  }
+
   // A list with no sector still goes in a folder — by where it came from or its batch.
   if (!folder) {
     const filed = await fileUnfiledLists(userId).catch(() => [] as Array<{ list: string; folder: string }>);
@@ -305,6 +334,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
     groups: saved.groups,
     verifying,
     sample: wa.entries.slice(0, 8),
+    email,
   });
 });
 

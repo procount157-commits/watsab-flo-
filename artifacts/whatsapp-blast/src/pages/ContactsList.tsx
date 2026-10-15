@@ -59,6 +59,11 @@ export default function ContactsList() {
       const r = await fetch("/api/contacts/import", { method: "POST", body: fd, credentials: "include" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error ?? "تعذّر الاستيراد");
+      // One upload fills both sections: the file's emails went to the email section too.
+      const mail = d.email && !d.email.error ? `${d.email.inserted.toLocaleString("ar-SA")} إيميل في قسم البريد (قائمة «${d.email.list}»${d.email.folder ? ` · مجلد «${d.email.folder}»` : ""})` : "";
+      if (d.email?.error) toast.error(`الإيميلات لم تُحفظ: ${d.email.error}`);
+      if (d.emailOnly) { toast.success(`الملف بلا أرقام واتساب — حُفظ ${mail}`); queryClient.invalidateQueries({ queryKey: ["folders", "email"] }); return; }
+      if (mail) toast.success(`وأيضاً: ${mail}`);
       toast.success(`حُفظ ${d.added.toLocaleString("ar-SA")} رقم واتساب${d.named ? " بأسماء الشركات" : ""}${d.addedTo ? ` في قائمتها السابقة «${d.addedTo}»` : ""}${d.folder ? ` · في مجلد «${d.folder}»` : ""}${d.inOtherLists ? ` · تُرك ${d.inOtherLists} موجود في قوائم أخرى` : ""}${d.verifying ? " — يجري التحقق على واتساب" : ""}`);
       queryClient.invalidateQueries({ queryKey: getListContactsQueryKey() });
       queryClient.invalidateQueries({ queryKey: ["folders", "wa"] });
