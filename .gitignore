@@ -23,6 +23,9 @@ auth_info_baileys/
 replit.nix
 artifacts/api-server/uploads/
 artifacts/api-server/uploads-tmp/
+# Media users upload at runtime, wherever the server is started from. Not
+# code, and this repository is public.
+/uploads/
 
 # per-user Baileys session dirs and the last confirmed WA Web version
 whatsapp-session/
