@@ -13,7 +13,7 @@ import { registerOnConnectHook } from "../lib/whatsapp";
 // An import made while the line was down is checked the moment it comes back.
 registerOnConnectHook((userId) => { setTimeout(() => void validatePending(userId).catch(() => {}), 30_000); });
 import { findDuplicates, removeDuplicates } from "../lib/dedupe";
-import { folderForSector, listSector } from "../lib/folders";
+import { folderForSector, listSector, fileUnfiledLists } from "../lib/folders";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -279,6 +279,12 @@ router.post("/import", upload.single("file"), async (req, res) => {
       .catch((err) => logger.warn({ userId, listId: g.id, err: String(err?.message ?? err) }, "مكتب البيانات تعذّر بعد رفع الأرقام"));
   }
 
+  // A list with no sector still goes in a folder — by where it came from or its batch.
+  if (!folder) {
+    const filed = await fileUnfiledLists(userId).catch(() => [] as Array<{ list: string; folder: string }>);
+    const mine = filed.find((f) => f.list === listName);
+    if (mine) folder = { id: 0, name: mine.folder };
+  }
   res.json({
     file: fileName || null,
     total: parsed.total,

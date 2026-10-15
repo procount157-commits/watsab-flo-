@@ -19,6 +19,7 @@ import { asAgent } from "../agent-context";
 import { say } from "../agent-comms";
 import { receipt } from "../graph/receipts";
 import { logger } from "../logger";
+import { fileUnfiledLists } from "../folders";
 import { classifyRow, modelPrompt, parseModel, readList, bucketOf, BUCKET_AR, sendable, type SectorBy, type ListReading } from "./classify";
 import { cleanEmail, cleanName, type Clearance } from "./clean";
 
@@ -297,6 +298,8 @@ export async function runDesk(userId: number, opts: { channel: Channel; listId: 
 
   await db.execute(sql`INSERT INTO data_desk_runs (user_id, channel, list_id, list_name, trigger, report) VALUES (${userId}, ${opts.channel}, ${opts.listId}, ${listName.slice(0, 200)}, ${opts.trigger ?? "owner"}, ${JSON.stringify(report)}::jsonb)`);
   logger.info({ userId, channel: opts.channel, listId: opts.listId, total: reading.total, unknown: reading.unknown, filed: filed.length }, "جولة مكتب البيانات");
+  // ما فرزه المكتب يدخل مجلد قطاعه فوراً، لا بعد عشر دقائق.
+  if (opts.channel === "whatsapp") await fileUnfiledLists(userId).catch(() => []);
   return report;
 }
 
