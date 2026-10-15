@@ -1,7 +1,7 @@
 // مجلدٌ لكل قطاع، قائمةٌ لكل ملف، وكل جهةٍ مرةً واحدة. دوالّ صِرفة، بأسماء القوائم الحقيقية.
 export {};
 process.env.DATABASE_URL ??= "postgres://unused@localhost/unused";
-const { fixMojibake, sourceName, listSource, plan } = await import("../organize");
+const { fixMojibake, sourceName, listSource, plan, emirateOf, NO_EMIRATE } = await import("../organize");
 let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(52)} ${d}`); };
 
@@ -25,5 +25,13 @@ check("الخطة · مقاولات من ملفين ← قائمتان في مج
 check("الخطة · الملف نفسه من قائمتين ← قائمة واحدة", p.get("مقاولات\u000000-الكل")!.ids.join() === "1,2");
 check("الخطة · قطاع آخر من الملف نفسه ← مجلده", p.get("عقارات\u000000-الكل")!.ids.join() === "4");
 check("الخطة · بلا قطاع لا يُنقل", ![...p.values()].some((b) => b.ids.includes(5)));
+const E: Array<[string, string]> = [["Dubai", "دبي"], ["dubai", "دبي"], ["دبي", "دبي"], ["Deira", "دبي"], ["Business Bay", "دبي"], ["Dubai Healthcare City", "دبي"],
+  ["Abu Dhabi", "أبوظبي"], ["أبوظبي", "أبوظبي"], ["abudhabi / mussafah", "أبوظبي"], ["Al Ain", "أبوظبي"], ["العين", "أبوظبي"], ["الظفرة", "أبوظبي"], ["مَدينة أبوظبي الصناعية", "أبوظبي"],
+  ["الشارقة", "الشارقة"], ["Sharjah", "الشارقة"], ["مدينة خور فكان", "الشارقة"], ["كلباء", "الشارقة"], ["الذيد", "الشارقة"], ["Dhaid", "الشارقة"], ["البطايح", "الشارقة"],
+  ["Ajman", "عجمان"], ["Al Ajman", "عجمان"], ["Ras Al Khaimah", "رأس الخيمة"], ["Ras al-Khaimah", "رأس الخيمة"], ["راس الخيمة", "رأس الخيمة"],
+  ["الفجيرة", "الفجيرة"], ["Fujairah", "الفجيرة"], ["ام القيوين", "أم القيوين"], ["Umm Al Quwain", "أم القيوين"], ["Umm al Qaiwain", "أم القيوين"], ["", NO_EMIRATE], ["Riyadh", NO_EMIRATE]];
+const wrong = E.filter(([c, e]) => emirateOf(c) !== e);
+check("الإمارة · كل المدن الحقيقية في إمارتها", wrong.length === 0, wrong.map(([c]) => `${c}→${emirateOf(c)}`).join(" · "));
+
 console.log(`\n${pass}/${total} ${pass === total ? "✅" : "❌"}`);
 process.exit(pass === total ? 0 : 1);

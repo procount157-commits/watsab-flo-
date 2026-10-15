@@ -8,7 +8,7 @@
 // The order, for WhatsApp numbers and email addresses alike:
 //   · the folder is the contact's sector (the owner's own folder for that
 //     sector when there is one);
-//   · inside it, one list per file the contacts came from;
+//   · inside it, one list per emirate («مقاولات — دبي»);
 //   · a contact is in exactly one list — a number repeated is deleted, an
 //     address in two lists stays only in its own.
 // A contact whose sector is not known stays where it is (Floret's customers
@@ -44,6 +44,32 @@ export function listSource(name: string): string {
   const n = fixMojibake(name.trim());
   if (/^مفروز\s*[—-]/u.test(n)) return "من قوائم أخرى";
   return n.replace(/\s+—\s+.+$/u, "").replace(/\s*[-–]\s*\d+\s*$/u, "").trim() || n;
+}
+
+// ── Inside a sector folder: one list per emirate ──────────────────
+// Lists named after their file ended up called «00-الكل», «…-ALL»,
+// «…-موسّع» — names that say nothing. The owner: «لا أريد الكل، أريد
+// تصنيفها». The file is not a classification; the emirate is, and 99% of
+// the companies carry their city.
+export const EMIRATES = ["دبي", "أبوظبي", "الشارقة", "عجمان", "رأس الخيمة", "الفجيرة", "أم القيوين"] as const;
+export const NO_EMIRATE = "إمارة غير محددة";
+
+const EMIRATE_WORDS: Array<[RegExp, (typeof EMIRATES)[number]]> = [
+  [/dubai|دبي|deira|ديرة|bur ?dubai|jebel ?ali|جبل علي|business bay|الخليج التجاري|jumeirah|جميرا|al ?quoz|القوز|marina|مرسى|karama|الكرامة|al ?barsha|البرشاء|silicon|daz|healthcare city|international city|المدينة العالمية/i, "دبي"],
+  [/abu ?dhabi|abudhabi|أبو ?ظبي|ابو ?ظبي|ابوظبي|أبوظبي|al ?ain|العين|mussafah|مصفح|الظفرة|dhafra|ruwais|الرويس|khalifa city|مدينة خليفة|بني ياس|baniyas/i, "أبوظبي"],
+  [/sharjah|الشارقة|khor ?fakkan|خور ?فكان|kalba|كلباء|dhaid|الذيد|الحمرية|hamriyah|البطايح|batayih|مليحة|المدام|madam/i, "الشارقة"],
+  [/ajman|عجمان/i, "عجمان"],
+  [/ras ?al[- ]?khaimah|رأس ?الخيمة|راس ?الخيمة|\brak\b/i, "رأس الخيمة"],
+  [/fujairah|الفجيرة|dibba|دبا|masafi|مسافي/i, "الفجيرة"],
+  [/umm ?al[- ]?qu?a?i?w(a|ai)in|أم ?القيوين|ام ?القيوين/i, "أم القيوين"],
+];
+
+/** The emirate of a city or district, in Arabic or English. Pure. */
+export function emirateOf(city: string | null | undefined): string {
+  const c = String(city ?? "").trim();
+  if (!c) return NO_EMIRATE;
+  for (const [re, e] of EMIRATE_WORDS) if (re.test(c)) return e;
+  return NO_EMIRATE;
 }
 
 export interface Placement { contactId: number; from: number; sector: string | null; source: string }
@@ -85,11 +111,16 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
   // 2. Each contact with a sector to the list of its sector and its file.
   const groups = await db.select().from(contactGroupsTable).where(eq(contactGroupsTable.userId, userId));
   const byId = new Map(groups.map((g) => [g.id, g]));
-  const rows = (await db.execute<{ id: number; group_id: number; sector: string | null }>(sql`
-    SELECT c.id, c.group_id, c.sector FROM contacts c JOIN contact_groups g ON g.id = c.group_id WHERE g.user_id = ${userId}`)).rows;
+  const rows = (await db.execute<{ id: number; group_id: number; sector: string | null; phone: string | null }>(sql`
+    SELECT c.id, c.group_id, c.sector, c.phone FROM contacts c JOIN contact_groups g ON g.id = c.group_id WHERE g.user_id = ${userId}`)).rows;
+  // A number's emirate: the city of the same company in the email section
+  // (both came from the same files; the number list keeps no city of its own).
+  const cityByPhone = new Map((await db.execute<{ d: string; city: string }>(sql`
+    SELECT regexp_replace(phone, '\D', '', 'g') AS d, city FROM email_contacts
+    WHERE user_id = ${userId} AND nullif(phone, '') IS NOT NULL AND nullif(city, '') IS NOT NULL`)).rows.map((x) => [x.d, x.city] as const));
   const placements: Placement[] = rows.filter((r) => !busy.has(Number(r.group_id))).map((r) => {
     const g = byId.get(Number(r.group_id))!;
-    return { contactId: Number(r.id), from: g.id, sector: r.sector ?? g.segment ?? null, source: g.description?.startsWith("مرتّبة: ") ? g.description.slice(8) : listSource(g.name) };
+    return { contactId: Number(r.id), from: g.id, sector: r.sector ?? g.segment ?? null, source: emirateOf(cityByPhone.get(String(r.phone ?? "").replace(/\D/g, ""))) };
   });
 
   let moved = 0, made = 0;
@@ -99,7 +130,7 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
     // The list for this sector and file: one already arranged, else a new one.
     let target = groups.find((g) => g.folderId === folder?.id && g.description === `مرتّبة: ${b.source}`);
     if (!target) {
-      [target] = await db.insert(contactGroupsTable).values({ userId, name: b.source, description: `مرتّبة: ${b.source}`, segment: b.sector, folderId: folder?.id ?? null } as any).returning();
+      [target] = await db.insert(contactGroupsTable).values({ userId, name: `${b.sector} — ${b.source}`, description: `مرتّبة: ${b.source}`, segment: b.sector, folderId: folder?.id ?? null } as any).returning();
       groups.push(target!); made++;
     }
     const ids = b.ids.filter((id) => fromOf.get(id) !== target!.id);
@@ -109,8 +140,9 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
     }
   }
 
-  // 3. Lists left empty go, unless a campaign still names them.
-  const named = new Set((await db.execute<{ id: number }>(sql`SELECT DISTINCT contact_group_id AS id FROM campaigns WHERE user_id = ${userId} AND contact_group_id IS NOT NULL`)).rows.map((x) => Number(x.id)));
+  // 3. Lists left empty go, unless a campaign is sending to them. A finished
+  //    or paused campaign only loses the link (the key is ON DELETE SET NULL).
+  const named = busy;
   const empty = (await db.execute<{ id: number }>(sql`
     SELECT g.id FROM contact_groups g WHERE g.user_id = ${userId} AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.group_id = g.id)`)).rows.map((x) => Number(x.id)).filter((id) => !named.has(id));
   if (empty.length) await db.delete(contactGroupsTable).where(inArray(contactGroupsTable.id, empty));
@@ -122,8 +154,8 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
 // ── Email ─────────────────────────────────────────────────────────
 export async function organizeEmail(userId: number): Promise<OrganizeReport> {
   // Every address in a top-level list, with its sector and the file it came from.
-  const rows = (await db.execute<{ contact_id: number; list_id: number; list_name: string; sector: string | null; source: string | null }>(sql`
-    SELECT m.contact_id, m.list_id, l.name AS list_name, c.sector, c.source
+  const rows = (await db.execute<{ contact_id: number; list_id: number; list_name: string; sector: string | null; city: string | null }>(sql`
+    SELECT m.contact_id, m.list_id, l.name AS list_name, c.sector, c.city
     FROM email_list_members m JOIN email_lists l ON l.id = m.list_id JOIN email_contacts c ON c.id = m.contact_id
     WHERE l.user_id = ${userId} AND l.parent_list_id IS NULL
     ORDER BY m.contact_id, l.id`)).rows;
@@ -137,7 +169,7 @@ export async function organizeEmail(userId: number): Promise<OrganizeReport> {
     const id = Number(r.contact_id);
     if (seen.has(id)) continue;
     seen.add(id);
-    if (r.sector) placements.push({ contactId: id, from: Number(r.list_id), sector: r.sector, source: sourceName(r.source, listSource(r.list_name)) });
+    if (r.sector) placements.push({ contactId: id, from: Number(r.list_id), sector: r.sector, source: emirateOf(r.city) });
     else keepUnsorted.push({ contactId: id, listId: Number(r.list_id) });
   }
 
@@ -147,7 +179,7 @@ export async function organizeEmail(userId: number): Promise<OrganizeReport> {
     const folder = await folderForSector(userId, "email", b.sector);
     let target = lists.find((l) => l.folderId === folder?.id && l.description === `مرتّبة: ${b.source}`);
     if (!target) {
-      [target] = await db.insert(emailListsTable).values({ userId, name: b.source, description: `مرتّبة: ${b.source}`, folderId: folder?.id ?? null }).returning();
+      [target] = await db.insert(emailListsTable).values({ userId, name: `${b.sector} — ${b.source}`, description: `مرتّبة: ${b.source}`, folderId: folder?.id ?? null }).returning();
       lists.push(target!); made++;
     }
     for (const id of b.ids) home.set(id, target!.id);
