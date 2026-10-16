@@ -178,6 +178,14 @@ export async function runMission(m: EmailMission): Promise<void> {
         ...formatIssues(w.draft.html, "first"),
       ];
       if (issues.length) {
+        // The owner asked for everything to run by itself: what ماجد finds goes
+        // back to the writer, twice, before it is the owner's to read.
+        const holds = Number(((await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM email_mission_log WHERE mission_id = ${m.id} AND text LIKE 'أوقفها حارس الجودة%'`)).rows[0] as any)?.n ?? 0);
+        if (holds < 2) {
+          await log(m.id, `أوقفها حارس الجودة قبل الإرسال: ${issues.join(" · ")} — أُعيدت للكتابة تلقائياً (${holds + 1} من ٢).`, "error");
+          await set(m.id, { stage: "draft", goal: `${m.goal.split("\n\nتجنّبي في هذه الكتابة:")[0]}\n\nتجنّبي في هذه الكتابة: ${issues.slice(0, 6).join(" · ")}`.slice(0, 4000) });
+          return;
+        }
         await set(m.id, { stage: "awaiting_approval", pending: w.draft as any });
         await log(m.id, `أوقفها حارس الجودة قبل الإرسال: ${issues.join(" · ")}`, "error");
         await activity(m.userId, "email_guard", "hold", `أوقف «${m.name}» حتى تراجعها: ${issues.slice(0, 3).join(" · ")}`, { missionId: m.id, issues });

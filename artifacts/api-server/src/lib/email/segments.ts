@@ -31,7 +31,12 @@ export function conditions(userId: number, f: SegmentFilter = {}): SQL[] {
   if (f.statuses?.length) out.push(inArray(c.status, f.statuses));
   if (f.hasPhone) out.push(isNotNull(c.phone));
   if (f.listIds?.length) {
-    out.push(inArray(c.id, db.select({ id: emailListMembersTable.contactId }).from(emailListMembersTable).where(inArray(emailListMembersTable.listId, f.listIds))));
+    // A list that no longer exists (the lists are rebuilt by sector and
+    // emirate) narrows nothing: the mission keeps its sector and its rules,
+    // instead of finding nobody and waiting on the owner for ever.
+    const ids = sql.join(f.listIds.map((id) => sql`${id}`), sql`, `);
+    out.push(sql`(not exists (select 1 from email_lists l where l.id in (${ids}) and l.user_id = ${userId})
+      or ${c.id} in (select m.contact_id from email_list_members m where m.list_id in (${ids})))`);
   }
   if (f.folderIds?.length) {
     out.push(inArray(c.id, db.select({ id: emailListMembersTable.contactId }).from(emailListMembersTable)
@@ -48,7 +53,9 @@ export function conditions(userId: number, f: SegmentFilter = {}): SQL[] {
   if (f.engagement?.length) {
     const e: SQL[] = [];
     for (const k of f.engagement) {
-      if (k === "never_sent") e.push(sql`${c.lastSentAt} is null`);
+      // Not written to yet — and not waiting in the queue of another mission,
+      // or two waves for one sector would take the same companies.
+      if (k === "never_sent") e.push(sql`(${c.lastSentAt} is null and not exists (select 1 from email_messages q where q.contact_id = ${c.id} and q.status = 'queued'))`);
       if (k === "sent_no_open") e.push(sql`(${c.lastSentAt} is not null and ${c.lastOpenedAt} is null and ${c.lastRepliedAt} is null)`);
       if (k === "opened_no_reply") e.push(sql`(${c.lastOpenedAt} is not null and ${c.lastRepliedAt} is null)`);
       if (k === "replied") e.push(sql`${c.lastRepliedAt} is not null`);
