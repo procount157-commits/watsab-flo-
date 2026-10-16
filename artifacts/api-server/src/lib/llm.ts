@@ -59,9 +59,14 @@ const OPENAI_COMPATIBLE: Record<string, { url: string; model: string }> = {
   // Not one of OpenRouter's headline free models: qwen3.8-27b:free,
   // gemma-4-31b-it:free and gemma-4-26b:free each failed 3/3 with a permanent
   // upstream 429, and dots-3-note-preview writes English words into the middle
-  // of Arabic sentences. ling-3.0-flash-fin answered 3/3 in fluent Gulf Arabic.
+  // of Arabic sentences. ling-3.0-flash-fin answered 3/3 in fluent Gulf Arabic
+  // — and was withdrawn on 2026-10-16 (404, «No endpoints found»), which left
+  // the campaign writer with Zhipu alone. nemotron-3-super-120b (262k context,
+  // so the writer's long brief fits where Groq's free tier answers 413) wrote
+  // a clean English B2B email and readable Gulf Arabic; nemotron-3.5-lightning
+  // is the faster second. inkling:free answers only «agentic harnesses» (403).
   openrouter:  { url: "https://openrouter.ai/api/v1/chat/completions",
-                 model: process.env["OPENROUTER_MODEL"] ?? "inclusionai/ling-3.0-flash-fin:free" },
+                 model: process.env["OPENROUTER_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b:free" },
   // Zhipu's GLM-4-Flash is free outright rather than trial credit.
   zhipu:       { url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
                  // glm-4-flash was retired; glm-4.5-flash is the free tier now, checked
@@ -335,7 +340,7 @@ const EXTRA_MODELS: Record<string, string[]> = {
   // 1.3s, and the only model that stated the pricing rule back — "التسعير
   // يعتمد على تفاصيل نشاطك" — instead of inventing a number.
   groq: ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"],
-  openrouter: ["inclusionai/ling-3.0-flash-fin:free"],
+  openrouter: ["nvidia/nemotron-3.5-lightning:free"],
 };
 
 // Excluded deliberately, so nobody adds them back by guessing:
