@@ -27,6 +27,7 @@ import { readWorkbook, parseTables, whatsappEntries } from "../lib/phone-import"
 import { saveToNewGroup, validateInBackground } from "../lib/contact-save";
 import { folderForSector, listSector, ownFolder } from "../lib/folders";
 import { deleteContacts, deleteList } from "../lib/email/delete";
+import { listCountries, mainCountry } from "../lib/list-country";
 import { diagnose } from "../lib/email/diagnose";
 import { sentList, sentSummary, sentPreview, type SentFilter } from "../lib/email/sent";
 import { trackingState, validatePublicUrl, probePublicUrl, publicBase } from "../lib/email/public-url";
@@ -726,7 +727,11 @@ async function listStats(userId: number, listId?: number) {
   return r.rows as any[];
 }
 
-router.get("/lists", async (req, res) => res.json(await listStats(req.session.userId!)));
+router.get("/lists", async (req, res) => {
+  const userId = req.session.userId!;
+  const [lists, countries] = await Promise.all([listStats(userId), listCountries("email", userId)]);
+  res.json(lists.map((l) => ({ ...l, countries: countries.get(l.id) ?? {}, country: mainCountry(countries.get(l.id)) })));
+});
 
 router.get("/lists/:id", async (req, res) => {
   const userId = req.session.userId!;

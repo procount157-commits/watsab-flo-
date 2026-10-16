@@ -197,6 +197,7 @@ const AE_PLACES = /(uae|emirates|dubai|abu dhabi|sharjah|ajman|fujairah|ras al k
 const OTHER_PLACES: Array<[RegExp, string]> = [
   [/(qatar|doha|قطر|الدوحه)/, "QA"], [/(kuwait|الكويت)/, "KW"], [/(bahrain|manama|البحرين|المنامه)/, "BH"],
   [/(oman|muscat|عمان|مسقط)/, "OM"], [/(egypt|cairo|مصر|القاهره|الاسكندريه)/, "EG"], [/(jordan|amman|الاردن)/, "JO"],
+  [/(iraq|baghdad|basra|erbil|العراق|بغداد|البصره|اربيل)/, "IQ"], [/(sudan|khartoum|omdurman|السودان|الخرطوم|ام درمان|بورتسودان)/, "SD"],
 ];
 export function countryOf(...values: unknown[]): CountryIso | null {
   const n = normalizeArabic(values.filter(Boolean).join(" "));

@@ -15,6 +15,7 @@ registerOnConnectHook((userId) => { setTimeout(() => void validatePending(userId
 import { findDuplicates, removeDuplicates } from "../lib/dedupe";
 import { folderForSector, listSector, fileUnfiledLists } from "../lib/folders";
 import { importRows } from "../lib/email/intake";
+import { listCountries, mainCountry } from "../lib/list-country";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -58,7 +59,8 @@ router.get("/", async (req, res) => {
     .groupBy(contactGroupsTable.id)
     .orderBy(contactGroupsTable.createdAt);
 
-  res.json(groups.map((g) => ({ ...g, contacts: [] })));
+  const countries = await listCountries("wa", userId);
+  res.json(groups.map((g) => ({ ...g, contacts: [], countries: countries.get(g.id) ?? {}, country: mainCountry(countries.get(g.id)) })));
 });
 
 router.post("/", async (req, res) => {

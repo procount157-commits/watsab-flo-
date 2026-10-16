@@ -15,7 +15,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
-import { FolderSidebar, MoveToFolder, inFolder, type FolderSel } from "@/components/Folders";
+import { FolderSidebar, FolderTiles, MoveToFolder, inFolder, type FolderSel } from "@/components/Folders";
+import { CountryBar, CountryCodeSelect, CountryTag, inCountry, resolveCountry, useCountrySel, MARKETS } from "@/components/Countries";
 import { ContactDrawer, type Filter } from "./EmailAgent";
 import { ListHygiene } from "@/components/EmailHygiene";
 import { ListPipeline } from "@/components/ListPipeline";
@@ -38,6 +39,8 @@ export type EmailList = {
   reached: number; opened: number; replied: number; sector: string | null; lastSentAt: string | null;
   /** A stage list يوسف keeps under another list: its parent and which stage. */
   parentListId?: number | null; stage?: string | null;
+  /** How many of its people are in each country, and the main one (lib/list-country.ts). */
+  countries?: Record<string, number>; country?: string | null;
 };
 const STAGE_AR: Record<string, string> = { opened: "فتحوا ولم يردّوا", clicked: "نقروا", replied: "ردّوا", unopened: "لم يفتحوا" };
 
@@ -84,6 +87,14 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
   const [, navigate] = useLocation();
   const { data: lists = [], isLoading } = useEmailLists();
   const [folder, setFolder] = useState<FolderSel>("all");
+  // The country picked above the lists — shared with the numbers page — and
+  // the country a file's numbers without a code belong to.
+  const [countrySel, setCountrySel] = useCountrySel();
+  const [country, setCountry] = useState(() => MARKETS.some((m) => m.iso === countrySel) ? countrySel : "AE");
+  const pickCountry = (s: string) => { setCountrySel(s); setFolder("all"); if (MARKETS.some((m) => m.iso === s)) setCountry(s); };
+  // Always one country: the one picked, or the one with the most lists.
+  const shownCountry = useMemo(() => resolveCountry(countrySel, lists), [lists, countrySel]);
+  const inThisCountry = useMemo(() => inCountry(lists, shownCountry), [lists, shownCountry]);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"new" | "size" | "name" | "engaged">("new");
   const [creating, setCreating] = useState(false);
@@ -100,7 +111,7 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("country", "AE");
+      fd.append("country", country);
       fd.append("mx", "true");
       fd.append("saveWhatsapp", "true");
       fd.append("listName", file.name.replace(/\.[a-z0-9]+$/i, ""));
@@ -123,7 +134,7 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
   });
 
   const shown = useMemo(() => {
-    let r = inFolder(lists, folder);
+    let r = inFolder(inThisCountry, folder);
     if (q.trim()) r = r.filter((l) => l.name.toLowerCase().includes(q.trim().toLowerCase()));
     const by: Record<typeof sort, (a: EmailList, b: EmailList) => number> = {
       new: (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt),
@@ -132,7 +143,7 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
       engaged: (a, b) => (b.opened + b.replied * 3) - (a.opened + a.replied * 3),
     };
     return [...r].sort(by[sort]);
-  }, [lists, folder, q, sort]);
+  }, [inThisCountry, folder, q, sort]);
 
   const totals = useMemo(() => shown.reduce((t, l) => ({ count: t.count + l.count, sendable: t.sendable + l.sendable, replied: t.replied + l.replied, withPhone: t.withPhone + l.withPhone }), { count: 0, sendable: 0, replied: 0, withPhone: 0 }), [shown]);
 
@@ -146,12 +157,15 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
         <select className={cn(input, "w-36 text-xs")} value={sort} onChange={(e) => setSort(e.target.value as any)}>
           <option value="new">الأحدث</option><option value="size">الأكبر</option><option value="engaged">الأكثر تفاعلاً</option><option value="name">بالاسم</option>
         </select>
+        <CountryCodeSelect value={country} onChange={setCountry} className="w-40" />
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ""; }} />
         <button onClick={() => fileRef.current?.click()} disabled={uploading} className={cn(ghost, "border-primary/40 text-primary")}>
           {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} {uploading ? "يقرأ الملف…" : "ارفع ملف Excel"}
         </button>
         <button onClick={() => setCreating(true)} className={primary}><Plus className="w-3.5 h-3.5" /> قائمة جديدة</button>
       </div>
+
+      {lists.length > 0 && <CountryBar lists={lists} value={shownCountry} onChange={pickCountry} />}
 
       {creating && (
         <form onSubmit={(e) => { e.preventDefault(); if (newName.trim()) create.mutate(); }} className={cn(card, "p-3 flex gap-2 items-center")}>
@@ -163,11 +177,11 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
 
       <div className="grid md:grid-cols-[14rem_1fr] gap-4 items-start">
         <div className={cn(card, "p-2 md:sticky md:top-4")}>
-          <FolderSidebar kind="email" value={folder} onChange={setFolder} total={lists.length} onChanged={inv} lists={lists} />
+          <FolderSidebar kind="email" value={folder} onChange={setFolder} total={inThisCountry.length} onChanged={inv} lists={inThisCountry.filter((l) => !l.parentListId)} noAll />
         </div>
 
         <div className="space-y-3">
-          {shown.length > 0 && (
+          {folder !== "all" && shown.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {[["عناوين", totals.count, Mail], ["قابلة للإرسال", totals.sendable, Send], ["لها واتساب", totals.withPhone, MessageCircle], ["ردّوا", totals.replied, Reply]].map(([label, v, Icon]: any) => (
                 <div key={label} className={cn(card, "px-3 py-2.5 flex items-center gap-2.5")}>
@@ -186,10 +200,12 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
               <p className="text-sm text-muted-foreground mt-1">ارفع ملف Excel — يُقرأ وينظّف ويصبح قائمة في مجلد قطاعها.</p>
               <button onClick={() => fileRef.current?.click()} className={cn(primary, "mx-auto mt-4")}><FileSpreadsheet className="w-3.5 h-3.5" /> ارفع ملفاً</button>
             </div>
+          ) : folder === "all" ? (
+            <FolderTiles kind="email" lists={inThisCountry.filter((l) => !l.parentListId)} onPick={setFolder} unit="عنوان" />
           ) : !shown.length ? (
             <div className={cn(card, "py-12 text-center")}>
-              <p className="text-sm text-muted-foreground">{folder !== "all" ? "المجلد فارغ — اسحب إليه قائمة، أو ارفع ملفاً وهو مفتوح." : "لا قائمة بهذا الاسم."}</p>
-              <button onClick={() => { setFolder("all"); setQ(""); }} className="text-xs text-primary mt-2 hover:underline">إظهار الكل</button>
+              <p className="text-sm text-muted-foreground">{q.trim() ? "لا قائمة بهذا الاسم في هذا المجلد." : "المجلد فارغ في هذه الدولة — اسحب إليه قائمة، أو ارفع ملفاً."}</p>
+              <button onClick={() => { setFolder("all"); setQ(""); }} className="text-xs text-primary mt-2 hover:underline">عودة إلى المجلدات</button>
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -200,6 +216,7 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
                     <div className="flex-1 min-w-0">
                       <Link href={`/email/lists/${l.id}`} className="font-semibold truncate block hover:text-primary">{l.name}</Link>
                       <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <CountryTag list={l} sel={shownCountry} />
                         {l.stage && <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/30">🔁 قائمة مرحلة: {STAGE_AR[l.stage] ?? l.stage}</span>}
                         {l.sector && <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">{l.sector}</span>}
                         <span className="text-[10px] text-muted-foreground">{ago(l.lastSentAt)}</span>

@@ -31,8 +31,10 @@ export function inFolder<T extends { folderId?: number | null }>(lists: T[], sel
   return lists.filter((l) => l.folderId === sel);
 }
 
-export function FolderSidebar({ kind, value, onChange, total, onChanged, compact, lists }: {
+export function FolderSidebar({ kind, value, onChange, total, onChanged, compact, lists, noAll }: {
   kind: FolderKind; value: FolderSel; onChange: (s: FolderSel) => void; total: number; onChanged: () => void; compact?: boolean;
+  /** No «كل القوائم», and only the folders that have lists here (the country's). */
+  noAll?: boolean;
   /** The page's own lists: the counts are taken from them, so they match what the page shows. */
   lists?: Array<{ folderId?: number | null }>;
 }) {
@@ -70,8 +72,10 @@ export function FolderSidebar({ kind, value, onChange, total, onChanged, compact
   const unfoldered = lists ? lists.filter((l) => !l.folderId || !folders.some((f) => f.id === l.folderId)).length : data?.unfoldered ?? 0;
   return (
     <div className={cn("space-y-1", compact && "text-xs")}>
-      <button onClick={() => onChange("all")} className={item(value === "all", false)}><Inbox className="w-4 h-4 shrink-0" /><span className="flex-1">كل القوائم</span><span className="text-xs text-muted-foreground">{total}</span></button>
-      {folders.map((f) => (
+      {noAll
+        ? <button onClick={() => onChange("all")} className={item(value === "all", false)}><Inbox className="w-4 h-4 shrink-0" /><span className="flex-1">المجلدات</span><span className="text-xs text-muted-foreground">{folders.filter((f) => countIn(f.id)).length}</span></button>
+        : <button onClick={() => onChange("all")} className={item(value === "all", false)}><Inbox className="w-4 h-4 shrink-0" /><span className="flex-1">كل القوائم</span><span className="text-xs text-muted-foreground">{total}</span></button>}
+      {folders.filter((f) => !noAll || countIn(f.id) > 0 || value === f.id).map((f) => (
         <div key={f.id} {...dropProps(f.id, f.id)} className={item(value === f.id, over === f.id)}>
           <button onClick={() => onChange(f.id)} className="flex-1 flex items-center gap-2 min-w-0 text-right">
             {value === f.id ? <FolderOpen className="w-4 h-4 shrink-0" /> : <Folder className="w-4 h-4 shrink-0" />}
@@ -117,5 +121,36 @@ export function MoveToFolder({ kind, listId, folderId, onMoved }: { kind: Folder
       <option value="">بلا مجلد</option>
       {folders.map((f) => <option key={f.id} value={f.id}>📁 {f.name}</option>)}
     </select>
+  );
+}
+
+/**
+ * Before a folder is opened: the country's folders as tiles — name, how many
+ * lists, how many people — and nothing else. The owner opens one and sees its
+ * lists; two hundred lists at once is what he asked to have hidden.
+ */
+export function FolderTiles<T extends { folderId?: number | null; count?: number }>({ kind, lists, onPick, unit }: {
+  kind: FolderKind; lists: T[]; onPick: (s: FolderSel) => void; unit: string;
+}) {
+  const { data } = useFolders(kind);
+  const folders: any[] = data?.folders ?? [];
+  const tiles = folders.map((f) => {
+    const mine = lists.filter((l) => l.folderId === f.id);
+    return { id: f.id as FolderSel, name: f.name as string, lists: mine.length, people: mine.reduce((a, l) => a + (l.count ?? 0), 0) };
+  }).filter((t) => t.lists > 0).sort((a, b) => b.people - a.people);
+  const loose = lists.filter((l) => !l.folderId || !folders.some((f) => f.id === l.folderId));
+  if (loose.length) tiles.push({ id: "none", name: "بلا مجلد", lists: loose.length, people: loose.reduce((a, l) => a + (l.count ?? 0), 0) });
+  if (!tiles.length) return <div className="bg-card border border-card-border rounded-xl py-12 text-center text-sm text-muted-foreground">لا قوائم لهذه الدولة بعد — ارفع ملفاً وستُرتَّب هنا وحدها.</div>;
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+      {tiles.map((t) => (
+        <button key={String(t.id)} onClick={() => onPick(t.id)}
+          className="bg-card border border-card-border rounded-xl p-4 text-right hover:border-primary/50 hover:bg-primary/5 transition-colors">
+          <Folder className="w-6 h-6 text-primary mb-2" />
+          <div className="font-semibold text-sm truncate">{t.name}</div>
+          <div className="text-xs text-muted-foreground mt-1">{t.people.toLocaleString("ar-SA")} {unit} · {t.lists.toLocaleString("ar-SA")} قائمة</div>
+        </button>
+      ))}
+    </div>
   );
 }
