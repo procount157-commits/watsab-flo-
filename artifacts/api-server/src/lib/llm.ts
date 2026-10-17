@@ -387,6 +387,22 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000): Prom
   return out;
 }
 
+/**
+ * One chain does not suit every task. Measured on the server on 2026-10-17:
+ * nemotron (OpenRouter, free) wrote the best English B2B email of all the
+ * free models, and broken Gulf Arabic — English and even Cyrillic words in
+ * the middle of a reply to a jewellery customer. So the email team gets it
+ * first, and everyone who writes Arabic to people (WhatsApp) never gets it.
+ * Pure over the ranked list.
+ */
+export const ENGLISH_ONLY_MODELS = /nemotron/i;
+export function routeByTask<T extends { provider: string; model: string }>(ordered: T[], role: string | null): T[] {
+  const english = (c: T) => ENGLISH_ONLY_MODELS.test(c.model);
+  const emailTeam = !!role && (role === "email" || role.startsWith("email_"));
+  if (emailTeam) return [...ordered.filter(english), ...ordered.filter((c) => !english(c))];
+  return ordered.filter((c) => !english(c));
+}
+
 async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise<LlmResult | null> {
   const resolved = await resolveProvider();
   if (!resolved || !resolved.apiKey) return null;
@@ -416,7 +432,7 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise
   // capable than anything above it.
   add("pollinations", "", "");
 
-  const ordered = await rank(candidates, { provider: resolved.provider, model: pinnedModel });
+  const ordered = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), currentAgent()?.role ?? null);
 
   let lastErr = "";
   for (const step of ordered) {
