@@ -36,6 +36,11 @@ const health = new Map<number, Health>();
 const DEAD_AFTER = 2;
 const isDead = (userId: number): boolean => (health.get(userId)?.failures ?? 0) >= DEAD_AFTER;
 
+/** An address that exists only while one machine keeps a tunnel open. Pure. */
+export const isQuickTunnel = (u: string): boolean => {
+  try { return /\.trycloudflare\.com$/i.test(new URL(u.startsWith("http") ? u : `https://${u}`).hostname); } catch { return false; }
+};
+
 export function trackingHealth(userId: number): Health | null { return health.get(userId) ?? null; }
 
 /**
@@ -51,7 +56,13 @@ export function setTrackingHealth(userId: number, ok: boolean, why: string | nul
 export async function publicBase(userId: number): Promise<string> {
   const [s] = await db.select({ publicUrl: emailSettingsTable.publicUrl })
     .from(emailSettingsTable).where(eq(emailSettingsTable.userId, userId)).limit(1);
-  const base = clean(s?.publicUrl) || clean(process.env["SITE_URL"]);
+  // A quick tunnel (trycloudflare) lives as long as the machine that opened
+  // it. The settings kept one from the Mac after the move to the server, and
+  // every email from 5 October carried a pixel pointing at a dead address:
+  // 1,300 sends, zero opens, no retargeting, no subject test with a winner.
+  // Where the server has a real domain, the domain wins over any tunnel.
+  const saved = clean(s?.publicUrl), site = clean(process.env["SITE_URL"]);
+  const base = site && (!saved || isQuickTunnel(saved)) ? site : saved || site;
   // عنوانٌ ثبت موته لا يُستعمل: أن تخرج الرسالة بلا قياس أهون من أن
   // تخرج بروابط لا تفتح.
   return base && isDead(userId) ? "" : base;
