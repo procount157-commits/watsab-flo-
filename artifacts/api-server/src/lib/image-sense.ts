@@ -53,7 +53,8 @@ async function askGemini(prompt: string, img: { data: string; mime: string }): P
 
 const DESCRIBE = [
   "انظر إلى هذه الصورة التسويقية بدقة، وأجب بـJSON فقط:",
-  `{"vision":"جملة أو جملتان بالعربية: ماذا يظهر فيها فعلاً (الأشياء، المشهد، النص المكتوب فيها ولغته)","fits":["القطاعات التي تخصّها"],"service":"aml|services|jewelry|general"}`,
+  `{"vision":"جملة أو جملتان بالعربية: ماذا يظهر فيها فعلاً (الأشياء، المشهد، النص المكتوب فيها ولغته)","fits":["القطاعات التي تخصّها"],"service":"aml|services|jewelry|general","lang":"ar|en|mixed|none"}`,
+  "lang: لغة الكلام المكتوب على التصميم نفسه — ar إن كان كله أو جلّه عربياً، en إن كان كله أو جلّه إنجليزياً، mixed إن كان فيه الاثنان بقدرٍ متقارب، none إن لم يكن عليه كلام (الشعار وحده لا يُحسب).",
   `fits: اختر من هذه فقط: ${SECTORS.join("، ")}، ${GENERAL}.`,
   "· ضع القطاع فقط إن كان ظاهراً في الصورة نفسها: ذهب أو مجوهرات ظاهرة ⇐ «ذهب ومجوهرات»؛ مبانٍ أو عقارات ⇐ «عقارات»؛ موقع بناء أو معدات ⇐ «مقاولات»؛ طعام أو مطعم ⇐ «مطاعم ومقاهي»؛ ميزان عدالة أو محكمة ⇐ «قانونية».",
   "· صورة تجمع ذهباً وعقارات معاً تأخذ القطاعين، لا «عام».",
@@ -69,7 +70,8 @@ export async function describeAsset(a: Pick<MediaAsset, "id" | "url">): Promise<
   if (!out?.vision) return false;
   const fits = (Array.isArray(out.fits) ? out.fits : []).map(String).filter((x: string) => (SECTORS as readonly string[]).includes(x) || x === GENERAL);
   const service = ["aml", "services", "jewelry", "general"].includes(out.service) ? out.service : "general";
-  await db.update(mediaAssetsTable).set({ vision: String(out.vision).slice(0, 600), fits: fits.length ? fits : [GENERAL], service, visionAt: new Date() })
+  const lang = ["ar", "en", "mixed", "none"].includes(out.lang) ? out.lang : null;
+  await db.update(mediaAssetsTable).set({ vision: String(out.vision).slice(0, 600), fits: fits.length ? fits : [GENERAL], service, lang, visionAt: new Date() })
     .where(eq(mediaAssetsTable.id, a.id));
   return true;
 }
@@ -79,8 +81,11 @@ export async function describeAsset(a: Pick<MediaAsset, "id" | "url">): Promise<
  * Strict: a picture showing any other sector never goes — not even one that
  * shows this sector beside it.
  */
-export function fitsCampaign(a: { fits: string[] | null; service: string | null; vision: string | null }, sector: string, service: string): boolean {
+export function fitsCampaign(a: { fits: string[] | null; service: string | null; vision: string | null; lang?: string | null }, sector: string, service: string, msgLang: "ar" | "en" = "ar"): boolean {
   if (!a.vision || !a.fits?.length) return false;              // not seen yet: not used
+  // The owner: «some designs are in English and it sends them with Arabic».
+  // A design's words are in the message's language, or it has none.
+  if (!a.lang || !(a.lang === msgLang || a.lang === "none")) return false;
   // Only this sector, or general. A picture that also shows another sector
   // (gold beside buildings) is not sent to either: the owner saw exactly that
   // picture under a real-estate message and asked for it to stop.
@@ -97,7 +102,7 @@ export async function pictureMatches(url: string, message: string, audience: str
   if (!img) return { ok: false, why: "تعذّرت قراءة الصورة" };
   const out = await askGemini([
     `هذه صورة ستُرسل مع رسالة واتساب إلى: ${audience}.`, `الرسالة:\n«${message}»`, "",
-    "هل الصورة تطابق الرسالة والجمهور؟ لا تطابق إن أظهرت قطاعاً آخر (مثلاً ذهب ومجوهرات في رسالة للعقارات أو للمحاسبة)، أو موضوعاً غير موضوع الرسالة، أو نصاً يناقضها.",
+    "هل الصورة تطابق الرسالة والجمهور؟ لا تطابق إن أظهرت قطاعاً آخر (مثلاً ذهب ومجوهرات في رسالة للعقارات أو للمحاسبة)، أو موضوعاً غير موضوع الرسالة، أو نصاً يناقضها، أو كان الكلام المكتوب على التصميم بلغةٍ غير لغة الرسالة (تصميم إنجليزي مع رسالة عربية لا يطابق).",
     `أجب بـJSON فقط: {"match":true|false,"confidence":0-100,"why":"سبب قصير بالعربية"}`,
   ].join("\n"), img).catch(() => null);
   const ok = out?.match === true && Number(out?.confidence ?? 0) >= 80;

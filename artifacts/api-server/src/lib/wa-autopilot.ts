@@ -37,6 +37,8 @@ import { TARGETS, MIX } from "./email/policy";
 import { pieceUrl, shopName } from "./catalog/floret";
 import { logger } from "./logger";
 import { parseLoose } from "./loose-json";
+import { strictSector } from "./email/sector";
+import { WA_DOCTRINE } from "./wa-doctrine";
 import { fitsCampaign, pictureMatches } from "./image-sense";
 
 export const WRITER_ROLE = "wa_campaigns";
@@ -90,9 +92,12 @@ export async function audience(userId: number, kind: "sector" | "list", target: 
     SELECT DISTINCT ON (c.phone) c.phone, c.name, c.sector FROM contacts c JOIN contact_groups g ON g.id = c.group_id
     WHERE g.user_id = ${userId} AND c.status = 'active' AND ${notAutopilot} AND ${where}
       AND ${freshPhone(userId, kind === "list" ? 30 : null)} ${ex}
-    ORDER BY c.phone, c.id LIMIT ${n * 3}`);
+    ORDER BY c.phone, c.id LIMIT ${kind === "sector" ? n * 12 : n * 3}`);
+  // A sector's list is only companies whose own name says they are in it
+  // (strictSector) — not whoever came in a file of that name.
+  const rows = kind === "sector" ? r.rows.filter((x) => strictSector(x.name) === target) : r.rows;
   // Shuffled, so a test is not always the first companies in the file.
-  return r.rows.sort(() => Math.random() - 0.5).slice(0, n);
+  return rows.sort(() => Math.random() - 0.5).slice(0, n);
 }
 
 // ── The target ────────────────────────────────────────────────────
@@ -134,6 +139,8 @@ async function pickTarget(userId: number, vertical: string, need: number): Promi
 export function writerPrompt(i: { vertical: string; firm: string; description: string; target: string; service: string; brief: string; memory: string; facts: string; images: string; piece: string | null }): string {
   const shop = i.vertical === "jewelry";
   return [
+    WA_DOCTRINE(shop),
+    "",
     `أنت كاتب حملات واتساب لدى ${i.firm}${i.description ? ` — ${i.description}` : ""}.`,
     `تكتب رسالة حملة لـ${shop ? `زبائن قائمة «${i.target}»` : `شركات قطاع «${i.target}»`} — ${shop ? "قطعة من المحل" : i.service === "aml" ? "خدمة الامتثال لمكافحة غسل الأموال (AML)" : "خدمات المحاسبة والضرائب"}.`,
     i.brief ? `ما يهمّ هذا القطاع: ${i.brief}` : "",
@@ -148,6 +155,9 @@ export function writerPrompt(i: { vertical: string; firm: string; description: s
     shop
       ? `- محل ذهب: ممنوع أي سعر أو وزن أو سعر ذهب أو مصنعية أو خصم. ضع رابط القطعة كما هو: ${i.piece ?? "رابط المتجر https://floret-royal.io"}.`
       : "- لا رقم ولا غرامة ولا نسبة ولا مدة لا توجد في المعلومات أدناه. اذكر اسم الشركة «برو كاونت للمحاسبة» مرة واحدة.",
+    shop
+      ? "- لا تذكر اسم الزبونة ولا اسم أي شخص، ولا تبدأ بمناداة باسم."
+      : "- لا تكتب التحية ولا اسم الشركة المستلمة: النظام يضع في أول كل رسالة «السادة <اسم شركتهم> المحترمين،» تلقائياً. ابدأ مباشرة بالسطر الأول بعدها.",
     "- لا تكتب أي خانة قالب مثل [الاسم] أو {company}.",
     "",
     i.memory ? `ما تعلّمه الفريق:\n${i.memory}` : "",
@@ -157,6 +167,13 @@ export function writerPrompt(i: { vertical: string; firm: string; description: s
     "أعد JSON فقط:",
     `{"variants":[{"angle":"اسم الزاوية","message":"نص الرسالة","imageId":null},{"angle":"...","message":"...","imageId":null}]}`,
   ].filter(Boolean).join("\n");
+}
+
+/** The opening that names the company, for an accounting firm; none for a shop. Pure. */
+export function addressed(message: string, shop: boolean): string {
+  const body = message.replace(/^\s*(السادة|الساده|حضرات)[^\n]*\n+/, "").trim();
+  if (shop) return body.replace(/\{[^{}]*(اسم|الاسم|name|company|الشركة|الشركه)[^{}]*\}\s*[،,]?\s*/gi, "").trim();
+  return `السادة {اسم_الشركة|شركتكم} المحترمين،\n${body}`;
 }
 
 /** A variant the checker would stop. Pure over the check. */
@@ -186,9 +203,9 @@ async function write(userId: number, vertical: string, target: string, service: 
   // (image-sense.ts). A shop's list is the shop's own sector.
   const imgSector = shop ? "ذهب ومجوهرات" : target;
   const imgs = (await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url, caption: mediaAssetsTable.caption, tags: mediaAssetsTable.tags,
-      vision: mediaAssetsTable.vision, fits: mediaAssetsTable.fits, service: mediaAssetsTable.service })
+      vision: mediaAssetsTable.vision, fits: mediaAssetsTable.fits, service: mediaAssetsTable.service, lang: mediaAssetsTable.lang })
     .from(mediaAssetsTable).where(eq(mediaAssetsTable.userId, userId)).orderBy(desc(mediaAssetsTable.createdAt)).limit(80))
-    .filter((m) => fitsCampaign(m, imgSector, shop ? "shop" : service)).slice(0, 30);
+    .filter((m) => fitsCampaign(m, imgSector, shop ? "shop" : service, "ar")).slice(0, 30);
   const images = imgs.map((m) => `${m.id}: ${m.vision}${m.tags.length ? ` [${m.tags.join("، ")}]` : ""}`).join("\n");
   const prompt = writerPrompt({ vertical, firm: p?.name ?? "الشركة", description: p?.description ?? "", target: pieceName ? `${target} — ${pieceName}` : target, service, brief: SECTOR_BRIEF[target]?.brief ?? "", memory, facts, images, piece });
 
@@ -210,6 +227,10 @@ async function write(userId: number, vertical: string, target: string, service: 
     if (vs.length < 2 || vs.some((v) => v.message.length < 20)) { lastWhy = "نسختان ناقصتان"; continue; }
     const problems = vs.flatMap((v) => variantIssues(v.message, shop, facts).map((x) => `${v.key}: ${x}`));
     if (problems.length) { lastWhy = problems.join(" · "); continue; }
+    // Pro Count addresses every company by its own name; the send loop fills
+    // it per number (fillRecipient), «شركتكم» where the number has no name.
+    // The shop names nobody.
+    for (const v of vs) v.message = addressed(v.message, shop);
     // The last check, with the picture and the words side by side. Doubt drops
     // the picture; the message still goes, as text.
     for (const v of vs) {

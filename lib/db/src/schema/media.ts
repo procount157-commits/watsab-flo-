@@ -25,6 +25,8 @@ export const mediaAssetsTable = pgTable("media_assets", {
   fits:      jsonb("fits").$type<string[]>(),
   /** aml | services | jewelry | general */
   service:   varchar("service", { length: 12 }),
+  /** The language of the words on the design itself: ar | en | mixed | none. */
+  lang:      varchar("lang", { length: 6 }),
   visionAt:  timestamp("vision_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_media_assets_user").on(t.userId, t.createdAt)]);

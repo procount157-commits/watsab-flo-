@@ -5,7 +5,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Rocket, Loader2, Trophy, Check, X, Play, Trash2 } from "lucide-react";
+import { Rocket, Loader2, Trophy, Check, X, Play, Trash2, ShieldCheck } from "lucide-react";
 import { api } from "@/components/AgentPanel";
 import { cn } from "@/lib/utils";
 
@@ -21,7 +21,7 @@ export default function WaAutopilot() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["wa-autopilot"] });
   const save = useMutation({ mutationFn: (b: any) => api("/api/wa-autopilot", { method: "PUT", body: JSON.stringify(b) }), onSuccess: (d) => { setCfg(d); refresh(); toast.success("حُفظ"); }, onError: (e: Error) => toast.error(e.message) });
   const approve = useMutation({ mutationFn: (id: number) => api(`/api/wa-autopilot/tests/${id}/approve`, { method: "POST" }), onSuccess: (d: any) => { refresh(); toast.success(d.note); }, onError: (e: Error) => toast.error(e.message) });
-  const cancel = useMutation({ mutationFn: (id: number) => api(`/api/wa-autopilot/tests/${id}/cancel`, { method: "POST" }), onSuccess: refresh });
+  const cancel = useMutation({ mutationFn: (id: number) => api(`/api/wa-autopilot/tests/${id}/cancel`, { method: "POST" }), onSuccess: () => { refresh(); toast.success("أُوقفت وأُلغيت — يمكنك حذفها من السجل الآن"); }, onError: (e: Error) => toast.error(e.message) });
   const remove = useMutation({ mutationFn: (id: number | "cancelled") => api(`/api/wa-autopilot/tests/${id}`, { method: "DELETE" }), onSuccess: (d: any) => { refresh(); toast.success(d.removed > 1 ? `حُذفت ${d.removed} تجارب ملغاة من السجل` : "حُذفت من السجل"); }, onError: (e: Error) => toast.error(e.message) });
   const run = useMutation({ mutationFn: () => api("/api/wa-autopilot/run", { method: "POST" }), onSuccess: (d: any) => { refresh(); toast(d.created ? "كُتبت تجربة جديدة" : d.why ?? "انتهت الدورة"); }, onError: (e: Error) => toast.error(e.message) });
 
@@ -65,6 +65,25 @@ export default function WaAutopilot() {
         </div>
       </div>
 
+      {data?.guard && (
+        <div className="bg-card border border-card-border rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="w-5 h-5 text-primary" /> حارس الإرسال — {data.guard.name}</div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            كل رسالة من كل حملة تمرّ عليه قبل أن تخرج: رسائل الحساب كله في طابورٍ واحد بفاصل {Math.round(data.guard.rules.minGapMs / 1000)}–{Math.round(data.guard.rules.maxGapMs / 1000)} ثانية،
+            و{data.guard.rules.per10Min} رسائل على الأكثر في عشر دقائق، و{data.guard.rules.perHour} في الساعة. والشخص — بأي صيغةٍ كُتب رقمه — لا تصله رسالة حملة ثانية خلال ٢٤ ساعة، ولا النص نفسه أبداً.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+            {[
+              ["آخر ١٠ دقائق", `${data.guard.last10Min} / ${data.guard.rules.per10Min}`],
+              ["آخر ساعة", `${data.guard.lastHour} / ${data.guard.rules.perHour}`],
+              ["منع رسالة ثانية (٢٤ ساعة)", data.guard.blocked24h?.dup ?? 0],
+              ["منع تكرار النص نفسه", data.guard.blocked24h?.same ?? 0],
+            ].map(([k, v]) => (
+              <div key={String(k)} className="rounded-lg bg-muted/40 p-2"><div className="text-lg font-bold">{v}</div><div className="text-[11px] text-muted-foreground">{k}</div></div>
+            ))}
+          </div>
+        </div>
+      )}
       {(data?.tests ?? []).some((t: any) => t.status === "cancelled") && (
         <div className="flex justify-end">
           <button onClick={() => confirm("حذف كل التجارب الملغاة من السجل؟") && remove.mutate("cancelled")} disabled={remove.isPending}
@@ -81,6 +100,12 @@ export default function WaAutopilot() {
             <div className="font-semibold">{t.target} <span className="text-xs text-muted-foreground font-normal">· {t.service === "aml" ? "مكافحة غسل الأموال" : t.service === "services" ? "محاسبة وضرائب" : "المحل"} · {new Date(t.createdAt).toLocaleString("ar-AE")}</span></div>
             <div className="flex items-center gap-2">
               <span className={cn("text-xs px-2 py-1 rounded-full", t.status === "awaiting_approval" ? "bg-amber-500/15 text-amber-500" : "bg-muted text-muted-foreground")}>{STATUS[t.status] ?? t.status}</span>
+              {["testing", "scaling"].includes(t.status) && (
+                <button onClick={() => confirm("إيقاف هذه التجربة الآن وإلغاؤها؟ لن تُرسل منها أي رسالة أخرى.") && cancel.mutate(t.id)} disabled={cancel.isPending}
+                  className="flex items-center gap-1 px-2.5 py-1.5 border border-border rounded-lg text-xs text-muted-foreground hover:text-red-400 disabled:opacity-40">
+                  <X className="w-3.5 h-3.5" /> أوقف وألغِ
+                </button>
+              )}
               {t.status === "cancelled" && (
                 <button onClick={() => remove.mutate(t.id)} title="احذفها من السجل" className="p-1.5 text-muted-foreground hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
               )}

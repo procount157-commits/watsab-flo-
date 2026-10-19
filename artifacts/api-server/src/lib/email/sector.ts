@@ -65,3 +65,25 @@ export function classifySector(input: { industry?: string | null; company?: stri
 }
 
 export const SECTORS = RULES.map(([label]) => label);
+
+/**
+ * The sector a WhatsApp number may be written to as, by its own name only —
+ * never by the file it came from. The owner (2026-10-19): «it uses the wrong
+ * lists — it must send to the same sector». A contracting test reached «Al
+ * Futtaim Residence Building» and «City Tower Building Residence»: buildings,
+ * listed under contracting because the file was called contracting. So:
+ *   · contracting needs a contracting word, not just «building»;
+ *   · a name that is a place to live (residence, tower, apartments) is no
+ *     company of any sector unless it says what it does.
+ * Pure.
+ */
+export function strictSector(name: string | null | undefined): string | null {
+  const n = norm(name ?? "");
+  if (!n) return null;
+  const s = match(n);
+  if (!s) return null;
+  const DOES = /(contracting|contractors?|construction|civil works|fit ?out|joinery|\bmep\b|electromechanical|real ?estate|realty|propert(y|ies)|brokers?|مقاولات|مقاول|انشاءات|عقار)/;
+  if (/\b(residences?|towers?|apartments?|villas?|bldg|hotel apartments?)\b/.test(n) && !DOES.test(n)) return null;
+  if (s === "مقاولات" && !/(contracting|contractors?|construction|civil works|fit ?out|joinery|\bmep\b|electromechanical|مقاولات|مقاول|انشاءات|تشييد)/.test(n)) return null;
+  return s;
+}

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { fitsCampaign } from "../image-sense";
 let n = 0; const ok = (c: boolean, m: string) => { assert.ok(c, m); n++; };
-const gold = { vision: "سوار وخاتم ذهب", fits: ["ذهب ومجوهرات"], service: "aml" };
-const goldRe = { vision: "ذهب ومبانٍ", fits: ["ذهب ومجوهرات", "عقارات"], service: "aml" };
-const office = { vision: "مكتب وأوراق", fits: ["عام"], service: "services" };
-const build = { vision: "موقع بناء", fits: ["مقاولات"], service: "services" };
+const gold = { vision: "سوار وخاتم ذهب", fits: ["ذهب ومجوهرات"], service: "aml", lang: "ar" };
+const goldRe = { vision: "ذهب ومبانٍ", fits: ["ذهب ومجوهرات", "عقارات"], service: "aml", lang: "ar" };
+const office = { vision: "مكتب وأوراق", fits: ["عام"], service: "services", lang: "none" };
+const build = { vision: "موقع بناء", fits: ["مقاولات"], service: "services", lang: "ar" };
+const english = { vision: "تصميم بالإنجليزية", fits: ["مقاولات"], service: "services", lang: "en" };
 ok(!fitsCampaign(gold, "عقارات", "aml"), "gold picture never goes to real estate");
 ok(fitsCampaign(gold, "ذهب ومجوهرات", "aml"), "gold AML picture for gold shops");
 ok(!fitsCampaign(goldRe, "عقارات", "aml"), "gold beside buildings never goes to real estate");
@@ -15,4 +16,6 @@ ok(fitsCampaign(build, "مقاولات", "services"), "construction picture for 
 ok(!fitsCampaign(build, "مطاعم ومقاهي", "services"), "construction picture not for restaurants");
 ok(!fitsCampaign({ vision: null, fits: null, service: null }, "عقارات", "aml"), "unseen picture is never used");
 ok(fitsCampaign(gold, "ذهب ومجوهرات", "shop"), "the shop's own list");
+ok(!fitsCampaign(english, "مقاولات", "services", "ar"), "an English design never goes with an Arabic message");
+ok(fitsCampaign(english, "مقاولات", "services", "en"), "it may go with an English one");
 console.log(`image-sense: ${n}/${n} ✅`);

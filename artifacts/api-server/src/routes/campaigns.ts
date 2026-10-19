@@ -12,6 +12,8 @@ import { objectExists, objectNameFromUrl } from "../lib/storage";
 import * as XLSX from "xlsx";
 import { eq, desc, count, sql, and, gte, inArray, lt, max, asc } from "drizzle-orm";
 import { sendMessage, getStatus, waitForConnection, registerOnConnectHook, initWhatsApp } from "../lib/whatsapp";
+import * as sendGuard from "../lib/wa-send-guard";
+import { businessProfileTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 import { classifyFailure, NON_RETRYABLE_PATTERN } from "../lib/failure-classifier";
@@ -331,6 +333,14 @@ setInterval(() => runWatchdog().catch(() => {}), 45_000);
 // ── Startup recovery ──────────────────────────────────────────────
 // Called once at server start — resumes any campaign that was left in
 // "running" state (e.g. after a server crash or Replit restart).
+/** Stop a campaign's send loop now and set it aside — for the autopilot's cancel. */
+export async function stopCampaign(userId: number, campaignId: number, status = "paused"): Promise<void> {
+  const key = campaignKey(userId, campaignId);
+  const info = activeCampaigns.get(key);
+  if (info) { info.running = false; activeCampaigns.delete(key); }
+  await db.update(campaignsTable).set({ status }).where(and(eq(campaignsTable.id, campaignId), eq(campaignsTable.userId, userId)));
+}
+
 export async function resumeRunningCampaigns(forUserId?: number): Promise<void> {
   // Wrap the outer query in withDbRetry so a transient DB blip doesn't
   // silently abandon a campaign (root cause of the 2 AM stoppage).
@@ -352,6 +362,15 @@ export async function resumeRunningCampaigns(forUserId?: number): Promise<void> 
 
     const key = campaignKey(campaign.userId, campaign.id);
     if (activeCampaigns.has(key)) continue; // already in flight
+    // Claimed before the first await. The check above and the set further down
+    // used to be separated by four database reads, and two or three callers
+    // arriving together (the autopilot starting A and B, the watchdog, the
+    // reconnect hook) all passed the check: one campaign ran as three loops and
+    // sent the same person the same message three times in one second. Every
+    // exit below that does not start the loop gives the claim back.
+    const claim: CampaignInfo = { running: true, index: 0, lastProgressAt: Date.now(), consecutiveWaFailures: 0, startedAt: Date.now(), recentOutcomes: [] };
+    activeCampaigns.set(key, claim);
+    let started = false;
 
     try {
       const contacts = await withDbRetry(() =>
@@ -402,8 +421,8 @@ export async function resumeRunningCampaigns(forUserId?: number): Promise<void> 
         continue; // don't add to activeCampaigns — connect hook will resume
       }
 
-      const info: CampaignInfo = { running: true, index: 0, lastProgressAt: Date.now(), consecutiveWaFailures: 0, startedAt: Date.now(), recentOutcomes: [] };
-      activeCampaigns.set(key, info);
+      const info = claim;
+      started = true;
 
       logger.info({ campaignId: campaign.id, userId: campaign.userId, remaining: remaining.length }, "Campaign resumed");
 
@@ -412,6 +431,8 @@ export async function resumeRunningCampaigns(forUserId?: number): Promise<void> 
       );
     } catch (err) {
       logger.error({ err, campaignId: campaign.id }, "Failed to resume campaign");
+    } finally {
+      if (!started && activeCampaigns.get(key) === claim) activeCampaigns.delete(key);
     }
   }
 }
@@ -419,19 +440,6 @@ export async function resumeRunningCampaigns(forUserId?: number): Promise<void> 
 // ── Daily per-phone dedup ─────────────────────────────────────────
 // Returns true if this phone received a successful message today
 // from ANY of this user's campaigns (midnight-to-now window).
-// صاحب العمل (١٩ أكتوبر): «لا تُرسل الرسالة نفسها لنفس الشخص أكثر من مرة».
-// النص نفسه — في هذه الحملة أو في أي حملة قبلها من الحساب، ولو كُرّرت الحملة
-// أو وُجد الرقم في قائمتين — لا يصل الرقم مرتين. المسافات لا تجعل نصّين مختلفين.
-async function wasSentSameMessage(userId: number, phone: string, message: string): Promise<boolean> {
-  const r = await db.execute(sql`
-    SELECT 1 FROM message_logs ml JOIN campaigns c ON c.id = ml.campaign_id
-    WHERE c.user_id = ${userId} AND ml.status = 'sent'
-      AND split_part(ml.phone, ':', 1) = split_part(${phone}, ':', 1)
-      AND regexp_replace(trim(c.message), '[[:space:]]+', ' ', 'g') = regexp_replace(trim(${message}), '[[:space:]]+', ' ', 'g')
-    LIMIT 1`);
-  return r.rows.length > 0;
-}
-
 async function wasSentTodayToPhone(userId: number, phone: string): Promise<boolean> {
   const midnight = new Date();
   midnight.setHours(0, 0, 0, 0);
@@ -865,9 +873,11 @@ router.post("/:id/start", async (req, res) => {
     skipped72h = filteredPending.length - finalContacts.length;
   }
 
+  const key = campaignKey(userId, id);
+  // Pressing «start» on a campaign whose loop is already running used to start a second one.
+  if (activeCampaigns.get(key)?.running) return res.json({ success: true, alreadyRunning: true });
   await db.update(campaignsTable).set({ status: "running", totalCount: contacts.length }).where(eq(campaignsTable.id, id));
 
-  const key = campaignKey(userId, id);
   const info: CampaignInfo = { running: true, index: 0, lastProgressAt: Date.now(), consecutiveWaFailures: 0, startedAt: Date.now(), recentOutcomes: [] };
   activeCampaigns.set(key, info);
 
@@ -911,16 +921,16 @@ router.post("/:id/restart", async (req, res) => {
   const info = activeCampaigns.get(key);
   if (info) { info.running = false; activeCampaigns.delete(key); }
 
-  // Clear previous send history and reset counters
-  await db.delete(messageLogs).where(eq(messageLogs.campaignId, id));
-  await db.update(campaignsTable)
-    .set({ status: "running", sentCount: 0, failedCount: 0, deliveredCount: 0, readCount: 0 })
-    .where(eq(campaignsTable.id, id));
+  // The send history is kept. Restarting used to delete it and send the whole
+  // list the same message again — the owner's rule (2026-10-19) is that one
+  // message never reaches one person twice. A restart now reaches only who
+  // has not had it yet, and the send guard holds the line for the rest.
+  await db.update(campaignsTable).set({ status: "running" }).where(eq(campaignsTable.id, id));
 
   // Trigger campaign engine
   resumeRunningCampaigns(userId).catch(() => {});
 
-  res.json({ success: true, message: "تم إعادة تشغيل الحملة من البداية" });
+  res.json({ success: true, message: "استؤنفت الحملة لمن لم تصله فقط — لا تُرسل الرسالة نفسها لأحدٍ مرتين" });
 });
 
 // ── Send to remaining (unsent) contacts ───────────────────────────
@@ -1344,7 +1354,11 @@ router.get("/:id/quality", async (req, res) => {
 
 const LONG_BREAK_EVERY = 40;
 
-async function runCampaign(userId: number, campaign: any, contacts: any[], info: CampaignInfo, key: string) {
+async function runCampaign(userId: number, campaign: any, contactsIn: any[], info: CampaignInfo, key: string) {
+  // One copy of each person, whatever spelling of the number the list holds.
+  const contacts = sendGuard.uniquePeople(contactsIn);
+  const [prof] = await db.select({ vertical: businessProfileTable.vertical }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1).catch(() => []);
+  const namesNobody = prof?.vertical === "jewelry";
   let sentThisRun = 0; // counts messages sent in THIS run (respects messageLimit)
   // A young number writing mostly to strangers is what a spammer looks like
   // from the outside. For its first two weeks, once more than 60% of the
@@ -1468,18 +1482,8 @@ async function runCampaign(userId: number, campaign: any, contacts: any[], info:
       }
     }
 
-    // ── The same message never reaches the same number twice ─────
-    // Always on, send-remaining included: a number in two lists, or a
-    // campaign run again, is still one person.
-    let sameBefore = false;
-    try { sameBefore = await withDbRetry(() => wasSentSameMessage(userId, contact.phone, campaign.message ?? "")); }
-    catch { /* DB error — the daily dedup above still stands */ }
-    if (sameBefore) {
-      logger.info({ phone: contact.phone, campaignId: campaign.id }, "Skipping — this message already reached this number");
-      continue;
-    }
-
-    const personalized = personalizeMessage(campaign.message, { name: contact.name, phone: contact.phone }, campaign.companyName);
+    // The shop names nobody (the owner, 2026-10-19): no name reaches a Floret message.
+    const personalized = personalizeMessage(campaign.message, { name: namesNobody ? null : contact.name, phone: contact.phone }, campaign.companyName);
     const personalizedMessage = personalized;
 
     // ── Sending-hours gate ───────────────────────────────────────
@@ -1498,6 +1502,17 @@ async function runCampaign(userId: number, campaign: any, contacts: any[], info:
       },
       "📨 campaign:attempt",
     );
+
+    // ── فهد، حارس الإرسال: دور الحساب، والشخص مرة واحدة ──────────
+    // Every campaign of the account waits in one line, 40–75 s apart, and a
+    // person (any spelling of the number) gets one campaign message a day and
+    // the same text never. See lib/wa-send-guard.ts.
+    const slot = await sendGuard.acquire(userId, contact.phone, campaign.id, campaign.message ?? "", info);
+    if (!slot.ok) {
+      if (slot.why === "stopped") break;
+      logger.info({ phone: contact.phone, campaignId: campaign.id, why: slot.why }, "حارس الإرسال منع رسالة مكررة");
+      continue;
+    }
 
     try {
       // The stop button goes under every campaign message, made today or long ago.
@@ -1663,6 +1678,7 @@ async function runCampaign(userId: number, campaign: any, contacts: any[], info:
       );
     } catch (err: any) {
       const errMsg = String(err?.message ?? err ?? "");
+      sendGuard.release(userId, contact.phone);
 
       // ── WA disconnected after all retry attempts ──────────────────
       // INLINE recovery: wait for WA to reconnect here, then retry.
