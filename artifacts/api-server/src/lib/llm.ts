@@ -201,9 +201,11 @@ async function callGemini(messages: LlmMessage[], timeoutMs: number, apiKey: str
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
   const rest   = messages.filter((m) => m.role !== "system");
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
     {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      // In a header, not the URL: the key stays out of any log that prints URLs,
+      // and Google's new «AQ.» keys are accepted the same way.
+      method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
         ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
         contents: rest.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
@@ -439,7 +441,10 @@ export function gridAllowed(userId: number | undefined, users = process.env["THE
 }
 function paidFirst<T extends { provider: string }>(ordered: T[], userId: number | undefined): T[] {
   if (!gridAllowed(userId)) return ordered;
-  return [...ordered.filter((c) => c.provider === "thegrid"), ...ordered.filter((c) => c.provider !== "thegrid")];
+  // The Grid first (the cheapest the owner asked for), Gemini second (better
+  // Gulf Arabic, 1–2s, measured on both accounts' questions), then the free chain.
+  const paid = ["thegrid", "gemini"];
+  return [...paid.flatMap((p) => ordered.filter((c) => c.provider === p)), ...ordered.filter((c) => !paid.includes(c.provider))];
 }
 
 async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise<LlmResult | null> {
@@ -472,7 +477,8 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise
   add("pollinations", "", "");
 
   const ranked = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), currentAgent()?.role ?? null);
-  const onlyNamed = (p: string) => p === "thegrid" || p === "openrouter2";
+  // Gemini is the owner's paid key too (2026-10-19), for the same two accounts.
+  const onlyNamed = (p: string) => p === "thegrid" || p === "openrouter2" || p === "gemini";
   const ordered = paidFirst(ranked.filter((c) => !onlyNamed(c.provider) || gridAllowed(currentAgent()?.userId)), currentAgent()?.userId);
 
   let lastErr = "";
