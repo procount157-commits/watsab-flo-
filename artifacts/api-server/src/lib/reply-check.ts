@@ -106,7 +106,10 @@ export function claims(t: string): string[] {
   t = t.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/(\d)[,٬](\d{3})/g, "$1$2");
   const n = normalizeArabic(t);
   const out = new Set<string>();
-  const re = /(\d[\d,.]*)\s*(درهم|ريال|aed|sar|usd|\$|%|٪|بالمئه|بالمائه|يوم|ايام|اسبوع|اسابيع|شهر|اشهر|ساعه|ساعات|جم|جرام|غرام|غم|g\b|gm|gram|grams|قيراط|k\b)/giu;
+  // «٣٠٠ ألف درهم», «2 million AED»: a multiplier between the number and the
+  // unit hid the claim — a campaign promised fines «up to 300 thousand» that
+  // no fact ever gave.
+  const re = /(\d[\d,.]*)\s*(?:(?:الف|آلاف|الاف|مليون|ملايين|thousand|million|k|m|bn)\s*)?(درهم|ريال|aed|sar|usd|\$|%|٪|بالمئه|بالمائه|يوم|ايام|اسبوع|اسابيع|شهر|اشهر|ساعه|ساعات|جم|جرام|غرام|غم|g\b|gm|gram|grams|قيراط|k\b)/giu;
   // A karat is a claim too: «عيار 21» said of a piece the facts do not describe.
   for (const m of n.matchAll(/عيار\s*(\d{2})/g)) out.add(m[1]!);
   for (const m of n.matchAll(re)) out.add(m[1]!.replace(/[,.]0+$/, "").replace(/,/g, ""));

@@ -83,6 +83,8 @@ const uploadHandler: RequestHandler = async (req, res): Promise<void> => {
       const [a] = await db.insert(mediaAssetsTable).values({ userId: req.session.userId, url: serveUrl, mimetype, size: buffer.length, caption: caption || filename.replace(/\.[a-z0-9]+$/i, ""), tags, source: "upload" })
         .onConflictDoNothing().returning({ id: mediaAssetsTable.id }).catch(() => [] as Array<{ id: number }>);
       assetId = a?.id ?? null;
+      // Read at once, so the campaign writer can use it within the minute.
+      if (a) void import("../lib/image-sense").then((m) => m.describeAsset({ id: a.id, url: serveUrl })).catch(() => {});
     }
     res.json({
       assetId,

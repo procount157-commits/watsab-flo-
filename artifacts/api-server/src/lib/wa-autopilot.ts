@@ -39,7 +39,7 @@ import { logger } from "./logger";
 import { parseLoose } from "./loose-json";
 import { strictSector } from "./email/sector";
 import { WA_DOCTRINE } from "./wa-doctrine";
-import { fitsCampaign, messageLang, pictureMatches } from "./image-sense";
+import { describePending, fitsCampaign, messageLang, pictureMatches, unreadCount } from "./image-sense";
 import { languageOfText } from "./recipient-name";
 
 export const WRITER_ROLE = "wa_campaigns";
@@ -184,6 +184,11 @@ export function variantIssues(message: string, shop: boolean, facts: string): st
   const r = checkReply(message, { customer: "", facts, strictNumbers: true, warm: shop, noPrices: shop, discountAllowed: false });
   const issues = blocksSend(r) ? r.issues.filter((i) => ["placeholder", "endearment", "price-weight", "discount", "invented-strict", "reveal"].includes(i.code)).map((i) => i.note) : [];
   if (message.length > 900) issues.push("طويلة على واتساب");
+  // A campaign carries no number the company did not give: no fine, no
+  // percentage, no deadline, no count — in any words around it.
+  const known = new Set((facts.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).match(/\d+/g) ?? []));
+  const nums = (message.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/https?:\/\/\S+/g, "").match(/\d+/g) ?? []).filter((x) => !known.has(x));
+  if (nums.length) issues.push(`رقم ليس في معلومات الشركة: ${[...new Set(nums)].join("، ")} — احذفه`);
   return issues;
 }
 
@@ -395,6 +400,13 @@ export async function runCycle(userId: number): Promise<{ created?: number; judg
   if ((await numberAgeDays(userId).catch(() => 0)) < 2) return { judged, why: "الرقم أحدث من يومين" };
   const room = Math.floor((await getDailyRemaining(userId)) * cfg.dailyShare / 100);
   if (room < cfg.testSize * 2) return { judged, why: `لا حصة كافية اليوم (${room})` };
+
+  // Pictures uploaded a minute ago are read first: a test written before
+  // they are seen goes out without them (it did, 2026-10-19 — twelve new
+  // designs, none read, two text-only versions).
+  if (await unreadCount(userId)) await describePending(20, userId);
+  const left = await unreadCount(userId);
+  if (left) return { judged, why: `${left} صورة في المعرض لم تُفحص بعد — أعد المحاولة بعد دقيقة` };
 
   const [p] = await db.select({ vertical: businessProfileTable.vertical }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
   const vertical = p?.vertical === "jewelry" ? "jewelry" : "accounting";

@@ -35,10 +35,23 @@ async function imageBytes(url: string): Promise<{ data: string; mime: string } |
   } catch { return null; }
 }
 
+// Gemini answers 503 «high demand» often enough that one model is not a plan:
+// twelve pictures uploaded at once waited out three 3-minute rounds behind one.
+const MODELS = () => [...new Set([MODEL(), "gemini-flash-lite-latest", "gemini-3.5-flash-lite"])];
+
 async function askGemini(prompt: string, img: { data: string; mime: string }): Promise<any | null> {
+  let last: unknown = null;
+  for (const model of MODELS()) {
+    try { return await askOne(model, prompt, img); }
+    catch (err) { last = err; if (!/\b(429|500|503|504)\b|timeout|aborted/i.test(String((err as any)?.message ?? err))) throw err; }
+  }
+  throw last;
+}
+
+async function askOne(model: string, prompt: string, img: { data: string; mime: string }): Promise<any | null> {
   const key = process.env["GEMINI_API_KEY"];
   if (!key) return null;
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL()}:generateContent`, {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ inlineData: { mimeType: img.mime, data: img.data } }, { text: prompt }] }],
@@ -65,7 +78,8 @@ const DESCRIBE = [
 /** Gemini reads one picture and the gallery keeps what it saw. */
 export async function describeAsset(a: Pick<MediaAsset, "id" | "url">): Promise<boolean> {
   const img = await imageBytes(a.url);
-  if (!img) { await db.update(mediaAssetsTable).set({ visionAt: new Date(), vision: null }).where(eq(mediaAssetsTable.id, a.id)); return false; }
+  // A file that cannot be read is settled as unusable (no vision), so it never holds the autopilot waiting.
+  if (!img) { await db.update(mediaAssetsTable).set({ visionAt: new Date(), vision: null, lang: "none" }).where(eq(mediaAssetsTable.id, a.id)); return false; }
   const out = await askGemini(DESCRIBE, img);
   if (!out?.vision) return false;
   const fits = (Array.isArray(out.fits) ? out.fits : []).map(String).filter((x: string) => (SECTORS as readonly string[]).includes(x) || x === GENERAL);
@@ -116,17 +130,25 @@ export async function pictureMatches(url: string, message: string, audience: str
   return { ok, why: String(out?.why ?? (out ? "" : "لم يُجب الفاحص")).slice(0, 200) };
 }
 
-/** Pictures not seen yet, a few at a time. */
-export async function describePending(limit = 8): Promise<number> {
+const unread = () => or(isNull(mediaAssetsTable.visionAt), and(isNull(mediaAssetsTable.lang), sql`${mediaAssetsTable.visionAt} < now() - interval '2 minutes'`));
+
+/** Pictures not seen yet — the account's, or everyone's — a batch at a time. One failure does not stop the rest. */
+export async function describePending(limit = 12, userId?: number): Promise<number> {
   const rows = await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url }).from(mediaAssetsTable)
-    .where(or(isNull(mediaAssetsTable.visionAt), and(isNull(mediaAssetsTable.lang), sql`${mediaAssetsTable.visionAt} < now() - interval '10 minutes'`)))
+    .where(userId ? and(eq(mediaAssetsTable.userId, userId), unread()) : unread())
     .limit(limit);
   let n = 0;
   for (const r of rows) {
     try { if (await describeAsset(r)) n++; }
-    catch (err) { logger.warn({ id: r.id, err: String((err as any)?.message ?? err) }, "وصف الصورة تعذّر"); break; }
+    catch (err) { logger.warn({ id: r.id, err: String((err as any)?.message ?? err) }, "وصف الصورة تعذّر"); }
   }
   return n;
+}
+
+/** How many of the account's pictures are still unread. */
+export async function unreadCount(userId: number): Promise<number> {
+  const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(mediaAssetsTable).where(and(eq(mediaAssetsTable.userId, userId), unread()));
+  return Number(r?.n ?? 0);
 }
 
 export function startImageSense(): void {
@@ -134,6 +156,6 @@ export function startImageSense(): void {
   setTimeout(() => {
     const tick = () => void describePending().then((n) => { if (n) logger.info({ n }, "Gemini وصف صوراً في المعرض"); }).catch(() => {});
     tick();
-    setInterval(tick, 3 * 60_000);
+    setInterval(tick, 60_000);
   }, 45_000);
 }
