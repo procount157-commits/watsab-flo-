@@ -36,6 +36,7 @@ import { AUTOPILOT_MARK, AUTOPILOT_FOLDER } from "./folders";
 import { TARGETS, MIX } from "./email/policy";
 import { pieceUrl, shopName } from "./catalog/floret";
 import { logger } from "./logger";
+import { parseLoose } from "./loose-json";
 
 export const WRITER_ROLE = "wa_campaigns";
 const JUDGE_AFTER_HOURS = 48;
@@ -191,8 +192,8 @@ async function write(userId: number, vertical: string, target: string, service: 
       { role: "user", content: attempt ? `النسختان السابقتان رُفضتا: ${lastWhy}. اكتبهما من جديد.` : "اكتب النسختين." },
     ], 90_000)).catch(() => null);
     if (!out?.text) { lastWhy = "النموذج لم يستجب"; continue; }
-    let raw: any;
-    try { raw = JSON.parse(out.text.slice(out.text.indexOf("{"), out.text.lastIndexOf("}") + 1)); } catch { lastWhy = "ليس JSON"; continue; }
+    const raw: any = parseLoose(out.text);
+    if (!raw) { lastWhy = "ليس JSON"; continue; }
     const vs: WaVariant[] = (raw?.variants ?? []).slice(0, 2).map((v: any, i: number) => {
       const img = imgs.find((m) => m.id === Number(v?.imageId));
       let message = String(v?.message ?? "").trim();

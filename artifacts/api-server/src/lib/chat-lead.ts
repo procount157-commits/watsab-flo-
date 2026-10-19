@@ -19,6 +19,7 @@ import { db, agentMemoryTable, botEmployeesTable, businessProfileTable } from "@
 import { complete } from "./llm";
 import { asAgent } from "./agent-context";
 import { logger } from "./logger";
+import { parseLoose } from "./loose-json";
 import { ENDEARMENT } from "./voice-doctrine";
 import { priceOrWeight } from "./reply-check";
 import { normalizeArabic } from "./intent";
@@ -63,7 +64,7 @@ export function chatLeadPrompt(vertical: string, firm: string, description: stri
     "",
     "أعد JSON فقط، بالعربية، بهذا الشكل بالضبط:",
     `{"questions":[{"q":"السؤال كما يُطرح","how":"كيف يُجاب"}],"objections":[{"o":"الاعتراض","how":"كيف يُعالج"}],"works":["ما نجح"],"avoid":["ما يُتجنّب"],"campaignIdeas":[{"audience":"لمن","angle":"الزاوية","hook":"جملة الافتتاح"}]}`,
-    "خمسة عناصر على الأكثر في كل قائمة، وكل عنصر جملة واحدة قصيرة.",
+    "ثلاثة عناصر على الأكثر في كل قائمة، وكل عنصر جملة واحدة قصيرة (أقل من عشرين كلمة).",
   ].join("\n");
 }
 
@@ -151,8 +152,8 @@ export async function runChatLead(userId: number): Promise<{ ok: boolean; why?: 
       { role: "user", content: `محادثات هذا الأسبوع:\n\n${chats}${attempt ? "\n\nأعد JSON فقط، يبدأ بـ{ وينتهي بـ}، بلا أي نص قبله أو بعده." : ""}` },
     ], 150_000)).catch((err) => { why = String(err?.message ?? err).slice(0, 120); return null; });
     if (!out?.text) { why = why || "النموذج لم يستجب"; continue; }
-    try { raw = JSON.parse(out.text.slice(out.text.indexOf("{"), out.text.lastIndexOf("}") + 1)); }
-    catch { why = `ردّ النموذج ليس JSON (${out.provider ?? "?"}): ${out.text.slice(0, 80)}`; }
+    raw = parseLoose<Playbook>(out.text);
+    if (!raw) why = `ردّ النموذج ليس JSON (${out.provider ?? "?"}): ${out.text.slice(0, 80)}`;
   }
   if (!raw) { logger.warn({ userId, why }, "مسؤول الشات لم يكتب الدليل"); return { ok: false, why }; }
   const book = sanitize(raw, vertical);

@@ -12,6 +12,7 @@ import { db, knowledgeBaseTable, mediaAssetsTable, businessProfileTable } from "
 import { complete } from "./llm";
 import { asAgent } from "./agent-context";
 import { logger } from "./logger";
+import { parseLoose } from "./loose-json";
 import { priceOrWeight } from "./reply-check";
 
 export const SITE_CATEGORY = "website";
@@ -113,7 +114,7 @@ export async function studySite(userId: number, rawUrl: string): Promise<StudyRe
       { role: "user", content: corpus },
     ], 120_000)).catch(() => null);
     let entries: Array<{ title: string; content: string }> = [];
-    try { entries = JSON.parse(out!.text.slice(out!.text.indexOf("{"), out!.text.lastIndexOf("}") + 1)).entries ?? []; } catch { /* below */ }
+    entries = (out?.text ? parseLoose<{ entries: Array<{ title: string; content: string }> }>(out.text)?.entries : null) ?? [];
     entries = entries.filter((e) => e?.title && e?.content).slice(0, 12)
       .map((e) => ({ title: String(e.title).slice(0, 200), content: shop ? String(e.content).split("\n").filter((l) => !priceOrWeight(l)).join("\n") : String(e.content) }))
       .filter((e) => e.content.trim().length > 10);
