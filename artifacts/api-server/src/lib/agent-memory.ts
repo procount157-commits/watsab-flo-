@@ -25,7 +25,7 @@ import {
 import type { Intent } from "./intent";
 import { logger } from "./logger";
 
-export type MemoryKind = "instruction" | "win" | "loss" | "gap";
+export type MemoryKind = "instruction" | "win" | "loss" | "gap" | "playbook";
 
 /**
  * Write a lesson down, or note that it happened again.
@@ -162,14 +162,14 @@ export async function tasksFor(userId: number, role: string): Promise<string[]> 
   return rows.map((r) => r.task);
 }
 
-const MAX_PER_KIND = { instruction: 12, win: 5, loss: 5, gap: 4 } as const;
+const MAX_PER_KIND = { instruction: 12, win: 5, loss: 5, gap: 4, playbook: 1 } as const;
 
 export async function memoryFor(userId: number, role: string): Promise<Record<MemoryKind, AgentMemory[]>> {
   const rows = await db.select().from(agentMemoryTable)
     .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, role)))
     .orderBy(desc(agentMemoryTable.times), desc(agentMemoryTable.updatedAt));
 
-  const out: Record<MemoryKind, AgentMemory[]> = { instruction: [], win: [], loss: [], gap: [] };
+  const out: Record<MemoryKind, AgentMemory[]> = { instruction: [], win: [], loss: [], gap: [], playbook: [] };
   for (const r of rows) {
     const k = r.kind as MemoryKind;
     if (out[k] && out[k].length < MAX_PER_KIND[k]) out[k].push(r);
@@ -195,6 +195,11 @@ export async function memoryPreamble(userId: number, role: string): Promise<stri
     // Stated as binding, because that is what the owner meant by writing it.
     parts.push(["تعليمات صاحب العمل لك — التزم بها حرفياً:",
       ...mem.instruction.map((m) => `- ${m.content}`)].join("\n"));
+  }
+  if (mem.playbook.length) {
+    // What the chat lead learnt this week from every conversation — not the
+    // owner's word, and so not dressed as one; the shop's rules still win.
+    parts.push(mem.playbook[0]!.content);
   }
   if (mem.win.length) {
     parts.push(["أساليب نجحت معك سابقاً:",

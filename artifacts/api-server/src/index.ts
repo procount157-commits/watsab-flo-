@@ -42,6 +42,7 @@ import { startManagerLoop } from "./lib/email/manager";
 import { startWaManagerLoop } from "./lib/wa-manager";
 import { startCatalogSync } from "./lib/catalog/floret";
 import { upgradeShopRules } from "./lib/catalog/floret-account";
+import { startChatLead } from "./lib/chat-lead";
 import { startListKeeper } from "./lib/list-keeper";
 import { startOrganizing } from "./lib/organize";
 import { startEngineerRounds } from "./lib/graph/engineer";
@@ -164,6 +165,8 @@ function startListening() {
     startCatalogSync();
     // محل الذهب: لا سعر ولا وزن — ما بقي من القاعدة القديمة يُرفع مرة عند البدء.
     void upgradeShopRules().catch(() => {});
+    // مسؤول الشات: يقرأ محادثات الأسبوع كل يوم ويكتب دليل الفريق.
+    startChatLead();
     startListKeeper();
     // مجلدٌ لكل قطاع، قائمةٌ لكل ملف، وكل رقمٍ وإيميلٍ مرةً واحدة.
     startOrganizing();

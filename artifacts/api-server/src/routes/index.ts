@@ -1,3 +1,4 @@
+import chatLeadRouter from "./chat-lead";
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import publicRouter from "./public";
@@ -75,6 +76,7 @@ router.use("/plans", plansRouter);
 router.use("/leads", leadsRouter);
 router.use("/lead-cards", leadCardsRouter);
 router.use("/email", emailRouter);
+router.use("/chat-lead", chatLeadRouter);
 router.use("/folders", foldersRouter);
 router.use("/groups", groupsRouter);
 router.use("/ai", aiRouter);
