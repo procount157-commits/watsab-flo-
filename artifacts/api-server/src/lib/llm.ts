@@ -26,7 +26,7 @@ import { offDuty } from "./graph/switch";
 export type Provider =
   | "anthropic" | "gemini" | "groq" | "openrouter"
   | "zhipu" | "qwen" | "deepseek" | "moonshot" | "siliconflow"
-  | "pollinations" | "thegrid" | "none";
+  | "pollinations" | "thegrid" | "openrouter2" | "none";
 
 export interface LlmMessage { role: "system" | "user" | "assistant"; content: string }
 export interface LlmResult  { text: string; provider: Provider }
@@ -42,6 +42,8 @@ const KEYS: Record<string, () => string> = {
   moonshot:    () => process.env["MOONSHOT_API_KEY"]    ?? "",
   siliconflow: () => process.env["SILICONFLOW_API_KEY"] ?? "",
   thegrid:     () => process.env["THEGRID_API_KEY"]     ?? "",
+  // A second OpenRouter account: another 50 free requests a day. 2026-10-19.
+  openrouter2: () => process.env["OPENROUTER_API_KEY_2"] ?? "",
 };
 
 // Everything except Gemini speaks the OpenAI chat-completions shape, so they
@@ -67,6 +69,8 @@ const OPENAI_COMPATIBLE: Record<string, { url: string; model: string }> = {
   // a clean English B2B email and readable Gulf Arabic; nemotron-3.5-lightning
   // is the faster second. inkling:free answers only «agentic harnesses» (403).
   openrouter:  { url: "https://openrouter.ai/api/v1/chat/completions",
+                 model: process.env["OPENROUTER_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b:free" },
+  openrouter2: { url: "https://openrouter.ai/api/v1/chat/completions",
                  model: process.env["OPENROUTER_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b:free" },
   // Zhipu's GLM-4-Flash is free outright rather than trial credit.
   zhipu:       { url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
@@ -358,6 +362,7 @@ const EXTRA_MODELS: Record<string, string[]> = {
   // يعتمد على تفاصيل نشاطك" — instead of inventing a number.
   groq: ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"],
   openrouter: ["nvidia/nemotron-3.5-lightning:free"],
+  openrouter2: ["nvidia/nemotron-3.5-lightning:free"],
 };
 
 // Excluded deliberately, so nobody adds them back by guessing:
@@ -467,7 +472,8 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise
   add("pollinations", "", "");
 
   const ranked = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), currentAgent()?.role ?? null);
-  const ordered = paidFirst(ranked.filter((c) => c.provider !== "thegrid" || gridAllowed(currentAgent()?.userId)), currentAgent()?.userId);
+  const onlyNamed = (p: string) => p === "thegrid" || p === "openrouter2";
+  const ordered = paidFirst(ranked.filter((c) => !onlyNamed(c.provider) || gridAllowed(currentAgent()?.userId)), currentAgent()?.userId);
 
   let lastErr = "";
   for (const step of ordered) {
