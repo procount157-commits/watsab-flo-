@@ -121,7 +121,7 @@ export default function WaAutopilot() {
                     {t.winner === v.key && <span className="flex items-center gap-1 text-primary"><Trophy className="w-3.5 h-3.5" /> الفائزة</span>}
                   </div>
                   {v.mediaUrl && <img src={v.mediaUrl} alt="" className="w-full max-h-40 object-cover rounded" />}
-                  <p className="text-sm whitespace-pre-wrap leading-relaxed">{v.message}</p>
+                  <p className="text-sm whitespace-pre-wrap leading-relaxed" dir="auto">{String(v.message).replace(/\{اسم_الشركة\|[^}]*\}/g, "[اسم الشركة]")}</p>
                   {r && <p className="text-xs text-muted-foreground">أُرسلت لـ{r.sent} · ردّ {r.replied} · مهتم {r.interested} · إيقاف {r.stopped}</p>}
                 </div>
               );

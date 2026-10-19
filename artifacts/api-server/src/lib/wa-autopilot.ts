@@ -39,7 +39,8 @@ import { logger } from "./logger";
 import { parseLoose } from "./loose-json";
 import { strictSector } from "./email/sector";
 import { WA_DOCTRINE } from "./wa-doctrine";
-import { fitsCampaign, pictureMatches } from "./image-sense";
+import { fitsCampaign, messageLang, pictureMatches } from "./image-sense";
+import { languageOfText } from "./recipient-name";
 
 export const WRITER_ROLE = "wa_campaigns";
 const JUDGE_AFTER_HOURS = 48;
@@ -141,6 +142,8 @@ export function writerPrompt(i: { vertical: string; firm: string; description: s
   return [
     WA_DOCTRINE(shop),
     "",
+    "اللغة: كل نسخة تُكتب بلغة تصميمها المذكورة لها أدناه — الإنجليزية لتصميمٍ إنجليزي (إنجليزية مهنية واضحة)، والعربية لتصميمٍ عربي أو مختلط أو بلا تصميم. القواعد كلها هي نفسها في اللغتين.",
+    "",
     `أنت كاتب حملات واتساب لدى ${i.firm}${i.description ? ` — ${i.description}` : ""}.`,
     `تكتب رسالة حملة لـ${shop ? `زبائن قائمة «${i.target}»` : `شركات قطاع «${i.target}»`} — ${shop ? "قطعة من المحل" : i.service === "aml" ? "خدمة الامتثال لمكافحة غسل الأموال (AML)" : "خدمات المحاسبة والضرائب"}.`,
     i.brief ? `ما يهمّ هذا القطاع: ${i.brief}` : "",
@@ -150,30 +153,30 @@ export function writerPrompt(i: { vertical: string; firm: string; description: s
     "",
     "قواعد الرسالة:",
     "- واتساب لا بريد: من ٣ إلى ٥ أسطر قصيرة، تبدأ بشيء يخصّه هو لا بنا، وتنتهي بدعوة واحدة سهلة (رد بكلمة، أو اضغط «مهتم»).",
-    "- بالعربية، محترمة دائماً. ممنوع منعاً باتاً أي كلمة تحبّب أو تدليل: حبيبتي، حبيبي، صاحبتي، صديقتي، قلبي، عيوني، يا قمر.",
+    "- بلغة تصميمها، محترمة دائماً. ممنوع منعاً باتاً أي كلمة تحبّب أو تدليل: حبيبتي، حبيبي، صاحبتي، صديقتي، قلبي، عيوني، يا قمر (ولا ما يقابلها بالإنجليزية: dear friend، honey، sweetie).",
     "- لا عبارات القوالب: عزيزي العميل، يسعدنا، لا تتردد، نحن هنا لخدمتك.",
     shop
       ? `- محل ذهب: ممنوع أي سعر أو وزن أو سعر ذهب أو مصنعية أو خصم. ضع رابط القطعة كما هو: ${i.piece ?? "رابط المتجر https://floret-royal.io"}.`
       : "- لا رقم ولا غرامة ولا نسبة ولا مدة لا توجد في المعلومات أدناه. اذكر اسم الشركة «برو كاونت للمحاسبة» مرة واحدة.",
     shop
       ? "- لا تذكر اسم الزبونة ولا اسم أي شخص، ولا تبدأ بمناداة باسم."
-      : "- لا تكتب التحية ولا اسم الشركة المستلمة: النظام يضع في أول كل رسالة «السادة <اسم شركتهم> المحترمين،» تلقائياً. ابدأ مباشرة بالسطر الأول بعدها.",
+      : "- لا تكتب التحية ولا اسم الشركة المستلمة: النظام يضع في أول كل رسالة «السادة <اسم شركتهم> المحترمين،» (أو «Dear <company> team,» بالإنجليزية) تلقائياً. ابدأ مباشرة بالسطر الأول بعدها.",
     "- لا تكتب أي خانة قالب مثل [الاسم] أو {company}.",
     "",
     i.memory ? `ما تعلّمه الفريق:\n${i.memory}` : "",
     i.facts ? `المعلومات (اكتب منها فقط):\n${i.facts}` : "",
-    i.images ? `صور المعرض المتاحة (اختر لكل نسخة صورة تناسبها برقمها، أو null):\n${i.images}` : "",
+    i.images ? `النسختان وتصميماهما (اكتب كل نسخة عن موضوع تصميمها وبلغته):\n${i.images}` : "",
     "",
     "أعد JSON فقط:",
-    `{"variants":[{"angle":"اسم الزاوية","message":"نص الرسالة","imageId":null},{"angle":"...","message":"...","imageId":null}]}`,
+    `{"variants":[{"angle":"اسم الزاوية","message":"نص النسخة A"},{"angle":"...","message":"نص النسخة B"}]}`,
   ].filter(Boolean).join("\n");
 }
 
 /** The opening that names the company, for an accounting firm; none for a shop. Pure. */
-export function addressed(message: string, shop: boolean): string {
-  const body = message.replace(/^\s*(السادة|الساده|حضرات)[^\n]*\n+/, "").trim();
+export function addressed(message: string, shop: boolean, lang: "ar" | "en" = "ar"): string {
+  const body = message.replace(/^\s*(السادة|الساده|حضرات|dear)[^\n]*\n+/i, "").trim();
   if (shop) return body.replace(/\{[^{}]*(اسم|الاسم|name|company|الشركة|الشركه)[^{}]*\}\s*[،,]?\s*/gi, "").trim();
-  return `السادة {اسم_الشركة|شركتكم} المحترمين،\n${body}`;
+  return lang === "en" ? `Dear {اسم_الشركة|Sir/Madam} team,\n${body}` : `السادة {اسم_الشركة|شركتكم} المحترمين،\n${body}`;
 }
 
 /** A variant the checker would stop. Pure over the check. */
@@ -201,12 +204,24 @@ async function write(userId: number, vertical: string, target: string, service: 
   // Only pictures Gemini has seen and that belong to this list's sector and
   // service — described by what is in them, not by their file names
   // (image-sense.ts). A shop's list is the shop's own sector.
+  // The owner (2026-10-19): the picture first, and the message in its language.
+  // Two different designs for A and B when there are two — this sector's own
+  // before general ones, the least used first.
   const imgSector = shop ? "ذهب ومجوهرات" : target;
-  const imgs = (await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url, caption: mediaAssetsTable.caption, tags: mediaAssetsTable.tags,
+  const pool = (await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url, tags: mediaAssetsTable.tags,
       vision: mediaAssetsTable.vision, fits: mediaAssetsTable.fits, service: mediaAssetsTable.service, lang: mediaAssetsTable.lang })
     .from(mediaAssetsTable).where(eq(mediaAssetsTable.userId, userId)).orderBy(desc(mediaAssetsTable.createdAt)).limit(80))
-    .filter((m) => fitsCampaign(m, imgSector, shop ? "shop" : service, "ar")).slice(0, 30);
-  const images = imgs.map((m) => `${m.id}: ${m.vision}${m.tags.length ? ` [${m.tags.join("، ")}]` : ""}`).join("\n");
+    .filter((m) => fitsCampaign(m, imgSector, shop ? "shop" : service));
+  const used = new Map<string, number>();
+  for (const r of (await db.execute<{ v: string }>(sql`SELECT variants::text AS v FROM wa_autopilot_tests WHERE user_id = ${userId} AND created_at > now() - interval '60 days'`)).rows)
+    for (const m of pool) if (String(r.v).includes(m.url)) used.set(m.url, (used.get(m.url) ?? 0) + 1);
+  const ranked = pool.sort((a, b) => Number(!a.fits!.includes(imgSector)) - Number(!b.fits!.includes(imgSector)) || (used.get(a.url) ?? 0) - (used.get(b.url) ?? 0) || Math.random() - 0.5);
+  const plan = (["A", "B"] as const).map((key, i) => {
+    const img = ranked[i] ?? ranked[0] ?? null;
+    return { key, img, lang: messageLang(img?.lang) };
+  });
+  const LANG_AR = { ar: "العربية", en: "الإنجليزية" } as const;
+  const images = plan.map((x) => `النسخة ${x.key}: ${x.img ? `تصميمها: ${x.img.vision}` : "بلا تصميم"} — اكتبها بـ${LANG_AR[x.lang]}.`).join("\n");
   const prompt = writerPrompt({ vertical, firm: p?.name ?? "الشركة", description: p?.description ?? "", target: pieceName ? `${target} — ${pieceName}` : target, service, brief: SECTOR_BRIEF[target]?.brief ?? "", memory, facts, images, piece });
 
   let lastWhy = "";
@@ -219,7 +234,7 @@ async function write(userId: number, vertical: string, target: string, service: 
     const raw: any = parseLoose(out.text);
     if (!raw) { lastWhy = "ليس JSON"; continue; }
     const vs: WaVariant[] = (raw?.variants ?? []).slice(0, 2).map((v: any, i: number) => {
-      const img = imgs.find((m) => m.id === Number(v?.imageId));
+      const img = plan[i]?.img;
       let message = String(v?.message ?? "").trim();
       if (shop && piece && !message.includes(piece)) message = `${message}\n${piece}`;
       return { key: i ? "B" : "A", angle: String(v?.angle ?? "").slice(0, 80), message, mediaUrl: img?.url ?? null, link: piece };
@@ -230,7 +245,10 @@ async function write(userId: number, vertical: string, target: string, service: 
     // Pro Count addresses every company by its own name; the send loop fills
     // it per number (fillRecipient), «شركتكم» where the number has no name.
     // The shop names nobody.
-    for (const v of vs) v.message = addressed(v.message, shop);
+    // A message in the wrong language for its design is rewritten, not sent.
+    const wrongLang = vs.filter((v, i) => languageOfText(v.message) !== plan[i]!.lang).map((v) => v.key);
+    if (wrongLang.length) { lastWhy = `${wrongLang.join(" و")} ليست بلغة تصميمها`; continue; }
+    vs.forEach((v, i) => { v.message = addressed(v.message, shop, plan[i]!.lang); });
     // The last check, with the picture and the words side by side. Doubt drops
     // the picture; the message still goes, as text.
     for (const v of vs) {

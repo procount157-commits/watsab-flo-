@@ -22,4 +22,5 @@ ok(strictSector("Gulf Properties Real Estate Brokers") === "عقارات", "real
 // the name
 ok(addressed("نتولّى ملفات goAML.", false).startsWith("السادة {اسم_الشركة|شركتكم} المحترمين،"), "Pro Count names the company");
 ok(!/\{/.test(addressed("{الاسم}، طقم العروس هنا", true)) && !addressed("{الاسم}، طقم العروس هنا", true).includes("السادة"), "Floret names nobody");
+ok(addressed("We prepare your goAML file.", false, "en").startsWith("Dear {اسم_الشركة|Sir/Madam} team,"), "English message, English greeting");
 console.log(`wa-send-guard: ${n}/${n} ✅`);

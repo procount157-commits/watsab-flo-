@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fitsCampaign } from "../image-sense";
+import { fitsCampaign, messageLang } from "../image-sense";
 let n = 0; const ok = (c: boolean, m: string) => { assert.ok(c, m); n++; };
 const gold = { vision: "سوار وخاتم ذهب", fits: ["ذهب ومجوهرات"], service: "aml", lang: "ar" };
 const goldRe = { vision: "ذهب ومبانٍ", fits: ["ذهب ومجوهرات", "عقارات"], service: "aml", lang: "ar" };
@@ -16,6 +16,8 @@ ok(fitsCampaign(build, "مقاولات", "services"), "construction picture for 
 ok(!fitsCampaign(build, "مطاعم ومقاهي", "services"), "construction picture not for restaurants");
 ok(!fitsCampaign({ vision: null, fits: null, service: null }, "عقارات", "aml"), "unseen picture is never used");
 ok(fitsCampaign(gold, "ذهب ومجوهرات", "shop"), "the shop's own list");
-ok(!fitsCampaign(english, "مقاولات", "services", "ar"), "an English design never goes with an Arabic message");
-ok(fitsCampaign(english, "مقاولات", "services", "en"), "it may go with an English one");
+ok(fitsCampaign(english, "مقاولات", "services"), "an English design is used — and its message is written in English");
+ok(messageLang("en") === "en" && messageLang("mixed") === "ar" && messageLang("none") === "ar", "the message follows the design");
+ok(fitsCampaign({ vision: "موقع بناء ومبانٍ", fits: ["مقاولات", "عقارات"], service: "services", lang: "en" }, "مقاولات", "services"), "construction with buildings goes to contracting");
+ok(!fitsCampaign({ vision: "ذهب", fits: ["ذهب ومجوهرات"], service: "services", lang: null }, "ذهب ومجوهرات", "services"), "language not read yet: not used");
 console.log(`image-sense: ${n}/${n} ✅`);

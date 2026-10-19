@@ -78,22 +78,29 @@ export async function describeAsset(a: Pick<MediaAsset, "id" | "url">): Promise<
 
 /**
  * Whether a picture may go with a campaign to this sector and service. Pure.
- * Strict: a picture showing any other sector never goes — not even one that
- * shows this sector beside it.
+ * Strict: a picture showing an unrelated sector never goes — not even one
+ * that shows this sector beside it. The message is then written in the
+ * design's own language (messageLang), not the other way round.
  */
-export function fitsCampaign(a: { fits: string[] | null; service: string | null; vision: string | null; lang?: string | null }, sector: string, service: string, msgLang: "ar" | "en" = "ar"): boolean {
-  if (!a.vision || !a.fits?.length) return false;              // not seen yet: not used
-  // The owner: «some designs are in English and it sends them with Arabic».
-  // A design's words are in the message's language, or it has none.
-  if (!a.lang || !(a.lang === msgLang || a.lang === "none")) return false;
-  // Only this sector, or general. A picture that also shows another sector
-  // (gold beside buildings) is not sent to either: the owner saw exactly that
-  // picture under a real-estate message and asked for it to stop.
-  const sectorOk = a.fits.every((f) => f === sector || f === GENERAL);
+/** Sectors whose pictures look alike: a construction site shows buildings. */
+const NEIGHBOURS: Record<string, string[]> = { "عقارات": ["مقاولات"], "مقاولات": ["عقارات"] };
+
+export function fitsCampaign(a: { fits: string[] | null; service: string | null; vision: string | null; lang?: string | null }, sector: string, service: string): boolean {
+  if (!a.vision || !a.fits?.length || !a.lang) return false;   // not seen (or its language not read) yet: not used
+  // This sector, or general, or a neighbour shown beside it (buildings on a
+  // construction site). Anything else beside it — gold beside buildings, the
+  // picture the owner saw under a real-estate message — keeps it out.
+  const near = NEIGHBOURS[sector] ?? [];
+  const sectorOk = (a.fits.includes(sector) || a.fits.every((f) => f === GENERAL)) && a.fits.every((f) => f === sector || f === GENERAL || near.includes(f));
   if (!sectorOk) return false;
   if (service === "aml") return a.service === "aml" || a.service === "general";
   if (service === "services") return a.service === "services" || a.service === "general";
   return true;                                                   // the shop's own list
+}
+
+/** The language a message to go with this design is written in: the design's own. Pure. */
+export function messageLang(designLang: string | null | undefined): "ar" | "en" {
+  return designLang === "en" ? "en" : "ar";
 }
 
 /** The last check: the picture and the words together. Doubt drops the picture. */
@@ -112,7 +119,7 @@ export async function pictureMatches(url: string, message: string, audience: str
 /** Pictures not seen yet, a few at a time. */
 export async function describePending(limit = 8): Promise<number> {
   const rows = await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url }).from(mediaAssetsTable)
-    .where(or(isNull(mediaAssetsTable.visionAt), and(isNull(mediaAssetsTable.vision), sql`${mediaAssetsTable.visionAt} < now() - interval '1 day'`)))
+    .where(or(isNull(mediaAssetsTable.visionAt), and(isNull(mediaAssetsTable.lang), sql`${mediaAssetsTable.visionAt} < now() - interval '10 minutes'`)))
     .limit(limit);
   let n = 0;
   for (const r of rows) {
