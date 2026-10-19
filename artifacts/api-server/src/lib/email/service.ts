@@ -24,6 +24,7 @@ import { asLanguage, matchesLanguage, wrongLanguage } from "./language";
 import { assessEmail, sendGapMs, warmupCap, splitAb, pickWinner, type EmailVerdict } from "./health";
 import { byRisk, domainSignals, verifyDomains, holdRiskyQueued } from "./hygiene";
 import { activity } from "./team";
+import { afterSend, awaitingVerdict, beforeSend } from "./bounce-guard";
 import { pickSender, markSent, markBroken, holdBouncingSenders, capacityToday } from "./senders";
 import { receipt } from "../graph/receipts";
 
@@ -388,7 +389,9 @@ async function drainOne(userId: number) {
       sql`((${emailMessagesTable.campaignId} is null and ${emailMessagesTable.sequenceJobId} is not null) or ${emailMessagesTable.campaignId} in (${sending}))`,
       sql`(${emailMessagesTable.sequenceJobId} is null or (
         not exists (select 1 from email_sequence_jobs j join email_sequences q on q.id = j.sequence_id where j.id = ${emailMessagesTable.sequenceJobId} and not q.is_active)
-        and not exists (select 1 from email_contacts c where c.id = ${emailMessagesTable.contactId} and c.last_sent_at > now() - interval '48 hours')))`))
+        and not exists (select 1 from email_contacts c where c.id = ${emailMessagesTable.contactId} and c.last_sent_at > now() - interval '48 hours')))`,
+      // ملفٌ جديد أرسل عيّنته: ما بعدها ينتظر حكمها (bounce-guard.ts).
+      awaitingVerdict(emailMessagesTable.contactId)))
     .orderBy(asc(emailMessagesTable.createdAt)).limit(1);
   if (!m) { await completeFinishedCampaigns(userId); return; }
 
@@ -433,6 +436,16 @@ async function drainOne(userId: number) {
   }
 
   const es = pick.settings;
+  // الصندوق يُسأل عنه خادمه، وعيّنة الملف تُحترم — قبل أي إرسال.
+  let trialId: number | null = null;
+  if (contact) {
+    const g = await beforeSend(userId, contact, es.fromEmail!).catch(() => ({ send: true as const, trialId: null }));
+    if (!g.send) {
+      await db.update(emailMessagesTable).set({ status: "cancelled", error: g.why }).where(eq(emailMessagesTable.id, m.id));
+      return;
+    }
+    trialId = g.trialId;
+  }
   const vars = varsFor(contact, es);
   const base = await publicBase(userId);
   // البكسل عبر أي عنوانٍ حي؛ الروابط والإلغاء عبر عنوانٍ دائم فقط (public-url.ts).
@@ -449,6 +462,7 @@ async function drainOne(userId: number) {
     const r = await sendEmail(es, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(keep, m.token) });
     await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId, messageIdHdr: messageId, subject, senderId: pick.sender?.id ?? null }).where(eq(emailMessagesTable.id, m.id));
     if (contact) await db.update(emailContactsTable).set({ lastSentAt: new Date() }).where(eq(emailContactsTable.id, contact.id));
+    await afterSend(trialId).catch(() => {});
     if (m.campaignId) await db.update(emailCampaignsTable).set({ sentCount: sql`${emailCampaignsTable.sentCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
     await recordEvent(userId, m.id, "sent");
     receipt({ userId, node: "sender", graph: "email", action: "send.email", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : m.sequenceJobId ? `sequence-job:${m.sequenceJobId}` : null, outputRef: `email-message:${m.id}` });

@@ -73,11 +73,14 @@ export const emailContactsTable = pgTable("email_contacts", {
   sector:        varchar("sector", { length: 60 }),
   /** بماذا عُرف القطاع: own | model | hint. */
   sectorBy:      varchar("sector_by", { length: 8 }),
-  /** active | unsubscribed | bounced | complained */
+  /** active | unsubscribed | bounced | complained | invalid (خادمه قال: لا صندوق) */
   status:        varchar("status", { length: 20 }).notNull().default("active"),
   tags:          jsonb("tags").notNull().default([]),
   mxOk:          boolean("mx_ok"),
   mxCheckedAt:   timestamp("mx_checked_at", { withTimezone: true }),
+  /** ما قاله خادم المستلم عن الصندوق نفسه قبل الإرسال: ok | invalid | catchall | unknown (mailbox-check.ts). */
+  mailbox:       varchar("mailbox", { length: 10 }),
+  mailboxCheckedAt: timestamp("mailbox_checked_at", { withTimezone: true }),
   lastSentAt:    timestamp("last_sent_at", { withTimezone: true }),
   lastOpenedAt:  timestamp("last_opened_at", { withTimezone: true }),
   /** هدنة: لا تُراسَل هذه الجهة قبل هذا التاريخ — طلبها ردُّها نفسه. */
@@ -102,6 +105,27 @@ export const emailListsTable = pgTable("email_lists", {
   stage:       varchar("stage", { length: 20 }),
   createdAt:   timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/**
+ * ملفٌ جديد يُجرَّب على عيّنة قبل أن يُرسل إلى كله (source-trial.ts):
+ * sampling حتى تُرسل العيّنة ويُحكم عليها، ثم passed أو failed.
+ */
+export const emailSourceTrialsTable = pgTable("email_source_trials", {
+  id:         serial("id").primaryKey(),
+  userId:     integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  source:     varchar("source", { length: 60 }).notNull(),
+  /** sampling | passed | failed */
+  status:     varchar("status", { length: 10 }).notNull().default("sampling"),
+  sample:     integer("sample").notNull().default(50),
+  /** من جُرّب من الملف: أُرسل إليه، أو قال خادمه إن صندوقه غير موجود. */
+  attempted:  integer("attempted").notNull().default(0),
+  /** من ارتدّ منهم أو رُفض صندوقه. */
+  bad:        integer("bad").notNull().default(0),
+  note:       text("note"),
+  createdAt:  timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  decidedAt:  timestamp("decided_at", { withTimezone: true }),
+}, (t) => [unique().on(t.userId, t.source)]);
+export type EmailSourceTrial = typeof emailSourceTrialsTable.$inferSelect;
 
 export const emailListMembersTable = pgTable("email_list_members", {
   listId:    integer("list_id").notNull().references(() => emailListsTable.id, { onDelete: "cascade" }),

@@ -246,7 +246,22 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
   const res = await resultsReport(userId).catch(() => null);
   const avoidAngles = res?.avoidAngles ?? [];
   const roleFirst = !!res?.decisions.some((d) => d.kind === "role_first");
-  const amlHasAudience = (res?.audience ?? []).some((a) => a.tracks.includes("aml") && a.ready >= MIN_SECTOR);
+  // قرار صاحب العمل (١٩ أكتوبر): «AML أولاً، والخدمات تملأ اليوم حين لا
+  // تخرج موجة AML». كان السقف يُرفع فقط حين لا يبقى لـAML جمهور، فإذا
+  // أوقف المحلّل زوايا AML كلها وبقي الجمهور توقّف الإرسال كله: لا AML
+  // يخرج، والخدمات عند سقفها. الآن يُرفع السقف حين لا تقدر أي موجة AML أن
+  // تخرج هذه الجولة — لا جمهور، أو لا زاوية لم تُرفض — ويعود حين تقدر.
+  let amlCanGo = false;
+  if (strategist) for (const list of lists) {
+    for (const s of await unsentBySector(list.id)) {
+      if (s.n < MIN_SECTOR || !tracksFor(s.sector).includes("aml")) continue;
+      if (await busy(list.id, s.sector) || nextAngle("aml", s.sector, await anglesUsed(userId, "aml", s.sector), avoidAngles)) { amlCanGo = true; break; }
+    }
+    if (amlCanGo) break;
+  }
+  const amlHasAudience = amlCanGo && (res?.audience ?? []).some((a) => a.tracks.includes("aml") && a.ready >= MIN_SECTOR);
+  if (strategist && !amlHasAudience) await sayOnce(userId, "email_strategist", "fill",
+    "لا موجة AML تقدر أن تخرج الآن (لا جمهور أو كل زواياه موقوفة) — موجات الخدمات تملأ اليوم، وAML يعود أولاً حين يتاح.", 24);
   // المزوّد رفض نصّنا كإزعاج: الموجات تصغر حتى يزول الأثر — ستون بدل
   // مئتين، فنصٌّ جديد يُجرَّب على عددٍ لا يُغرق المزوّد إن أخطأ.
   const waveCap = res?.decisions.some((d) => d.kind === "policy") ? Math.min(cfg.waveSize, 60) : cfg.waveSize;

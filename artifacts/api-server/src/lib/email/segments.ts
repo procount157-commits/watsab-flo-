@@ -5,6 +5,7 @@
 // table, the counts beside each filter, campaigns, sequences and missions.
 
 import { and, eq, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { notFromFailedFile } from "./bounce-guard";
 import { db, emailContactsTable, emailListMembersTable, emailListsTable, type SegmentFilter } from "@workspace/db";
 import { UNCLASSIFIED } from "./sector";
 
@@ -90,7 +91,7 @@ export function cleanFilter(raw: any): SegmentFilter {
 export async function resolve(userId: number, f: SegmentFilter, opts: { sendable?: boolean; limit?: number } = {}) {
   const conds = conditions(userId, f);
   // الهدنة: من طلب أن نمهله لا يُختار، ولو كانت حالته «نشط».
-  if (opts.sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`, sql`(${c.quietUntil} is null or ${c.quietUntil} < now())`);
+  if (opts.sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`, sql`(${c.quietUntil} is null or ${c.quietUntil} < now())`, notFromFailedFile);
   // الترتيب يحسم من يدخل الموجة حين تكون أصغر من الجمهور. وعناوين
   // الأقسام أولاً قرارٌ من البيانات: ارتدّت ١٫٣٪ مقابل ٥٪ لعناوين الأشخاص.
   const roleRank = sql`CASE WHEN ${c.email} ~* '^(info|sales|admin|contact|support|hello|enquiry|enquiries|inquiry|office|mail|email|general|reception|accounts|accounting|finance)@' THEN 0 ELSE 1 END`;
@@ -103,7 +104,7 @@ export async function resolve(userId: number, f: SegmentFilter, opts: { sendable
 
 export async function count(userId: number, f: SegmentFilter, sendable = false): Promise<number> {
   const conds = conditions(userId, f);
-  if (sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`, sql`(${c.quietUntil} is null or ${c.quietUntil} < now())`);
+  if (sendable) conds.push(eq(c.status, "active"), sql`coalesce(${c.mxOk}, true)`, sql`(${c.quietUntil} is null or ${c.quietUntil} < now())`, notFromFailedFile);
   const [r] = await db.select({ n: sql<number>`count(*)` }).from(c).where(and(...conds));
   return Math.min(Number(r?.n ?? 0), f.take ?? Infinity);
 }

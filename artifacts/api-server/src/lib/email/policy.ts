@@ -167,8 +167,8 @@ export function mixShare(s: MixState): Record<Track, number> {
  * الحجم، وAML يأخذ الباقي كله. ولو قُيّد AML بالنسبة لتوقّف الإرسال
  * كله يوم لا يكون للخدمات جمهور — وقوائم اليوم عقاراتٌ كلها تقريباً.
  *
- * واستثناءٌ واحد: إن لم يبقَ لـAML جمهورٌ أصلاً رُفع السقف، فنسبةٌ
- * تُوقف الإرسال كله لم يقصدها أحد. ويُقال ذلك في التقرير.
+ * واستثناءٌ واحد بقرار صاحب العمل: إن لم تقدر موجة AML أن تخرج (لا جمهور،
+ * أو كل زواياه موقوفة) رُفع السقف فتملأ الخدمات اليوم. يُقال ذلك في التقرير.
  */
 export function servicesAllowance(s: MixState, opts: { amlHasAudience: boolean }): { allowed: number; lifted: boolean } {
   if (!opts.amlHasAudience) return { allowed: Number.MAX_SAFE_INTEGER, lifted: true };
@@ -188,7 +188,7 @@ export function chooseTrack(sector: string, s: MixState, opts: { amlHasAudience:
   const svcOk = al.allowed >= opts.minWave;
   if (tracks.includes("services") && svcOk) {
     return { track: "services", take: al.lifted ? null : al.allowed,
-      why: al.lifted ? "لا جمهور باقٍ لـAML — رُفع سقف الخدمات" : `الخدمات دون حصّتها: يتّسع لها ${al.allowed}` };
+      why: al.lifted ? "لا موجة AML تقدر أن تخرج الآن — الخدمات تملأ اليوم" : `الخدمات دون حصّتها: يتّسع لها ${al.allowed}` };
   }
   if (tracks.includes("aml")) return { track: "aml", take: null, why: "AML هو المسار الأول، والخدمات عند سقفها أو ليست لهذا القطاع" };
   return null;   // قطاع خدماتٍ فقط، والسقف ممتلئ: ينتظر

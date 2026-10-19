@@ -5,6 +5,7 @@
 // had to be uploaded twice to be sure. Both sections now upload through here.
 
 import { and, eq, inArray } from "drizzle-orm";
+import { startTrial } from "./bounce-guard";
 import { db, emailContactsTable, emailListsTable, emailListMembersTable, contactGroupsTable } from "@workspace/db";
 import { assertCanAddContacts } from "../plans";
 import { enrolInSequence } from "./service";
@@ -58,6 +59,7 @@ export async function importRows(userId: number, rawRows: Array<Record<string, u
 
   // Upsert the contacts; existing ones keep their status.
   const source = (body.source ?? (fileName ? `ملف: ${fileName.slice(0, 50)}` : "استيراد")).slice(0, 60);
+  await startTrial(userId, source);
   let inserted = 0;
   const ids = new Map<string, number>();
   for (let i = 0; i < report.rows.length; i += 200) {

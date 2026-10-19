@@ -72,7 +72,7 @@ export async function hygieneReport(userId: number, listId?: number | null) {
   const signals = await domainSignals(userId);
   const r = { total: contacts.length, active: 0, deadDomain: 0, unverified: 0, bounced: 0, unsubscribed: 0, role: 0, personal: 0, risk: { low: 0, medium: 0, high: 0 } as Record<Risk, number> };
   for (const c of contacts) {
-    if (c.status === "bounced" || c.status === "complained") { r.bounced++; continue; }
+    if (c.status === "bounced" || c.status === "complained" || c.status === "invalid") { r.bounced++; continue; }
     if (c.status === "unsubscribed") { r.unsubscribed++; continue; }
     r.active++;
     if (c.mxOk === false) r.deadDomain++;
