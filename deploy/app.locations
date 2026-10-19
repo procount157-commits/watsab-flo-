@@ -1,6 +1,9 @@
 client_max_body_size 80m;
 
-location /api/ {
+# ^~: a regex location below (\.png, \.jpg…) would otherwise win over this
+# prefix, and every gallery image at /api/media/file/…png was looked for on
+# disk — 404. Anything under /api/ is the api's, whatever it ends in.
+location ^~ /api/ {
     proxy_pass http://wam_api;
     proxy_http_version 1.1;
     proxy_set_header Host              $host;
