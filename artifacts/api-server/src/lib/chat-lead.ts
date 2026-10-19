@@ -130,7 +130,9 @@ async function weekOfChats(userId: number, maxConversations = 40): Promise<strin
     ) x WHERE rn <= 12 AND length(text) > 1 ORDER BY phone, created_at`)).rows;
   const byPhone = new Map<string, string[]>();
   for (const r of rows) byPhone.set(r.phone, [...(byPhone.get(r.phone) ?? []), `${r.from_me ? "نحن" : "العميل"}: ${r.text}`]);
-  return [...byPhone.values()].map((t, i) => `— محادثة ${i + 1}\n${t.join("\n")}`).join("\n\n").slice(0, 24_000);
+  // Fourteen thousand characters: enough for the week's patterns, and within
+  // what the free models accept (a 24k corpus came back empty or cut).
+  return [...byPhone.values()].map((t, i) => `— محادثة ${i + 1}\n${t.join("\n")}`).join("\n\n").slice(0, 14_000);
 }
 
 /** One pass for one account: read, learn, teach. */
@@ -142,14 +144,17 @@ export async function runChatLead(userId: number): Promise<{ ok: boolean; why?: 
   const chats = await weekOfChats(userId);
   if (!chats) return { ok: false, why: "لا محادثات هذا الأسبوع" };
 
-  const out = await asAgent(userId, CHAT_LEAD_ROLE, () => complete([
-    { role: "system", content: chatLeadPrompt(vertical, p?.name ?? "الشركة", p?.description ?? "") },
-    { role: "user", content: `محادثات هذا الأسبوع:\n\n${chats}` },
-  ], 90_000)).catch(() => null);
-  if (!out?.text) return { ok: false, why: "النموذج لم يستجب" };
-  let raw: Playbook;
-  try { raw = JSON.parse(out.text.slice(out.text.indexOf("{"), out.text.lastIndexOf("}") + 1)); }
-  catch { return { ok: false, why: "ردّ النموذج ليس JSON" }; }
+  let raw: Playbook | null = null, why = "";
+  for (let attempt = 0; attempt < 2 && !raw; attempt++) {
+    const out = await asAgent(userId, CHAT_LEAD_ROLE, () => complete([
+      { role: "system", content: chatLeadPrompt(vertical, p?.name ?? "الشركة", p?.description ?? "") },
+      { role: "user", content: `محادثات هذا الأسبوع:\n\n${chats}${attempt ? "\n\nأعد JSON فقط، يبدأ بـ{ وينتهي بـ}، بلا أي نص قبله أو بعده." : ""}` },
+    ], 150_000)).catch((err) => { why = String(err?.message ?? err).slice(0, 120); return null; });
+    if (!out?.text) { why = why || "النموذج لم يستجب"; continue; }
+    try { raw = JSON.parse(out.text.slice(out.text.indexOf("{"), out.text.lastIndexOf("}") + 1)); }
+    catch { why = `ردّ النموذج ليس JSON (${out.provider ?? "?"}): ${out.text.slice(0, 80)}`; }
+  }
+  if (!raw) { logger.warn({ userId, why }, "مسؤول الشات لم يكتب الدليل"); return { ok: false, why }; }
   const book = sanitize(raw, vertical);
 
   const date = new Date().toISOString().slice(0, 10);
