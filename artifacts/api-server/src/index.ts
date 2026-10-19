@@ -23,6 +23,7 @@ import { startInboundPolling } from "./lib/email/inbound";
 import { startMissionWorker } from "./lib/email/missions";
 import { startAutopilotWorker } from "./lib/email/autopilot";
 import { startBounceGuard } from "./lib/email/bounce-guard";
+import { startImageSense } from "./lib/image-sense";
 import { ensureEmailAgent } from "./lib/email/agent";
 import { db as dbx, botEmployeesTable as botEmp } from "@workspace/db";
 import { runAutoMaintenance } from "./lib/diagnosis-engine";
@@ -177,6 +178,7 @@ function startListening() {
     startEngineerRounds();
     startAutopilotWorker();
     startBounceGuard();
+    startImageSense();
     // أربعة محلّلين، جولةٌ يومية بفاصلٍ بينهم: الحساب المجاني يعطي
     // ٨٠٠٠ رمزاً في الدقيقة، وأربعة نداءاتٍ متلاحقة تضربه.
     startSpecialistRounds();

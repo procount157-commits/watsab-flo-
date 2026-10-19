@@ -5,7 +5,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Rocket, Loader2, Trophy, Check, X, Play } from "lucide-react";
+import { Rocket, Loader2, Trophy, Check, X, Play, Trash2 } from "lucide-react";
 import { api } from "@/components/AgentPanel";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +22,7 @@ export default function WaAutopilot() {
   const save = useMutation({ mutationFn: (b: any) => api("/api/wa-autopilot", { method: "PUT", body: JSON.stringify(b) }), onSuccess: (d) => { setCfg(d); refresh(); toast.success("حُفظ"); }, onError: (e: Error) => toast.error(e.message) });
   const approve = useMutation({ mutationFn: (id: number) => api(`/api/wa-autopilot/tests/${id}/approve`, { method: "POST" }), onSuccess: (d: any) => { refresh(); toast.success(d.note); }, onError: (e: Error) => toast.error(e.message) });
   const cancel = useMutation({ mutationFn: (id: number) => api(`/api/wa-autopilot/tests/${id}/cancel`, { method: "POST" }), onSuccess: refresh });
+  const remove = useMutation({ mutationFn: (id: number | "cancelled") => api(`/api/wa-autopilot/tests/${id}`, { method: "DELETE" }), onSuccess: (d: any) => { refresh(); toast.success(d.removed > 1 ? `حُذفت ${d.removed} تجارب ملغاة من السجل` : "حُذفت من السجل"); }, onError: (e: Error) => toast.error(e.message) });
   const run = useMutation({ mutationFn: () => api("/api/wa-autopilot/run", { method: "POST" }), onSuccess: (d: any) => { refresh(); toast(d.created ? "كُتبت تجربة جديدة" : d.why ?? "انتهت الدورة"); }, onError: (e: Error) => toast.error(e.message) });
 
   if (isLoading || !cfg) return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>;
@@ -64,13 +65,26 @@ export default function WaAutopilot() {
         </div>
       </div>
 
+      {(data?.tests ?? []).some((t: any) => t.status === "cancelled") && (
+        <div className="flex justify-end">
+          <button onClick={() => confirm("حذف كل التجارب الملغاة من السجل؟") && remove.mutate("cancelled")} disabled={remove.isPending}
+            className="flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:text-red-400 disabled:opacity-40">
+            <Trash2 className="w-4 h-4" /> احذف كل الملغاة ({(data.tests as any[]).filter((t) => t.status === "cancelled").length})
+          </button>
+        </div>
+      )}
       {(data?.tests ?? []).length === 0 ? (
         <div className="bg-card border border-card-border rounded-xl py-12 text-center text-sm text-muted-foreground">لا تجارب بعد — شغّل الطيار واحفظ، فتُكتب أول تجربة خلال نصف ساعة.</div>
       ) : (data.tests as any[]).map((t) => (
         <div key={t.id} className="bg-card border border-card-border rounded-xl p-4 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="font-semibold">{t.target} <span className="text-xs text-muted-foreground font-normal">· {t.service === "aml" ? "مكافحة غسل الأموال" : t.service === "services" ? "محاسبة وضرائب" : "المحل"} · {new Date(t.createdAt).toLocaleString("ar-AE")}</span></div>
-            <span className={cn("text-xs px-2 py-1 rounded-full", t.status === "awaiting_approval" ? "bg-amber-500/15 text-amber-500" : "bg-muted text-muted-foreground")}>{STATUS[t.status] ?? t.status}</span>
+            <div className="flex items-center gap-2">
+              <span className={cn("text-xs px-2 py-1 rounded-full", t.status === "awaiting_approval" ? "bg-amber-500/15 text-amber-500" : "bg-muted text-muted-foreground")}>{STATUS[t.status] ?? t.status}</span>
+              {t.status === "cancelled" && (
+                <button onClick={() => remove.mutate(t.id)} title="احذفها من السجل" className="p-1.5 text-muted-foreground hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
+              )}
+            </div>
           </div>
           <div className="grid md:grid-cols-2 gap-3">
             {(t.variants as any[]).map((v) => {

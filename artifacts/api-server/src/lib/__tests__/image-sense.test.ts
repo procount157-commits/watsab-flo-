@@ -1,0 +1,17 @@
+import assert from "node:assert/strict";
+import { fitsCampaign } from "../image-sense";
+let n = 0; const ok = (c: boolean, m: string) => { assert.ok(c, m); n++; };
+const gold = { vision: "سوار وخاتم ذهب", fits: ["ذهب ومجوهرات"], service: "aml" };
+const goldRe = { vision: "ذهب ومبانٍ", fits: ["ذهب ومجوهرات", "عقارات"], service: "aml" };
+const office = { vision: "مكتب وأوراق", fits: ["عام"], service: "services" };
+const build = { vision: "موقع بناء", fits: ["مقاولات"], service: "services" };
+ok(!fitsCampaign(gold, "عقارات", "aml"), "gold picture never goes to real estate");
+ok(fitsCampaign(gold, "ذهب ومجوهرات", "aml"), "gold AML picture for gold shops");
+ok(fitsCampaign(goldRe, "عقارات", "aml"), "a picture showing both goes to both");
+ok(!fitsCampaign(office, "عقارات", "aml"), "an accounting picture is not an AML one");
+ok(fitsCampaign(office, "مقاولات", "services"), "general accounting picture for contractors");
+ok(fitsCampaign(build, "مقاولات", "services"), "construction picture for contractors");
+ok(!fitsCampaign(build, "مطاعم ومقاهي", "services"), "construction picture not for restaurants");
+ok(!fitsCampaign({ vision: null, fits: null, service: null }, "عقارات", "aml"), "unseen picture is never used");
+ok(fitsCampaign(gold, "ذهب ومجوهرات", "shop"), "the shop's own list");
+console.log(`image-sense: ${n}/${n} ✅`);

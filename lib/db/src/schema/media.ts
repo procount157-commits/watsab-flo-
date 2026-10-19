@@ -19,6 +19,13 @@ export const mediaAssetsTable = pgTable("media_assets", {
   source:    varchar("source", { length: 20 }).notNull().default("upload"),
   /** The page an image came from, for the website study. */
   sourceUrl: text("source_url"),
+  /** What Gemini sees in the picture, in Arabic (image-sense.ts) — not the file name. */
+  vision:    text("vision"),
+  /** The sectors the picture belongs to, as Gemini read it: عقارات، ذهب ومجوهرات، … or عام. */
+  fits:      jsonb("fits").$type<string[]>(),
+  /** aml | services | jewelry | general */
+  service:   varchar("service", { length: 12 }),
+  visionAt:  timestamp("vision_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_media_assets_user").on(t.userId, t.createdAt)]);
 export type MediaAsset = typeof mediaAssetsTable.$inferSelect;

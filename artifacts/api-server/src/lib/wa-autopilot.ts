@@ -37,6 +37,7 @@ import { TARGETS, MIX } from "./email/policy";
 import { pieceUrl, shopName } from "./catalog/floret";
 import { logger } from "./logger";
 import { parseLoose } from "./loose-json";
+import { fitsCampaign, pictureMatches } from "./image-sense";
 
 export const WRITER_ROLE = "wa_campaigns";
 const JUDGE_AFTER_HOURS = 48;
@@ -180,9 +181,15 @@ async function write(userId: number, vertical: string, target: string, service: 
       ORDER BY (SELECT max(created_at) FROM wa_autopilot_tests t WHERE t.user_id = ${userId} AND t.variants::text LIKE '%' || ci.slug || '%') NULLS FIRST, random() LIMIT 1`)).rows;
     if (x) { piece = pieceUrl(x.slug); pieceName = shopName(x.name); }
   }
-  const imgs = await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url, caption: mediaAssetsTable.caption, tags: mediaAssetsTable.tags })
-    .from(mediaAssetsTable).where(eq(mediaAssetsTable.userId, userId)).orderBy(desc(mediaAssetsTable.createdAt)).limit(40);
-  const images = imgs.map((m) => `${m.id}: ${m.caption ?? ""}${m.tags.length ? ` [${m.tags.join("، ")}]` : ""}`).join("\n");
+  // Only pictures Gemini has seen and that belong to this list's sector and
+  // service — described by what is in them, not by their file names
+  // (image-sense.ts). A shop's list is the shop's own sector.
+  const imgSector = shop ? "ذهب ومجوهرات" : target;
+  const imgs = (await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url, caption: mediaAssetsTable.caption, tags: mediaAssetsTable.tags,
+      vision: mediaAssetsTable.vision, fits: mediaAssetsTable.fits, service: mediaAssetsTable.service })
+    .from(mediaAssetsTable).where(eq(mediaAssetsTable.userId, userId)).orderBy(desc(mediaAssetsTable.createdAt)).limit(80))
+    .filter((m) => fitsCampaign(m, imgSector, shop ? "shop" : service)).slice(0, 30);
+  const images = imgs.map((m) => `${m.id}: ${m.vision}${m.tags.length ? ` [${m.tags.join("، ")}]` : ""}`).join("\n");
   const prompt = writerPrompt({ vertical, firm: p?.name ?? "الشركة", description: p?.description ?? "", target: pieceName ? `${target} — ${pieceName}` : target, service, brief: SECTOR_BRIEF[target]?.brief ?? "", memory, facts, images, piece });
 
   let lastWhy = "";
@@ -203,6 +210,16 @@ async function write(userId: number, vertical: string, target: string, service: 
     if (vs.length < 2 || vs.some((v) => v.message.length < 20)) { lastWhy = "نسختان ناقصتان"; continue; }
     const problems = vs.flatMap((v) => variantIssues(v.message, shop, facts).map((x) => `${v.key}: ${x}`));
     if (problems.length) { lastWhy = problems.join(" · "); continue; }
+    // The last check, with the picture and the words side by side. Doubt drops
+    // the picture; the message still goes, as text.
+    for (const v of vs) {
+      if (!v.mediaUrl) continue;
+      const m = await pictureMatches(v.mediaUrl, v.message, shop ? `عملاء ${p?.name ?? "المحل"}` : `شركات قطاع ${target}`);
+      if (!m.ok) {
+        logger.info({ userId, target, url: v.mediaUrl, why: m.why }, "صورة لا تطابق النسخة — تُرسل بلا صورة");
+        v.mediaUrl = null;
+      }
+    }
     return { variants: vs };
   }
   return { variants: [], why: lastWhy };

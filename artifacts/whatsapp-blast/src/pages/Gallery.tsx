@@ -8,11 +8,13 @@
 import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Images, Upload, Trash2, Loader2, Tag, Globe } from "lucide-react";
+import { Images, Upload, Trash2, Loader2, Tag, Globe, Eye } from "lucide-react";
 import { api } from "@/components/AgentPanel";
 import { cn } from "@/lib/utils";
 
-type Asset = { id: number; url: string; caption: string | null; tags: string[]; source: string; sourceUrl: string | null; createdAt: string };
+type Asset = { id: number; url: string; caption: string | null; tags: string[]; source: string; sourceUrl: string | null; createdAt: string; vision: string | null; fits: string[] | null; service: string | null };
+
+const SERVICE: Record<string, string> = { aml: "مكافحة غسل الأموال", services: "محاسبة وضرائب", jewelry: "قطعة للبيع", general: "عامة" };
 
 const toBase64 = (f: File) => new Promise<string>((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = no; r.readAsDataURL(f); });
 
@@ -111,6 +113,18 @@ function AssetCard({ a, onSave, onDelete }: { a: Asset; onSave: (b: Partial<Asse
         {a.source === "website" && <span className="absolute top-2 right-2 text-[10px] px-2 py-0.5 rounded-full bg-black/60 text-white flex items-center gap-1"><Globe className="w-3 h-3" /> من الموقع</span>}
       </div>
       <div className="p-3 space-y-2 flex-1">
+        <div className="text-[11px] leading-relaxed rounded-lg bg-muted/40 p-2 space-y-1">
+          <div className="flex items-center gap-1 font-semibold text-muted-foreground"><Eye className="w-3 h-3" /> ما يراه النظام</div>
+          {a.vision ? (
+            <>
+              <p>{a.vision}</p>
+              <div className="flex flex-wrap gap-1">
+                {(a.fits ?? []).map((f) => <span key={f} className="px-1.5 py-0.5 rounded bg-primary/15 text-primary">{f}</span>)}
+                {a.service && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{SERVICE[a.service] ?? a.service}</span>}
+              </div>
+            </>
+          ) : <p className="text-muted-foreground">لم تُفحص بعد — تُفحص خلال دقائق، ولا تُستخدم في حملة قبل ذلك.</p>}
+        </div>
         <textarea value={caption} onChange={(e) => setCaption(e.target.value)} rows={2} placeholder="ماذا في الصورة؟"
           className="w-full px-2 py-1.5 bg-input border border-border rounded-lg text-xs resize-none" />
         <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="وسوم: أطقم، زفاف"
