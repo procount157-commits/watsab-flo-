@@ -122,8 +122,14 @@ router.delete("/library/:id", requireAuth, async (req, res) => {
 });
 
 // ── Serve GCS object (proxy — keeps GCS URLs internal) ───────────
-router.get("/file/:objectName", async (req, res): Promise<void> => {
-  const objectName = decodeURIComponent(req.params.objectName);
+// The links are stored as `/file/media-uploads%2F<id>.png`, and nginx decodes
+// the %2F on the way in, so the request arrives as `/file/media-uploads/<id>.png`
+// — two segments, which `/file/:objectName` never matched: every image in the
+// gallery was a 404. Both shapes are served.
+router.get(["/file/:objectName", "/file/:dir/:name"], async (req, res): Promise<void> => {
+  const p = req.params as Record<string, string>;
+  const objectName = p["dir"] ? `${p["dir"]}/${p["name"]}` : decodeURIComponent(p["objectName"]!);
+  if (objectName.includes("..")) { res.status(400).json({ error: "مسار غير صالح" }); return; }
 
   try {
     const meta = await statObject(objectName);
