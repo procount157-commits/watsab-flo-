@@ -38,14 +38,26 @@ const ar = (m: Record<string, string>, xs?: string[]) => (xs ?? []).map((x) => m
 export const STORE_URL = (process.env["FLORET_SITE_URL"] ?? "https://floret-royal.io").replace(/\/$/, "");
 export const pieceUrl = (slug: string, site?: string | null) => `${(site ?? STORE_URL).replace(/\/$/, "")}/product/${slug}`;
 
+/**
+ * A piece's name without the weight some names carry («… (4.07 جم)»): the
+ * employee must never say a weight, and a name she copies is what she says.
+ * Pure.
+ */
+export function shopName(name: string): string {
+  return name.replace(/\s*\(\s*[\d.٫,]+\s*(جم|جرام|غرام|g|gm)\s*\)/gu, "").replace(/\s+/g, " ").trim();
+}
+
 /** The knowledge-base text for one piece — what an employee reads to answer about it. Pure. */
 export function pieceEntry(i: { sku: string; name: string; purity: number | null; weightG: number | null; priceAed: number | null; tagline: string | null; highlights: string[]; occasion: string[]; audience: string[]; inStock: boolean; slug: string | null }, siteUrl?: string | null) {
   // No weight and no price in what the employee reads (the owner,
   // 2026-10-19): they are on the piece's page, and the page is what she sends.
   const facts = [i.purity ? `عيار ${i.purity}` : "", i.inStock ? "متوفر" : "غير متوفر حالياً"].filter(Boolean).join(" · ");
-  const highlights = i.highlights.map((h) => h.replace(/\s*[·،,]?\s*(الوزن|وزن)\s*[\d.٫]+\s*(جم|جرام|غرام|g)/gu, "").trim()).filter(Boolean);
+  const highlights = i.highlights.map((h) => h
+    .replace(/\s*[·،,—-]?\s*(السعر للحبة الواحدة|السعر للقطعة الواحدة)\s*[،,]?/gu, "")
+    .replace(/\s*[·،,]?\s*(الوزن|وزن الحبة|وزن القطعة|وزن)\s*[\d.٫]+\s*(جم|جرام|غرام|g)/gu, "").trim()).filter(Boolean);
+  const name = shopName(i.name);
   const content = [
-    `${i.name} — ${facts}.`,
+    `${name} — ${facts}.`,
     i.tagline ?? "",
     highlights.length ? `مميزاته: ${highlights.join("، ")}.` : "",
     ar(OCCASION, i.occasion).length ? `يناسب: ${ar(OCCASION, i.occasion).join("، ")}.` : "",
@@ -53,8 +65,8 @@ export function pieceEntry(i: { sku: string; name: string; purity: number | null
     `رمز القطعة: ${i.sku}${i.slug ? ` · الصفحة: ${pieceUrl(i.slug, siteUrl)}` : ""}`,
     "السعر والوزن في صفحة القطعة — لا يُذكران في المحادثة؛ من يسأل عنهما يُرسل له الرابط.",
   ].filter(Boolean).join("\n");
-  const keywords = [i.name, i.sku, ...highlights, ...ar(OCCASION, i.occasion), ...ar(AUDIENCE, i.audience), i.purity ? `عيار ${i.purity}` : ""].filter(Boolean).join(" ");
-  return { title: i.name, content, keywords };
+  const keywords = [name, i.sku, ...highlights, ...ar(OCCASION, i.occasion), ...ar(AUDIENCE, i.audience), i.purity ? `عيار ${i.purity}` : ""].filter(Boolean).join(" ");
+  return { title: name, content, keywords };
 }
 
 async function floret<T>(fn: (c: Client) => Promise<T>): Promise<T> {

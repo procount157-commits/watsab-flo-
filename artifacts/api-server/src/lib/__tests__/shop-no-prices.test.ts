@@ -2,7 +2,7 @@
 export {};
 process.env.DATABASE_URL ??= "postgres://unused@localhost/unused";
 const { priceOrWeight, checkReply, blocksSend } = await import("../reply-check");
-const { pieceEntry, pieceUrl } = await import("../catalog/floret");
+const { pieceEntry, pieceUrl, shopName } = await import("../catalog/floret");
 const { JEWELRY_ANGLE } = await import("../smart-followup");
 let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(54)} ${d}`); };
@@ -23,5 +23,7 @@ const e = pieceEntry({ sku: "FLR-1", slug: "taqm-x", name: "طقم", purity: 21,
 check("مدخل القطعة بلا وزن ولا سعر", !/درهم|جم\b|12\.87|6,460|6460/.test(e.content), e.content.split("\n")[0]);
 check("ومعه رابط صفحتها", e.content.includes(pieceUrl("taqm-x")));
 check("المتابعات بلا سعر ولا خصم ولا مصنعية", JEWELRY_ANGLE.every((a) => !/سعرها|خصم على|المصنعية كما|سعر الجرام/.test(a.replace("بلا خصم", ""))));
+check("الاسم بلا وزنه", shopName("طقم البيضاوي بنقش المفتاح (4.07 جم)") === "طقم البيضاوي بنقش المفتاح");
+check("وزن الحبة يسقط من الوصف", !pieceEntry({ sku: "H", slug: "h", name: "حيول (5.53 جم)", purity: 21, weightG: null, priceAed: null, tagline: null, highlights: ["حيول — السعر للحبة الواحدة، وزن الحبة 5.53 جم · عيار 21"], occasion: [], audience: [], inStock: true }).content.match(/جم|السعر للحبة/));
 console.log(`\n${pass}/${total} ${pass === total ? "✅" : "❌"}`);
 process.exit(pass === total ? 0 : 1);

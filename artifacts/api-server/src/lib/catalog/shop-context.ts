@@ -7,7 +7,7 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import { db, businessProfileTable, leadSourcesTable } from "@workspace/db";
-import { findPieces, pricingOf, pieceUrl, STORE_URL, type CatalogItem } from "./floret";
+import { findPieces, pricingOf, pieceUrl, shopName, STORE_URL, type CatalogItem } from "./floret";
 
 export type ShopContext = {
   vertical: "accounting" | "jewelry";
@@ -51,11 +51,11 @@ export async function shopContext(userId: number, phone: string, text: string): 
   const pieces = (await findPieces(userId, query, 3).catch(() => [])) as CatalogItem[];
   const piece = pieces[0] ?? null;
   for (const x of pieces) {
-    facts.push(`قطعة: ${x.name}${x.purity ? ` · عيار ${x.purity}` : ""} · ${x.inStock ? "متوفرة" : "غير متوفرة حالياً"}${x.slug ? ` · رابطها: ${pieceUrl(x.slug)}` : ""}`);
+    facts.push(`قطعة: ${shopName(x.name)}${x.purity ? ` · عيار ${x.purity}` : ""} · ${x.inStock ? "متوفرة" : "غير متوفرة حالياً"}${x.slug ? ` · رابطها: ${pieceUrl(x.slug)}` : ""}`);
   }
   const link = piece?.slug ? pieceUrl(piece.slug) : STORE_URL;
-  const photo = piece?.imagePath ? { path: piece.imagePath, caption: `${piece.name}${piece.slug ? `\n${pieceUrl(piece.slug)}` : ""}` } : null;
-  const names = (await db.execute<{ name: string }>(sql`SELECT name FROM catalog_items WHERE user_id = ${userId} AND published ORDER BY in_stock DESC, name`).catch(() => ({ rows: [] as Array<{ name: string }> }))).rows.map((r) => r.name);
+  const photo = piece?.imagePath ? { path: piece.imagePath, caption: `${shopName(piece.name)}${piece.slug ? `\n${pieceUrl(piece.slug)}` : ""}` } : null;
+  const names = (await db.execute<{ name: string }>(sql`SELECT name FROM catalog_items WHERE user_id = ${userId} AND published ORDER BY in_stock DESC, name`).catch(() => ({ rows: [] as Array<{ name: string }> }))).rows.map((r) => shopName(r.name));
   facts.push(`القطع الموجودة عندنا الآن (لا تذكري قطعة غير هذه، وبنفس الاسم): ${names.join(" · ")}`);
   return { vertical: "jewelry", dialect: p.dialect ?? "gulf", ad, piece, facts, photo, names, pricing, rate24: r24, link };
 }
