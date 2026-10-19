@@ -268,6 +268,11 @@ async function callOpenAiCompatible(
   // Zhipu's GLM-4.5 does the same by default — 251 tokens of thinking for a
   // one-word answer, measured — and takes its own switch.
   if (url.includes("bigmodel.cn")) body["thinking"] = { type: "disabled" };
+  // The Grid routes text-standard to reasoning models (GPT-OSS 120B, GPT-6
+  // Luna). On the server, 2026-10-19, one of its first two live calls spent the
+  // whole 800 tokens thinking and returned nothing. effort «low» measured 0
+  // reasoning tokens and a full reply in 4s; the extra room is a ceiling only.
+  if (url.includes("thegrid.ai")) { body["reasoning"] = { effort: "low" }; body["max_tokens"] = 1600; }
 
   const res = await fetch(url, {
     method: "POST",
