@@ -5,8 +5,9 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Rocket, Loader2, Trophy, Check, X, Play, Trash2, ShieldCheck } from "lucide-react";
+import { Rocket, Loader2, Trophy, Check, X, Play, Trash2 } from "lucide-react";
 import { api } from "@/components/AgentPanel";
+import FirewallCard from "@/components/FirewallCard";
 import { cn } from "@/lib/utils";
 
 const STATUS: Record<string, string> = {
@@ -65,25 +66,7 @@ export default function WaAutopilot() {
         </div>
       </div>
 
-      {data?.guard && (
-        <div className="bg-card border border-card-border rounded-xl p-4 space-y-3">
-          <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="w-5 h-5 text-primary" /> حارس الإرسال — {data.guard.name}</div>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            كل رسالة من كل حملة تمرّ عليه قبل أن تخرج: رسائل الحساب كله في طابورٍ واحد بفاصل {Math.round(data.guard.rules.minGapMs / 1000)}–{Math.round(data.guard.rules.maxGapMs / 1000)} ثانية،
-            و{data.guard.rules.per10Min} رسائل على الأكثر في عشر دقائق، و{data.guard.rules.perHour} في الساعة. والشخص — بأي صيغةٍ كُتب رقمه — لا تصله رسالة حملة ثانية خلال ٢٤ ساعة، ولا النص نفسه أبداً.
-          </p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-            {[
-              ["آخر ١٠ دقائق", `${data.guard.last10Min} / ${data.guard.rules.per10Min}`],
-              ["آخر ساعة", `${data.guard.lastHour} / ${data.guard.rules.perHour}`],
-              ["منع رسالة ثانية (٢٤ ساعة)", data.guard.blocked24h?.dup ?? 0],
-              ["منع تكرار النص نفسه", data.guard.blocked24h?.same ?? 0],
-            ].map(([k, v]) => (
-              <div key={String(k)} className="rounded-lg bg-muted/40 p-2"><div className="text-lg font-bold">{v}</div><div className="text-[11px] text-muted-foreground">{k}</div></div>
-            ))}
-          </div>
-        </div>
-      )}
+      <FirewallCard />
       {(data?.tests ?? []).some((t: any) => t.status === "cancelled") && (
         <div className="flex justify-end">
           <button onClick={() => confirm("حذف كل التجارب الملغاة من السجل؟") && remove.mutate("cancelled")} disabled={remove.isPending}
@@ -117,10 +100,24 @@ export default function WaAutopilot() {
               return (
                 <div key={v.key} className={cn("rounded-lg border p-3 space-y-2", t.winner === v.key ? "border-primary/60 bg-primary/5" : "border-border")}>
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold">نسخة {v.key} — {v.angle}</span>
+                    <span className="font-semibold">نسخة {v.key} — {v.angle}{Array.isArray(v.carousel) && v.carousel.length ? " · كاروسيل عربي/إنجليزي" : ""}</span>
                     {t.winner === v.key && <span className="flex items-center gap-1 text-primary"><Trophy className="w-3.5 h-3.5" /> الفائزة</span>}
                   </div>
                   {v.mediaUrl && <img src={v.mediaUrl} alt="" className="w-full max-h-40 object-cover rounded" />}
+                  {Array.isArray(v.carousel) && v.carousel.length > 0 && (
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {v.carousel.map((c: any, j: number) => (
+                        <div key={j} className="min-w-[180px] max-w-[200px] rounded-lg border border-border overflow-hidden bg-muted/30 shrink-0" dir={c.lang === "en" ? "ltr" : "rtl"}>
+                          <img src={c.imageUrl} alt="" className="w-full h-28 object-cover" />
+                          <div className="p-2 space-y-1">
+                            <div className="text-xs font-bold">{c.title}</div>
+                            <div className="text-[11px] leading-relaxed">{c.description}</div>
+                            <div className="text-[10px] text-center rounded border border-border py-1 text-muted-foreground">{c.buttonText}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <p className="text-sm whitespace-pre-wrap leading-relaxed" dir="auto">{String(v.message).replace(/\{اسم_الشركة\|[^}]*\}/g, "[اسم الشركة]")}</p>
                   {r && <p className="text-xs text-muted-foreground">أُرسلت لـ{r.sent} · ردّ {r.replied} · مهتم {r.interested} · إيقاف {r.stopped}</p>}
                 </div>

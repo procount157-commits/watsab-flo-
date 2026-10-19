@@ -35,6 +35,7 @@ import { skillsFor, skillsPreamble, finalCheckPreamble } from "./agent-skills";
 import { inboxPreamble } from "./agent-comms";
 import { thinkTime } from "./reply-timing";
 import { sendMessage, sendVoiceNote, getStatus, registerInboundHook, registerOnConnectHook, registerHumanReplyHook, markRead } from "./whatsapp";
+import { isFirewallError } from "./wa-firewall";
 import { updateCard, cardPreamble, isHumanHeld, takeover, lastCustomerLine, getCard } from "./lead-card";
 import { notify, esc } from "./telegram";
 import { say } from "./agent-comms";
@@ -506,7 +507,7 @@ async function autoReplyIfAppropriate(
     // reply reads well aloud — prices, links and lists stay as text.
     const asVoice = theyspoke && (await voiceRepliesOn(userId)) && sayable(answer.reply).ok;
     if (asVoice) await sendVoiceNote(userId, phone, answer.reply);
-    else await sendMessage(userId, phone, answer.reply);
+    else await sendMessage(userId, phone, answer.reply, undefined, undefined, undefined, undefined, { kind: "reply" });
     // The piece's photo follows the words, when there is one and the reply is about it.
     if (shop?.photo && shop.piece && ["piece", "ad_lead", "photo", "interested", "weight_price"].includes(answer.reading?.situation ?? "")) {
       await sendMessage(userId, phone, shop.photo.caption, "image", shop.photo.path).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "تعذّر إرسال صورة القطعة"));
@@ -729,7 +730,7 @@ export async function runDueFollowUps(now = new Date()): Promise<{ sent: number;
     }
 
     try {
-      await sendMessage(job.userId, job.phone, step.message);
+      await sendMessage(job.userId, job.phone, step.message, undefined, undefined, undefined, undefined, { kind: "followup" });
       await db.update(followUpJobsTable)
         .set({ status: "sent", sentAt: new Date() })
         .where(eq(followUpJobsTable.id, job.id));
@@ -738,6 +739,14 @@ export async function runDueFollowUps(now = new Date()): Promise<{ sent: number;
       remainingByUser.set(job.userId, left - 1);
       logger.info({ userId: job.userId, phone: job.phone, step: job.stepIndex, sequenceId: seq.id }, "follow-up sent");
     } catch (err: any) {
+      // The firewall's no is about the number today, not this person: the rung
+      // waits two hours and the rest of this account's rungs wait with it.
+      if (isFirewallError(err)) {
+        await db.update(followUpJobsTable).set({ dueAt: new Date(Date.now() + 2 * 3_600_000), error: String(err?.message ?? err).slice(0, 200) }).where(eq(followUpJobsTable.id, job.id)).catch(() => {});
+        remainingByUser.set(job.userId, 0);
+        result.skipped++;
+        continue;
+      }
       await db.update(followUpJobsTable)
         .set({ status: "failed", error: String(err?.message ?? err).slice(0, 500) })
         .where(eq(followUpJobsTable.id, job.id));

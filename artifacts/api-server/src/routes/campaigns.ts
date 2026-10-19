@@ -13,6 +13,7 @@ import * as XLSX from "xlsx";
 import { eq, desc, count, sql, and, gte, inArray, lt, max, asc } from "drizzle-orm";
 import { sendMessage, getStatus, waitForConnection, registerOnConnectHook, initWhatsApp } from "../lib/whatsapp";
 import * as sendGuard from "../lib/wa-send-guard";
+import { isFirewallError } from "../lib/wa-firewall";
 import { businessProfileTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
@@ -161,12 +162,13 @@ async function sendWithReconnect(
   mediaUrl?: string | null,
   buttons?: string | null,
   carousel?: string | null,
+  info?: { running: boolean },
 ): Promise<string | undefined> {
   const MAX_ATTEMPTS = 3;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const msgId = await sendMessage(userId, phone, message, messageType, mediaUrl, buttons, carousel);
+      const msgId = await sendMessage(userId, phone, message, messageType, mediaUrl, buttons, carousel, { kind: "campaign", running: info?.running ?? true });
       return msgId; // ✓ sent — return Baileys message ID for delivery tracking
     } catch (err: any) {
       const msg = String(err?.message ?? err ?? "");
@@ -333,6 +335,12 @@ setInterval(() => runWatchdog().catch(() => {}), 45_000);
 // ── Startup recovery ──────────────────────────────────────────────
 // Called once at server start — resumes any campaign that was left in
 // "running" state (e.g. after a server crash or Replit restart).
+/** The campaigns sending right now, for the firewall to pause. */
+export async function runningCampaignIds(userId: number): Promise<number[]> {
+  const rows = await db.select({ id: campaignsTable.id }).from(campaignsTable).where(and(eq(campaignsTable.userId, userId), eq(campaignsTable.status, "running")));
+  return rows.map((r) => r.id);
+}
+
 /** Stop a campaign's send loop now and set it aside — for the autopilot's cancel. */
 export async function stopCampaign(userId: number, campaignId: number, status = "paused"): Promise<void> {
   const key = campaignKey(userId, campaignId);
@@ -1517,7 +1525,7 @@ async function runCampaign(userId: number, campaign: any, contactsIn: any[], inf
     try {
       // The stop button goes under every campaign message, made today or long ago.
       const out = withStopButton(personalizedMessage, campaign.messageType, campaign.buttons ?? null);
-      const waMessageId = await sendWithReconnect(userId, contact.phone, out.message, out.messageType, campaign.mediaUrl, out.buttons, campaign.carousel ?? null);
+      const waMessageId = await sendWithReconnect(userId, contact.phone, out.message, out.messageType, campaign.mediaUrl, out.buttons, campaign.carousel ?? null, info);
       // Wrap DB writes in retry — a transient DB blip must not lose the "sent" record
       await withDbRetry(() =>
         db.insert(messageLogs).values({ campaignId: campaign.id, phone: contact.phone, status: "sent", sentAt: new Date(), messageId: waMessageId ?? null })
@@ -1679,6 +1687,17 @@ async function runCampaign(userId: number, campaign: any, contactsIn: any[], inf
     } catch (err: any) {
       const errMsg = String(err?.message ?? err ?? "");
       sendGuard.release(userId, contact.phone);
+
+      // ── The firewall said no ─────────────────────────────────────
+      // Not this contact's failure and not a retry: the campaign pauses where
+      // it is and the firewall resumes it when the freeze lifts (or the owner does).
+      if (isFirewallError(err)) {
+        logger.warn({ campaignId: campaign.id, why: errMsg }, "جدار الحماية أوقف الحملة");
+        await withDbRetry(() => db.update(campaignsTable).set({ status: "paused" }).where(eq(campaignsTable.id, campaign.id))).catch(() => {});
+        info.running = false;
+        activeCampaigns.delete(key);
+        break;
+      }
 
       // ── WA disconnected after all retry attempts ──────────────────
       // INLINE recovery: wait for WA to reconnect here, then retry.

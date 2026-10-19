@@ -11,6 +11,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import { logger as appLogger } from "./logger";
+import * as firewall from "./wa-firewall";
 import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
 import { useDatabaseAuthState, migrateSessionFilesToDb } from "./wa-auth-state";
@@ -1658,6 +1659,9 @@ class WhatsAppInstance {
         this.stopKeepAlive();
 
         this.log.info({ reason, gen: myGen }, "Connection closed");
+        // The firewall counts closes: four in half an hour while sending is a
+        // restriction showing itself; 401/403/405 is WhatsApp saying so.
+        firewall.noteClose(this.userId, typeof reason === "number" ? reason : undefined);
 
         // ── Dead-credential breaker ───────────────────────────────
         // Two ways a session becomes unrecoverable without ever saying so:
@@ -2630,6 +2634,7 @@ class WhatsAppInstance {
     mediaUrl?: string | null,
     buttons?: string | null,
     carousel?: string | null,
+    opts?: { cold?: boolean },
   ): Promise<string | undefined> {
     if (!this.state.socket || !this.state.connected) throw new Error("WhatsApp غير متصل");
 
@@ -2674,7 +2679,10 @@ class WhatsAppInstance {
     } catch (checkErr: any) {
       // If the error is our own NOT_ON_WHATSAPP, re-throw so campaign marks as failed
       if (String(checkErr?.message).startsWith("NOT_ON_WHATSAPP")) throw checkErr;
-      // Any other error (network, timeout) — log and proceed optimistically
+      // A cold message to a number nobody could verify does not go: a message
+      // to a number that is not on WhatsApp is one of the plainest spam signs.
+      if (opts?.cold) throw new Error(`NOT_ON_WHATSAPP: تعذّر التحقق من ${phone} — رسالة باردة لا تُرسل بلا تحقق`);
+      // A reply: log and proceed optimistically
       appLogger.warn({ phone, err: String(checkErr?.message) }, "onWhatsApp check failed — proceeding anyway");
     }
 
@@ -3209,12 +3217,34 @@ export async function deleteForEveryone(userId: number, phone: string, messageId
   receipt({ userId, node: "sender", graph: "whatsapp", action: "recall.whatsapp", subject: phone, outputRef: messageId, why: "حُذفت الرسالة عند الطرفين بطلب صاحب العمل" });
 }
 
+/**
+ * Every outbound message of the app comes through here — campaigns,
+ * follow-ups, replies, the owner's own sends — and none reaches the wire
+ * without the firewall's leave (lib/wa-firewall.ts): its turn in the
+ * account's single line, today's cold budget, the tripwires. While the
+ * number convalesces, buttons and carousels go out as plain messages.
+ */
 export async function sendMessage(
   userId: number, phone: string, message: string,
   messageType?: string, mediaUrl?: string | null,
   buttons?: string | null, carousel?: string | null,
+  opts?: { kind?: firewall.SendKind; running?: boolean },
 ): Promise<string | undefined> {
-  return waManager.get(userId).sendMessage(phone, message, messageType, mediaUrl, buttons, carousel);
+  const kind: firewall.SendKind = opts?.kind ?? "followup";
+  const a = await firewall.admit(userId, phone, kind, opts?.running === undefined ? undefined : { running: opts.running });
+  let type = messageType, media = mediaUrl, btns = buttons, cards = carousel, text = message;
+  if (!a.interactive && (btns || cards || /button|carousel/.test(type ?? ""))) {
+    const d = firewall.downgrade(type, message, mediaUrl, carousel);
+    type = d.messageType; media = d.mediaUrl; btns = null; cards = null; text = d.message;
+  }
+  try {
+    const id = await waManager.get(userId).sendMessage(phone, text, type, media, btns, cards, { cold: a.cold });
+    await firewall.recordSent(userId, phone, kind, a.cold, id);
+    return id;
+  } catch (err) {
+    await firewall.recordError(userId, err).catch(() => {});
+    throw err;
+  }
 }
 
 /** The words as a voice note — spoken by the account's voice, with the text as the fallback. */

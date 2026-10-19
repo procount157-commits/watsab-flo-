@@ -126,7 +126,7 @@ router.post("/test-send", async (req, res) => {
 
   try {
     const withButtons = Array.isArray(buttons) && buttons.length > 0;
-    await sendMessage(userId, cleanPhone, testMsg, withButtons ? (mediaUrl ? "image_button" : "button") : "text", mediaUrl ?? null, withButtons ? JSON.stringify(buttons) : null);
+    await sendMessage(userId, cleanPhone, testMsg, withButtons ? (mediaUrl ? "image_button" : "button") : "text", mediaUrl ?? null, withButtons ? JSON.stringify(buttons) : null, null, { kind: "manual" });
     res.json({ success: true, message: `تم إرسال رسالة اختبار إلى ${cleanPhone} ✓` });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || "فشل إرسال الرسالة الاختبارية" });
@@ -603,7 +603,7 @@ router.post("/inbox/:phone/send", async (req, res) => {
   const { text } = req.body as { text: string };
   if (!text?.trim()) return res.status(400).json({ error: "الرسالة فارغة" });
 
-  await sendMessage(userId, phone, text.trim());
+  await sendMessage(userId, phone, text.trim(), undefined, undefined, undefined, undefined, { kind: "manual" });
   // The owner is on this thread now; the bot and the ladder step back.
   await takeover(userId, phone, "app").catch(() => {});
 

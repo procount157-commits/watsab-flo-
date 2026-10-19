@@ -16,7 +16,9 @@ export const waAutopilotTable = pgTable("wa_autopilot", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export type WaVariant = { key: string; message: string; mediaUrl?: string | null; link?: string | null; listId?: number | null; campaignId?: number | null; angle?: string };
+/** A card of a carousel variant: its design, and words in the design's own language. */
+export type WaCard = { title: string; description: string; imageUrl: string; lang: "ar" | "en"; buttonText: string; buttonType: "interested" };
+export type WaVariant = { key: string; message: string; mediaUrl?: string | null; link?: string | null; listId?: number | null; campaignId?: number | null; angle?: string; carousel?: WaCard[] | null };
 export type WaVariantResult = { key: string; sent: number; replied: number; interested: number; stopped: number; score: number };
 
 /** One test: two variants on small lists, judged, and the winner sent to a wave. */

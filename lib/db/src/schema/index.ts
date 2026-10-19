@@ -32,3 +32,4 @@ export * from "./deals";
 export * from "./brief";
 export * from "./media";
 export * from "./wa_autopilot";
+export * from "./wa_firewall";

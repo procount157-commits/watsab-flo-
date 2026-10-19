@@ -24,7 +24,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   db, campaignsTable, contactGroupsTable, contactsTable, listFoldersTable, businessProfileTable,
   agentMemoryTable, mediaAssetsTable, waAutopilotTable, waAutopilotTestsTable,
-  type WaVariant, type WaVariantResult, type WaAutopilotTest,
+  type WaVariant, type WaVariantResult, type WaAutopilotTest, type WaCard,
 } from "@workspace/db";
 import { complete } from "./llm";
 import { asAgent } from "./agent-context";
@@ -40,6 +40,7 @@ import { parseLoose } from "./loose-json";
 import { strictSector } from "./email/sector";
 import { WA_DOCTRINE } from "./wa-doctrine";
 import { describePending, fitsCampaign, messageLang, pictureMatches, unreadCount } from "./image-sense";
+import { state as firewallState } from "./wa-firewall";
 import { languageOfText } from "./recipient-name";
 
 export const WRITER_ROLE = "wa_campaigns";
@@ -221,6 +222,16 @@ async function write(userId: number, vertical: string, target: string, service: 
   for (const r of (await db.execute<{ v: string }>(sql`SELECT variants::text AS v FROM wa_autopilot_tests WHERE user_id = ${userId} AND created_at > now() - interval '60 days'`)).rows)
     for (const m of pool) if (String(r.v).includes(m.url)) used.set(m.url, (used.get(m.url) ?? 0) + 1);
   const ranked = pool.sort((a, b) => Number(!a.fits!.includes(imgSector)) - Number(!b.fits!.includes(imgSector)) || (used.get(a.url) ?? 0) - (used.get(b.url) ?? 0) || Math.random() - 0.5);
+
+  // The owner (2026-10-19): one message, as a carousel — an Arabic design with
+  // Arabic words beside an English design with English words. When the sector
+  // has a design in each language, every variant goes that way.
+  const arPool = ranked.filter((m) => messageLang(m.lang) === "ar"), enPool = ranked.filter((m) => messageLang(m.lang) === "en");
+  if (!shop && arPool.length && enPool.length) {
+    const c = await writeCarousel({ userId, firm: p?.name ?? "الشركة", description: p?.description ?? "", target, service, memory, facts, arPool, enPool });
+    if (c.variants.length) return c;
+    logger.info({ userId, target, why: c.why }, "الكاروسيل تعذّر — نسخ بصورة واحدة");
+  }
   const plan = (["A", "B"] as const).map((key, i) => {
     const img = ranked[i] ?? ranked[0] ?? null;
     return { key, img, lang: messageLang(img?.lang) };
@@ -269,6 +280,93 @@ async function write(userId: number, vertical: string, target: string, service: 
   return { variants: [], why: lastWhy };
 }
 
+type Design = { url: string; vision: string | null; lang: string | null };
+
+/** The carousel writer's brief. Pure. */
+export function carouselPrompt(i: { firm: string; description: string; target: string; service: string; brief: string; memory: string; facts: string; plan: Array<{ key: string; cards: Array<{ lang: "ar" | "en"; vision: string }> }> }): string {
+  const L = { ar: "بالعربية", en: "بالإنجليزية (English)" } as const;
+  return [
+    WA_DOCTRINE(false),
+    "",
+    `أنت كاتب حملات واتساب لدى ${i.firm}${i.description ? ` — ${i.description}` : ""}.`,
+    `تكتب حملة لشركات قطاع «${i.target}» — ${i.service === "aml" ? "خدمة الامتثال لمكافحة غسل الأموال (AML)" : "خدمات المحاسبة والضرائب"}.`,
+    i.brief ? `ما يهمّ هذا القطاع: ${i.brief}` : "",
+    "",
+    "الرسالة كاروسيل: سطر تمهيد قصير بالعربية وآخر بالإنجليزية فوق البطاقات، ثم بطاقات تنزلق جانباً، لكل بطاقة تصميمها وكلامها بلغة تصميمها هو.",
+    "اكتب نسختين مختلفتين في الزاوية (A وB)، مثلاً: الخطر الذي يواجهه مقابل السهولة والراحة.",
+    "",
+    "قواعد البطاقة:",
+    "- العنوان: أقل من ٤٠ حرفاً. النص: جملة أو جملتان، أقل من ١١٠ أحرف. بلغة تصميم البطاقة فقط — لا كلمة عربية في بطاقة إنجليزية ولا العكس، إلا AML وgoAML وVAT.",
+    "- اكتب عن موضوع تصميم البطاقة نفسه كما وُصف لك.",
+    "- لا تحية ولا اسم الشركة المستلمة: النظام يضعهما فوق التمهيد. اذكر «Pro Count» أو «برو كاونت» في التمهيد مرة واحدة.",
+    "- لا رقم ولا غرامة ولا نسبة ولا مدة لا توجد في المعلومات أدناه.",
+    "",
+    i.memory ? `ما تعلّمه الفريق:\n${i.memory}` : "",
+    i.facts ? `المعلومات (اكتب منها فقط):\n${i.facts}` : "",
+    "",
+    "البطاقات وتصاميمها:",
+    ...i.plan.flatMap((v) => v.cards.map((c, j) => `النسخة ${v.key} — البطاقة ${j + 1} (${L[c.lang]}): ${c.vision}`)),
+    "",
+    "أعد JSON فقط:",
+    `{"variants":[{"angle":"اسم الزاوية","intro_ar":"سطر التمهيد بالعربية","intro_en":"intro line in English","cards":[{"title":"...","text":"..."},{"title":"...","text":"..."}]},{"angle":"...","intro_ar":"...","intro_en":"...","cards":[...]}]}`,
+  ].filter(Boolean).join("\n");
+}
+
+/** The words above the cards: each language its greeting and its line. Pure. */
+export function carouselBody(introAr: string, introEn: string): string {
+  return `السادة {اسم_الشركة|شركتكم} المحترمين،\n${introAr.trim()}\n\nDear {اسم_الشركة|Sir/Madam} team,\n${introEn.trim()}`;
+}
+
+async function writeCarousel(i: { userId: number; firm: string; description: string; target: string; service: string; memory: string; facts: string; arPool: Design[]; enPool: Design[] }): Promise<{ variants: WaVariant[]; why?: string }> {
+  // Each variant: an Arabic and an English design — different ones for A and B when there are enough.
+  const plan = (["A", "B"] as const).map((key, k) => ({
+    key,
+    cards: [i.arPool[k % i.arPool.length]!, i.enPool[k % i.enPool.length]!].map((d) => ({ d, lang: messageLang(d.lang) })),
+  }));
+  const prompt = carouselPrompt({ ...i, brief: SECTOR_BRIEF[i.target]?.brief ?? "", plan: plan.map((v) => ({ key: v.key, cards: v.cards.map((c) => ({ lang: c.lang, vision: c.d.vision ?? "" })) })) });
+  let lastWhy = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const out = await asAgent(i.userId, WRITER_ROLE, () => complete([
+      { role: "system", content: prompt },
+      { role: "user", content: attempt ? `النسختان السابقتان رُفضتا: ${lastWhy}. اكتبهما من جديد.` : "اكتب النسختين." },
+    ], 90_000)).catch(() => null);
+    if (!out?.text) { lastWhy = "النموذج لم يستجب"; continue; }
+    const raw: any = parseLoose(out.text);
+    const vs = (raw?.variants ?? []).slice(0, 2);
+    if (vs.length < 2) { lastWhy = "نسختان ناقصتان"; continue; }
+    const problems: string[] = [];
+    const built: WaVariant[] = vs.map((v: any, k: number) => {
+      const p = plan[k]!;
+      const cards: WaCard[] = p.cards.map((c, j) => {
+        const w = v?.cards?.[j] ?? {};
+        return { title: String(w.title ?? "").trim().slice(0, 60), description: String(w.text ?? "").trim().slice(0, 140), imageUrl: c.d.url, lang: c.lang,
+          buttonText: c.lang === "en" ? "Interested" : "مهتم", buttonType: "interested" };
+      });
+      const introAr = String(v?.intro_ar ?? "").trim(), introEn = String(v?.intro_en ?? "").trim();
+      if (!introAr || languageOfText(introAr) !== "ar") problems.push(`${p.key}: التمهيد العربي ناقص أو ليس بالعربية`);
+      if (!introEn || languageOfText(introEn) !== "en") problems.push(`${p.key}: التمهيد الإنجليزي ناقص أو ليس بالإنجليزية`);
+      cards.forEach((c, j) => {
+        if (!c.title || c.description.length < 15) problems.push(`${p.key}: البطاقة ${j + 1} ناقصة`);
+        else if (languageOfText(`${c.title} ${c.description}`) !== c.lang) problems.push(`${p.key}: البطاقة ${j + 1} ليست بلغة تصميمها`);
+      });
+      const all = [introAr, introEn, ...cards.flatMap((c) => [c.title, c.description])].join("\n");
+      problems.push(...variantIssues(all, false, i.facts).map((x) => `${p.key}: ${x}`));
+      return { key: p.key, angle: String(v?.angle ?? "").slice(0, 80), message: carouselBody(introAr, introEn), mediaUrl: null, link: null, carousel: cards };
+    });
+    if (problems.length) { lastWhy = problems.join(" · "); continue; }
+    // Each card checked on its own: its design beside its words. One card in
+    // doubt and the variant is not a carousel any more.
+    const mismatched: string[] = [];
+    for (const v of built) for (const c of v.carousel!) {
+      const m = await pictureMatches(c.imageUrl, `${c.title}\n${c.description}`, `شركات قطاع ${i.target}`);
+      if (!m.ok) { mismatched.push(`${v.key}: تصميم لا يطابق بطاقته (${m.why})`); logger.info({ userId: i.userId, url: c.imageUrl, why: m.why }, "بطاقة لا تطابق تصميمها"); }
+    }
+    if (mismatched.length) { lastWhy = mismatched.join(" · "); continue; }
+    return { variants: built };
+  }
+  return { variants: [], why: lastWhy };
+}
+
 // ── Lists and campaigns ───────────────────────────────────────────
 async function autopilotFolder(userId: number): Promise<number> {
   const [f] = await db.select().from(listFoldersTable).where(and(eq(listFoldersTable.userId, userId), eq(listFoldersTable.kind, "wa"), eq(listFoldersTable.name, AUTOPILOT_FOLDER))).limit(1);
@@ -289,9 +387,12 @@ async function makeList(userId: number, name: string, why: string, people: Array
 async function startCampaign(userId: number, name: string, v: WaVariant, listId: number, size: number, shop: boolean): Promise<number> {
   const [c] = await db.insert(campaignsTable).values({
     userId, name: name.slice(0, 250), status: "running", contactGroupId: listId, message: v.message,
-    messageType: v.mediaUrl ? "image" : "text", mediaUrl: v.mediaUrl ?? null,
-    // «مهتم» is what the judge counts besides a written reply; the stop button is added by the send loop.
-    buttons: JSON.stringify([{ text: shop ? "مهتمة" : "مهتم", type: "interested" }]),
+    ...(v.carousel?.length && v.carousel.length >= 2
+      // One message, the cards sliding sideways: «مهتم/Interested» and the stop button on every card.
+      ? { messageType: "carousel", carousel: JSON.stringify(v.carousel), mediaUrl: null, buttons: null }
+      : { messageType: v.mediaUrl ? "image" : "text", mediaUrl: v.mediaUrl ?? null,
+          // «مهتم» is what the judge counts besides a written reply; the stop button is added by the send loop.
+          buttons: JSON.stringify([{ text: shop ? "مهتمة" : "مهتم", type: "interested" }]) }),
     pacingMode: "auto", totalCount: size,
   } as any).returning();
   return c!.id;
@@ -393,6 +494,9 @@ export async function runCycle(userId: number): Promise<{ created?: number; judg
     else if (c.status === "paused") { await db.update(campaignsTable).set({ status: "running" }).where(eq(campaignsTable.id, t.waveCampaignId!)); await resume(userId); }
   }
 
+  // Nothing new while the firewall has the number frozen.
+  const fw = await firewallState(userId);
+  if (fw.mode === "frozen" || fw.manualFreeze) return { judged, why: `جدار الحماية يجمّد الإرسال: ${fw.reason ?? "تجميد يدوي"}` };
   // One new test at a time, and only with room in today's allowance on a number old enough.
   const [open] = await db.select({ id: waAutopilotTestsTable.id }).from(waAutopilotTestsTable)
     .where(and(eq(waAutopilotTestsTable.userId, userId), inArray(waAutopilotTestsTable.status, ["awaiting_approval", "testing"]))).limit(1);

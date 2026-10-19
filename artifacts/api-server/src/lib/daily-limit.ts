@@ -17,7 +17,11 @@ import { asc } from "drizzle-orm";
 // New numbers start low and grow, so day one cannot look like a blast.
 //   Day 0 → 50   Day 1 → 65   Day 2 → 85   Day 5 → 185
 //   Day 7 → 310  Day 10 → 680  Day 14 → 1500 (ceiling)
-export const DAILY_LIMIT_MAX   = 1_500;
+// 1,500 was the ceiling that let an 82-day-old number compute a 1,500-a-day
+// allowance on 2026-10-19; WhatsApp restricted it the same afternoon. The
+// firewall (wa-firewall.ts) is the real limit now — 80 cold a day at most —
+// and this ladder may never say more than it.
+export const DAILY_LIMIT_MAX   = 80;
 export const WARMUP_DAY0_LIMIT = 50;
 export const WARMUP_DAILY_GROW = 1.30;
 
