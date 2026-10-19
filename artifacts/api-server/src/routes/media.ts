@@ -21,6 +21,8 @@ import {
 } from "../lib/storage";
 import { logger } from "../lib/logger";
 import { requireAuth } from "../lib/auth";
+import { and, desc, eq } from "drizzle-orm";
+import { db, mediaAssetsTable } from "@workspace/db";
 
 const router = Router();
 
@@ -72,7 +74,18 @@ const uploadHandler: RequestHandler = async (req, res): Promise<void> => {
   try {
     await putObject(objectName, buffer, mimetype);
     logger.info({ objectName, size: buffer.length, driver: storageDriver() }, "media upload stored");
+    // Every image uploaded anywhere — a campaign, a carousel card, the gallery
+    // itself — lands in the gallery, so it can be picked again.
+    const caption = typeof req.body?.caption === "string" ? req.body.caption.trim().slice(0, 500) : null;
+    const tags = Array.isArray(req.body?.tags) ? req.body.tags.map((t: unknown) => String(t).trim()).filter(Boolean).slice(0, 12) : [];
+    let assetId: number | null = null;
+    if (req.session?.userId && /^image\//.test(mimetype)) {
+      const [a] = await db.insert(mediaAssetsTable).values({ userId: req.session.userId, url: serveUrl, mimetype, size: buffer.length, caption: caption || filename.replace(/\.[a-z0-9]+$/i, ""), tags, source: "upload" })
+        .onConflictDoNothing().returning({ id: mediaAssetsTable.id }).catch(() => [] as Array<{ id: number }>);
+      assetId = a?.id ?? null;
+    }
     res.json({
+      assetId,
       filename, path: serveUrl, url: serveUrl,
       size: buffer.length, mimetype, storage: storageDriver(),
     });
@@ -83,6 +96,30 @@ const uploadHandler: RequestHandler = async (req, res): Promise<void> => {
 };
 
 router.post("/upload", requireAuth, uploadHandler);
+
+// ── The gallery ──────────────────────────────────────────────────
+// What the owner uploads for campaigns and posts, what the website study
+// brought in: listed newest first, captioned and tagged, picked by the
+// campaign writer.
+router.get("/library", requireAuth, async (req, res) => {
+  const rows = await db.select().from(mediaAssetsTable).where(eq(mediaAssetsTable.userId, req.session.userId!)).orderBy(desc(mediaAssetsTable.createdAt)).limit(500);
+  res.json({ assets: rows });
+});
+
+router.patch("/library/:id", requireAuth, async (req, res) => {
+  const patch: Record<string, unknown> = {};
+  if (typeof req.body?.caption === "string") patch.caption = req.body.caption.trim().slice(0, 500);
+  if (Array.isArray(req.body?.tags)) patch.tags = req.body.tags.map((t: unknown) => String(t).trim()).filter(Boolean).slice(0, 12);
+  if (!Object.keys(patch).length) { res.status(400).json({ error: "لا شيء يُعدَّل" }); return; }
+  await db.update(mediaAssetsTable).set(patch).where(and(eq(mediaAssetsTable.id, Number(req.params.id)), eq(mediaAssetsTable.userId, req.session.userId!)));
+  res.json({ ok: true });
+});
+
+router.delete("/library/:id", requireAuth, async (req, res) => {
+  // The gallery entry goes; the file stays, since a sent campaign may still point at it.
+  await db.delete(mediaAssetsTable).where(and(eq(mediaAssetsTable.id, Number(req.params.id)), eq(mediaAssetsTable.userId, req.session.userId!)));
+  res.json({ ok: true });
+});
 
 // ── Serve GCS object (proxy — keeps GCS URLs internal) ───────────
 router.get("/file/:objectName", async (req, res): Promise<void> => {

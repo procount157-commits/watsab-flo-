@@ -15,6 +15,7 @@ import CampaignNew from "@/pages/CampaignNew";
 import CampaignDetail from "@/pages/CampaignDetail";
 import FollowUps from "@/pages/FollowUps";
 import Knowledge from "@/pages/Knowledge";
+import Gallery from "@/pages/Gallery";
 import Assistant from "@/pages/Assistant";
 import Employees from "@/pages/Employees";
 import AgentOps from "@/pages/AgentOps";
@@ -184,6 +185,7 @@ function AuthenticatedRoutes() {
           <Route path="/campaigns/:id"  component={CampaignDetail} />
           <Route path="/follow-ups"     component={FollowUps} />
           <Route path="/knowledge"      component={Knowledge} />
+          <Route path="/gallery"        component={Gallery} />
           <Route path="/assistant"      component={Assistant} />
           <Route path="/board"          component={Board} />
           <Route path="/browser"        component={BrowserDesk} />

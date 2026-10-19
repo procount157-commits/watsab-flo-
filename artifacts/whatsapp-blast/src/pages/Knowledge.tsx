@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Brain, Plus, Trash2, Loader2, FlaskConical, KeyRound, CheckCircle2, AlertCircle, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UnifiedKnowledge } from "@/components/UnifiedKnowledge";
+import { SiteStudy } from "@/components/SiteStudy";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const api = async (path: string, init?: RequestInit) => {
@@ -81,6 +82,8 @@ export default function Knowledge() {
           علّم البوت عن مجالك — يجيب من هذه المعلومات فقط، ولا يخترع سعراً ولا موعداً
         </p>
       </div>
+
+      <SiteStudy />
 
       <UnifiedKnowledge />
 

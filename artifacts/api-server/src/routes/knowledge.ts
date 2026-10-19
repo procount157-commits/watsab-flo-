@@ -1,3 +1,4 @@
+import { studySite, studyState } from "../lib/site-study";
 import { Router } from "express";
 import { and, desc, eq } from "drizzle-orm";
 import { db, knowledgeBaseTable, businessProfileTable } from "@workspace/db";
@@ -270,6 +271,18 @@ router.get("/unified", async (req, res) => {
   const q = String(req.query["q"] ?? "").trim();
   const { companyKnowledge, knowledgeCounts, SOURCE_AR } = await import("../lib/company-knowledge");
   res.json({ counts: await knowledgeCounts(userId), sources: SOURCE_AR, results: q ? await companyKnowledge(userId, q, { limit: 8 }) : [] });
+});
+
+// ── دراسة موقع الشركة: صفحاته إلى المعرفة، وصوره إلى المعرض ──────
+router.get("/study-site", async (req, res) => res.json(studyState(req.session.userId!)));
+router.post("/study-site", async (req, res) => {
+  const url = String(req.body?.url ?? "").trim();
+  if (!url) return res.status(400).json({ error: "اكتب رابط موقعك" });
+  try { new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`); } catch { return res.status(400).json({ error: "الرابط غير صحيح" }); }
+  const userId = req.session.userId!;
+  if (studyState(userId).running) return res.status(409).json({ error: "الدراسة جارية — انتظر حتى تنتهي" });
+  void studySite(userId, url).catch(() => {});
+  res.json({ started: true, note: "بدأت قراءة الموقع: حتى ٢٥ صفحة، ثم المعرفة والصور. تستغرق دقيقة أو اثنتين." });
 });
 
 export default router;

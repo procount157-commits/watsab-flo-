@@ -30,3 +30,4 @@ export * from "./groups";
 export * from "./feedback";
 export * from "./deals";
 export * from "./brief";
+export * from "./media";
