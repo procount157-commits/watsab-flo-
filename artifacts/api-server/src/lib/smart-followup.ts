@@ -353,8 +353,8 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
       continue;
     }
     try {
-      await sendMessage(userId, phone, d.text, undefined, undefined, undefined, undefined, { kind: "followup" });
-      if (d.photo) await sendMessage(userId, phone, d.photo.caption, "image", d.photo.path, undefined, undefined, { kind: "followup" }).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "صورة المتابعة لم تُرسل"));
+      await sendMessage(userId, phone, d.text);
+      if (d.photo) await sendMessage(userId, phone, d.photo.caption, "image", d.photo.path).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "صورة المتابعة لم تُرسل"));
       await record(userId, phone, due.rung, "send", d.reason, d.text, true, ops.view);
       result.sent++; left--;
       logger.info({ userId, phone, rung: due.rung + 1 }, "smart follow-up sent");

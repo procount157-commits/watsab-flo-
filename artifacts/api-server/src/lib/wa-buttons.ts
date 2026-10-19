@@ -37,7 +37,7 @@ export function interactiveReplyText(r: any): string {
 // WhatsApp draws it only if every card has an image and the same buttons, so
 // every card carries its link (if any) and the stop button, in that order.
 
-export type CarouselCardDef = { title: string; description?: string; imageUrl?: string; buttonText?: string; buttonUrl?: string; buttonType?: "url" | "call" | "reply" | "interested"; phone?: string };
+export type CarouselCardDef = { title: string; description?: string; imageUrl?: string; buttonText?: string; buttonUrl?: string; buttonType?: "url" | "call" | "reply"; phone?: string };
 
 export const CAROUSEL_MAX_CARDS = 10;
 const STOP: ButtonDef = { text: "إيقاف الرسائل", type: "stop" };
@@ -50,14 +50,12 @@ export function cardBody(c: CarouselCardDef): string {
 
 /** Each card's buttons. All cards get the same kinds, so the carousel renders; the stop button is last on every one. Pure. */
 export function carouselButtons(cards: CarouselCardDef[]): ButtonDef[][] {
-  const anyLink = cards.some((c) => c.buttonText?.trim() && (c.buttonUrl?.trim() || c.phone?.trim() || c.buttonType === "interested"));
+  const anyLink = cards.some((c) => c.buttonText?.trim() && (c.buttonUrl?.trim() || c.phone?.trim()));
   return cards.map((c) => {
     const out: ButtonDef[] = [];
     if (anyLink) {
       const text = c.buttonText?.trim() || "التفاصيل";
-      // «مهتم» on a card is counted like «مهتم» under a single image: the autopilot's judge reads it.
-      if (c.buttonType === "interested") out.push({ text, type: "interested" });
-      else if (c.buttonType === "call" && c.phone?.trim()) out.push({ text, type: "call", phone: c.phone });
+      if (c.buttonType === "call" && c.phone?.trim()) out.push({ text, type: "call", phone: c.phone });
       else if (c.buttonUrl?.trim()) out.push({ text, type: "url", url: c.buttonUrl });
       else out.push({ text, type: "reply" });
     }

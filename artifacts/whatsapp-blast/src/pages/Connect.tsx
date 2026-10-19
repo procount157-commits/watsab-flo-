@@ -1,4 +1,3 @@
-import FirewallCard from "@/components/FirewallCard";
 import { useState, useEffect, useRef } from "react";
 import { useGetWhatsappStatus, useLogoutWhatsapp } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -439,8 +438,6 @@ export default function Connect() {
               <p className="text-xs text-muted-foreground mt-0.5">حالة الجلسة</p>
             </div>
           </div>
-
-          <FirewallCard compact />
 
           {/* Session Guardian warnings */}
           {(health.consecutiveSendFailures ?? 0) > 0 && (
