@@ -499,7 +499,7 @@ export async function answerFromKnowledge(
       const ctx = {
         customer: question, previous, stage: opts.card?.stage,
         reading, names: opts.speaker ? [opts.speaker.name, englishName(opts.speaker.name)] : undefined,
-        strictNumbers: opts.shop?.vertical === "jewelry", warm: opts.shop?.vertical === "jewelry", catalogNames: opts.shop?.names, discountAllowed: false,
+        strictNumbers: opts.shop?.vertical === "jewelry", warm: opts.shop?.vertical === "jewelry", catalogNames: opts.shop?.names, discountAllowed: false, noPrices: opts.shop?.vertical === "jewelry",
         known: opts.card ? { licence: opts.card.licence, activity: opts.card.activity, size: opts.card.size, staff: opts.card.staff } : undefined,
         facts: [found.map((f) => `${f.entry.title}\n${f.entry.content}`).join("\n"), profile?.description ?? "", ...(opts.shop?.facts ?? [])].join("\n"),
       };

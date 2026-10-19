@@ -28,7 +28,8 @@ check("no weight, no quote", parseWeightKarat("كم السعر؟", 21) === null)
 
 // ── The entry an employee reads ───────────────────────────────────
 const e = pieceEntry({ sku: "FLR-TQM-0019", name: "طقم الكلوفر بالخاتم", purity: 21, weightG: 12.87, priceAed: 6460, tagline: "سلسلة ناعمة", highlights: ["كلوفر"], occasion: ["wedding"], audience: ["women"], inStock: true, slug: "clover-set" }, "http://localhost:4321");
-check("the entry says karat, weight, price all-in and stock", ["عيار 21", "12.87 جم", "6,460 درهم شامل الضريبة", "متوفر"].every((k) => e.content.includes(k)));
+// The owner, 2026-10-19: no price and no weight in what the employee reads — the piece's page carries them.
+check("the entry says karat, stock and the piece's page — no weight, no price", ["عيار 21", "متوفر", "/product/"].every((k) => e.content.includes(k)) && !e.content.includes("12.87 جم") && !e.content.includes("درهم"));
 check("...and its SKU, so a resync replaces rather than duplicates", e.content.includes("رمز القطعة: FLR-TQM-0019"));
 check("occasion and audience are in Arabic", e.content.includes("زفاف") && e.content.includes("نسائي"));
 
@@ -42,7 +43,7 @@ const dec = read("لا شكراً", { vertical: "jewelry" });
 check("a decline closes, mentions the showroom, asks nothing", dec.closes && !dec.mayAsk && dec.goal.includes("العين"));
 check("the licence question never appears for a shop", !read("شكراً", { vertical: "jewelry" }).forbid.some((f) => f.includes("مين لاند")) && read("شكراً", { vertical: "jewelry" }).forbid.some((f) => f.includes("الرخصة")));
 const p = replyPrompt({ name: "نورة", firm: "فلوريت", reading: read("كم ١٥ جرام", { vertical: "jewelry" }), vertical: "jewelry", dialect: "gulf", facts: "- السعر المحسوب: ٧٬٥٢٩ درهم" });
-check("the shop prompt carries the jeweller's examples and the Emirati register", p.includes("مصنعية ٤٥") && p.includes("إماراتية طبيعية") && !p.includes("Pro Count"));
+check("the shop prompt carries the jeweller's examples (a link, never a price) and the Emirati register", p.includes("floret-royal.io/product/") && !p.includes("مصنعية ٤٥") && p.includes("إماراتية طبيعية") && !p.includes("Pro Count"));
 check("...and the computed quote as a fact", p.includes("٧٬٥٢٩"));
 
 // ── The ladder ────────────────────────────────────────────────────
@@ -65,7 +66,7 @@ const honest = checkReply("الطقم عيار ٢١ ووزنه ١٢.٨٧ جم و
 check("the catalogue's own numbers pass", !blocksSend(honest) && !honest.issues.some((i) => i.code.startsWith("invented")), honest.issues.map((i) => i.note).join(" | "));
 check("«أتأكد لك» with no number passes", !blocksSend(checkReply("أتأكد لك من وزن القطعة وأرد عليك خلال دقائق — تبين صورة أوضح؟", { customer: "كم وزنه", strictNumbers: true })));
 check("Yemeni is read", dialectOf("اشتي اعرف بش سعر الطقم حقك عاد") === "yemeni");
-check("seven benefit angles for the shop, the last a farewell", JEWELRY_ANGLE.length === 7 && JEWELRY_ANGLE[0]!.includes("صورة") && JEWELRY_ANGLE[6]!.includes("ختام"));
+check("seven benefit angles for the shop, the last a farewell", JEWELRY_ANGLE.length === 7 && JEWELRY_ANGLE[0]!.includes("رابطها") && JEWELRY_ANGLE[6]!.includes("ختام"));
 check("the shop prompt bans uncertain numbers in words", replyPrompt({ name: "نورة", firm: "فلوريت", reading: read("كم وزنه", { vertical: "jewelry" }), vertical: "jewelry" }).includes("ممنوع منعاً باتاً"));
 
 // ── The voice: hospitality passes, corporate fails ────────────────

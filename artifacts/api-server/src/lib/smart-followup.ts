@@ -78,12 +78,14 @@ export const RUNG_ANGLE: string[] = [
 ];
 /** A shop's rungs: each one a benefit to the customer, never a reminder. */
 export const JEWELRY_ANGLE: string[] = [
-  "المتابعة ١ (بعد ساعة) — القطعة نفسها بالاسم مع وزنها وعيارها وسعرها اليوم شامل الضريبة من المعلومات (صورتها الحقيقية تُرسل تلقائياً مع رسالتك — لا تعرضي صورة أخرى)، وسؤال واحد: لمناسبة أم للبس اليومي، أو المقاس.",
-  "المتابعة ٢ (بعد ٦ ساعات) — معلومة تفيدها: الوزن والعيار الدقيقان من الكتالوج وما يعنيه ذلك لها (خفيف للبس اليومي / ثقيل للمناسبة)، أو إن تغير سعر الذهب اليوم فقل كم صار سعر القطعة الآن — من المعلومات فقط.",
-  "المتابعة ٣ (بعد يوم) — خيار بديل: قطعة أو قطعتان من نفس الذوق بوزن أخف أو أثقل (بالأسماء من الكتالوج)، ليكون عندها مقارنة لا ضغط.",
-  "المتابعة ٤ (بعد ٣ أيام) — اللفتة الوحيدة: خصم على المصنعية كما هو مذكور في المعلومات (لا على الذهب)، يُقال مرة واحدة بكرم، مع ما يلزم للطلب (الاسم والإمارة والمقاس) والتوصيل أو الاستلام من المعرض في العين.",
-  "المتابعة ٥ (بعد أسبوع) — مناسبة أو هدية: إن اقتربت مناسبة (عيد، زفاف، مولود) فاذكرها وقطعة تناسبها؛ وإلا نصيحة عناية قصيرة بالذهب تخص نوع قطعتها.",
-  "المتابعة ٦ (بعد أسبوعين) — سعر الذهب: إن تحرك سعر الجرام منذ آخر رسالة فاذكر الفرق على قطعتها بالرقم من المعلومات؛ وإلا قطعة جديدة من المجموعة بالاسم ووزنها وسعرها، بلا سؤال.",
+  // No price, no weight, no gold rate, no discount (the owner, 2026-10-19):
+  // the piece's page carries them, and its link is what each rung sends.
+  "المتابعة ١ (بعد ساعة) — القطعة التي سألت عنها بالاسم ورابطها من المعلومات (فيه السعر والصور)، وسؤال واحد محترم: لمناسبة أم للبس اليومي.",
+  "المتابعة ٢ (بعد ٦ ساعات) — معلومة تفيدها عن القطعة نفسها من وصفها في المعلومات (تصميمها، لمن تناسب، كيف تُلبس)، ورابطها، بلا أي رقم.",
+  "المتابعة ٣ (بعد يوم) — خيار بديل: قطعة أو قطعتان من نفس الذوق بالاسم من الكتالوج ورابط كل منهما، ليكون عندها مقارنة لا ضغط.",
+  "المتابعة ٤ (بعد ٣ أيام) — تسهيل الطلب: ما يلزم لإتمامه (الاسم والإمارة) والتوصيل أو الاستلام من المعرض في العين، ورابط القطعة — بلا خصم ولا عرض.",
+  "المتابعة ٥ (بعد أسبوع) — مناسبة أو هدية: إن اقتربت مناسبة (عيد، زفاف، مولود) فاذكرها وقطعة تناسبها برابطها؛ وإلا نصيحة عناية قصيرة بالذهب تخص نوع قطعتها.",
+  "المتابعة ٦ (بعد أسبوعين) — جديد المجموعة: قطعة جديدة بالاسم ورابطها، في سطر أو سطرين، بلا سؤال.",
   "المتابعة الأخيرة (بعد شهر) — ختام كريم: شكر، وأن المعرض في العين والواتساب موجودان متى احتاجت، بلا سؤال ولا ضغط.",
 ];
 
@@ -181,12 +183,8 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   // ريم's reading of this very conversation: who they are, what they wanted, the step she chose.
   const [rv] = (await db.execute<any>(sql`SELECT label, score, piece, summary, next_action FROM conversation_reviews WHERE user_id = ${userId} AND phone = ${phone}`).catch(() => ({ rows: [] }))).rows;
   const reviewFact = rv ? `قراءة ريم لهذه المحادثة: ${rv.summary ?? ""} (${rv.label}، قربه من الشراء ${rv.score}/100${rv.piece ? `، القطعة: ${rv.piece}` : ""}). الخطوة التي اقترحتها: ${rv.next_action ?? "—"}. ابنِ متابعتك عليها.` : "";
-  // The one discount there is — the making charge to its floor — on its rung only.
-  const discountRung = (shop?.pricing?.discountRung ?? 4) - 1;
-  const discountAllowed = !!shop && rung === discountRung && !!shop.piece?.weightG && !!shop.rate24;
-  const discountFact = discountAllowed
-    ? `مسموح في هذه المتابعة فقط: ${discountText(quote(shop!.piece!.weightG!, shop!.piece!.purity ?? shop!.pricing!.defaultKarat, shop!.rate24!, shop!.pricing!), discounted(shop!.piece!.weightG!, shop!.piece!.purity ?? shop!.pricing!.defaultKarat, shop!.rate24!, shop!.pricing!), shop!.pricing!)} قدّميه كلفتة كريمة لا كإلحاح.`
-    : (shop ? "ممنوع أي خصم أو عرض في هذه المتابعة." : "");
+  // No discount and no number at all in a shop's follow-up (the owner, 2026-10-19).
+  const discountFact = shop ? "ممنوع في هذه المتابعة: أي سعر أو وزن أو سعر ذهب أو مصنعية أو خصم أو عرض. أرسلي رابط القطعة بدلاً منها." : "";
   const facts = [reviewFact, ...(shop?.facts ?? []), discountFact, ...found.map((f) => `${f.entry.title}\n${f.entry.content.slice(0, 700)}`)].filter(Boolean).join("\n\n");
 
   const system = corePrompt({
@@ -233,7 +231,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
     known: card ? { licence: card.licence, activity: card.activity, size: card.size, staff: card.staff } : undefined,
     facts: [facts, profile?.description ?? ""].join("\n"),
   };
-  if (vertical === "jewelry") { (ctx as any).strictNumbers = true; (ctx as any).warm = true; (ctx as any).catalogNames = shop?.names ?? []; (ctx as any).discountAllowed = discountAllowed; }
+  if (vertical === "jewelry") { (ctx as any).strictNumbers = true; (ctx as any).warm = true; (ctx as any).catalogNames = shop?.names ?? []; (ctx as any).discountAllowed = false; (ctx as any).noPrices = true; }
   let text = raw, q = checkReply(text, ctx);
   if (needsRewrite(q)) {
     const fixed = await complete([

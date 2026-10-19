@@ -34,6 +34,12 @@ export interface CheckContext {
   catalogNames?: string[];
   /** A discount may be offered in this message. Otherwise any discount stops it. */
   discountAllowed?: boolean;
+  /**
+   * A gold shop's rule (the owner, 2026-10-19): no price, no weight, no
+   * today's gold rate — not even one the facts give. A question about them is
+   * answered with the piece's link on the shop's site. Any of them stops it.
+   */
+  noPrices?: boolean;
 }
 
 const PIECE_KINDS = "طقم|اطقم|إسواره|اسواره|أسواره|اسوره|سواره|خاتم|خواتم|دبله|مريه|حيول|مرتعشه|سلسله|سلسال|حلق|تعليقه|خلخال|انسيال|إنسيال|ميداليه|بروش|عقد";
@@ -54,6 +60,22 @@ export function pieceKnown(named: string, catalogNames: string[]): boolean {
   if (words.length < 2) return true; // a kind alone («طقم») names nothing
   return catalogNames.some((c) => { const cn = normalizeArabic(c); const hits = words.filter((w) => cn.includes(w)).length; return hits >= Math.min(2, words.length); });
 }
+/** A price, a weight or the gold rate, in Arabic or English, in a text. Pure. */
+export function priceOrWeight(text: string): string | null {
+  const t = text.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+  const n = normalizeArabic(t);
+  const tests: Array<[RegExp, string]> = [
+    [/\d[\d,.٬]*\s*(درهم|دراهم|aed|dhs?|ريال|sar|usd|\$)/i, "سعر بالعملة"],
+    [/(درهم|aed|dhs)\s*\d/i, "سعر بالعملة"],
+    [/\d[\d,.٬]*\s*(جم|جرام|غرام|غم|gm|grams?|g\b)/i, "وزن"],
+    [/(سعر|السعر|اسعار|الاسعار|وزن|الوزن|وزنه|وزنها|بوزن)[^\n\d]{0,20}\d/, "رقم مع السعر أو الوزن"],
+    [/سعر (الذهب|الجرام|الغرام|العيار|اليوم)|gold (rate|price)|price per gram/i, "سعر الذهب"],
+    [/(مصنعيه|المصنعيه|making charge)[^\n]{0,20}\d/i, "مصنعية بالرقم"],
+  ];
+  for (const [re, what] of tests) if (re.test(n) || re.test(t)) return what;
+  return null;
+}
+
 const DISCOUNT = /(خصم|تخفيض|تنزيل|عرض خاص|offer|discount|off\b|\d+\s*(%|٪))/i;
 
 export interface Issue { code: string; note: string; fix: string }
@@ -174,7 +196,7 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
 
   if (ctx.warm) {
     const offer = FORBIDDEN_OFFERS.filter((p) => n.includes(normalizeArabic(p)) || text.toLowerCase().includes(p));
-    if (offer.length) issues.push({ code: "offer", note: `عرض ممنوع: ${offer[0]}`, fix: "احذفي عرض الصورة الأخرى. تكلّمي عن القطعة نفسها: وزنها وسعرها ولمن تناسب، ثم سؤال عن المناسبة أو المقاس." });
+    if (offer.length) issues.push({ code: "offer", note: `عرض ممنوع: ${offer[0]}`, fix: "احذفي عرض الصورة الأخرى. أرسلي رابط القطعة من الموقع، وتكلّمي عن تصميمها ولمن تناسب، ثم سؤال عن المناسبة." });
   }
 
   // A piece we do not have, and a discount that was not permitted.
@@ -182,7 +204,12 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     const unknown = piecesNamed(text).filter((p) => !pieceKnown(p, ctx.catalogNames!));
     if (unknown.length) issues.push({ code: "unknown-piece", note: `قطعة ليست في الكتالوج: ${unknown.join("، ")}`, fix: "اذكري فقط قطعة من قائمة القطع الموجودة باسمها كما هو، أو لا تسمّي قطعة." });
   }
-  if (ctx.strictNumbers && !ctx.discountAllowed && DISCOUNT.test(text)) {
+  if (ctx.noPrices) {
+    const pw = priceOrWeight(text);
+    if (pw) issues.push({ code: "price-weight", note: `${pw} — ممنوع في رسائل المحل`, fix: "احذفي أي سعر أو وزن أو سعر ذهب أو خصم. من سألت عن السعر أو الوزن أرسلي لها رابط القطعة من الموقع، ففيه كل التفاصيل، في جملة قصيرة محترمة." });
+    if (DISCOUNT.test(text)) issues.push({ code: "discount", note: "خصم أو عرض — ممنوع في رسائل المحل", fix: "احذفي أي خصم أو عرض." });
+  }
+  if (ctx.strictNumbers && !ctx.discountAllowed && !ctx.noPrices && DISCOUNT.test(text)) {
     issues.push({ code: "discount", note: "خصم غير مسموح في هذه الرسالة", fix: "احذفي أي خصم أو عرض. الخصم الوحيد المسموح هو على المصنعية وفي المتابعة الرابعة فقط." });
   }
 
@@ -202,14 +229,14 @@ export function checkReply(reply: string, ctx: CheckContext): CheckResult {
     issues.push({ code: "oversell", note: "يعرض من جديد بعد أن وافق العميل", fix: "العميل وافق — انتقل للتنفيذ: الخطوة التالية وموعدها فقط." });
   }
 
-  const weights: Record<string, number> = { offer: 60, endearment: 60, "invented-strict": 60, "unknown-piece": 60, discount: 60, licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
+  const weights: Record<string, number> = { "price-weight": 80, offer: 60, endearment: 60, "invented-strict": 60, "unknown-piece": 60, discount: 60, licence: 35, asked: 35, unanswered: 30, role: 30, name: 40, placeholder: 50, long: 15, questions: 15, list: 10, robotic: 20, reveal: 40, reask: 20, invented: 30, "same-open": 5, language: 30, oversell: 20 };
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (weights[i.code] ?? 10), 0));
   return { score, issues };
 }
 
 /** Must not be sent as it is, rewritten or not. */
 export function blocksSend(r: CheckResult): boolean {
-  return r.issues.some((i) => ["placeholder", "reveal", "name", "asked", "invented-strict", "unknown-piece", "discount", "endearment", "offer"].includes(i.code));
+  return r.issues.some((i) => ["placeholder", "reveal", "name", "asked", "invented-strict", "unknown-piece", "discount", "endearment", "offer", "price-weight"].includes(i.code));
 }
 
 /** Worth a rewrite: anything but a cosmetic same-opening. */

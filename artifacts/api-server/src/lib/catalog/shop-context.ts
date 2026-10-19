@@ -7,9 +7,7 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import { db, businessProfileTable, leadSourcesTable } from "@workspace/db";
-import { findPieces, goldRate24, pricingOf, type CatalogItem } from "./floret";
-import { parseWeightKarat, quote, quoteText } from "./pricing";
-import { logger } from "../logger";
+import { findPieces, pricingOf, pieceUrl, STORE_URL, type CatalogItem } from "./floret";
 
 export type ShopContext = {
   vertical: "accounting" | "jewelry";
@@ -24,18 +22,11 @@ export type ShopContext = {
   names: string[];
   pricing: import("./pricing").Pricing | null;
   rate24: number | null;
+  /** The piece's page on the shop's site, or the shop's home: the answer to «how much» and «how heavy». */
+  link?: string | null;
 };
 
 const NONE: ShopContext = { vertical: "accounting", dialect: null, ad: null, piece: null, facts: [], photo: null, names: [], pricing: null, rate24: null };
-
-// Today's rate, asked of the shop at most once an hour.
-let rateCache: { at: number; rate: number | null } = { at: 0, rate: null };
-async function rate24(): Promise<number | null> {
-  if (Date.now() - rateCache.at < 3_600_000) return rateCache.rate;
-  const r = await goldRate24().catch((err) => { logger.warn({ err: String(err?.message ?? err).slice(0, 120) }, "سعر الذهب غير متاح"); return null; });
-  rateCache = { at: Date.now(), rate: r?.aedPerG24 ?? null };
-  return rateCache.rate;
-}
 
 export async function shopContext(userId: number, phone: string, text: string): Promise<ShopContext> {
   const [p] = await db.select({ vertical: businessProfileTable.vertical, dialect: businessProfileTable.dialect, catalog: businessProfileTable.catalogSource })
@@ -46,24 +37,25 @@ export async function shopContext(userId: number, phone: string, text: string): 
     .from(leadSourcesTable).where(and(eq(leadSourcesTable.userId, userId), eq(leadSourcesTable.phone, phone))).limit(1);
   const ad = lead?.isAd === "ad" ? { title: lead.title ?? null } : null;
 
-  const facts: string[] = [];
+  // No price, no weight, no gold rate (the owner, 2026-10-19): a question
+  // about them is answered with the piece's page, which carries them. So the
+  // facts hold the pieces and their links — never a number to quote.
+  const facts: string[] = [
+    "قاعدة المحل: لا سعر ولا وزن ولا سعر ذهب اليوم ولا خصم في أي رسالة. من سألت عن السعر أو الوزن أو التفاصيل: أرسلي رابط القطعة من الموقع في جملة قصيرة محترمة، ففيه كل شيء. وإن لم تُعرف القطعة: رابط المتجر " + STORE_URL + " وسؤال واحد عن القطعة التي أعجبتها.",
+  ];
   const pricing = await pricingOf(userId);
-  const r24 = await rate24();
-  if (r24) facts.push(`سعر الذهب اليوم: عيار 24 = ${r24.toFixed(2)} درهم/جم · عيار ${pricing.defaultKarat} = ${((r24 * pricing.defaultKarat) / 24).toFixed(2)} درهم/جم · المصنعية ${pricing.makingPerGram} درهم/جم · الضريبة ${pricing.vatPct}٪.`);
-
-  // A weight she typed: the number, computed, so the model copies rather than invents.
-  const wk = parseWeightKarat(text, pricing.defaultKarat);
-  if (wk && r24) facts.push(`السعر المحسوب لما سأل عنه — ${quoteText(quote(wk.weightG, wk.karat, r24, pricing), pricing)}`);
+  const r24: number | null = null;
 
   // The pieces named — or, for an ad click, the piece the ad showed.
   const query = [text, ad?.title ?? ""].join(" ");
   const pieces = (await findPieces(userId, query, 3).catch(() => [])) as CatalogItem[];
   const piece = pieces[0] ?? null;
   for (const x of pieces) {
-    facts.push(`قطعة: ${x.name} — رمز ${x.sku}${x.purity ? ` · عيار ${x.purity}` : ""}${x.weightG ? ` · ${x.weightG} جم` : ""}${x.priceAed ? ` · ${x.priceAed.toLocaleString("en-US")} درهم شامل الضريبة` : ""} · ${x.inStock ? "متوفرة" : "غير متوفرة حالياً"}${x.imagePath ? " · لها صورة تُرسل تلقائياً بعد ردك" : ""}`);
+    facts.push(`قطعة: ${x.name}${x.purity ? ` · عيار ${x.purity}` : ""} · ${x.inStock ? "متوفرة" : "غير متوفرة حالياً"}${x.slug ? ` · رابطها: ${pieceUrl(x.slug)}` : ""}`);
   }
-  const photo = piece?.imagePath ? { path: piece.imagePath, caption: `${piece.name}${piece.purity ? ` · عيار ${piece.purity}` : ""}${piece.weightG ? ` · ${piece.weightG} جم` : ""}` } : null;
+  const link = piece?.slug ? pieceUrl(piece.slug) : STORE_URL;
+  const photo = piece?.imagePath ? { path: piece.imagePath, caption: `${piece.name}${piece.slug ? `\n${pieceUrl(piece.slug)}` : ""}` } : null;
   const names = (await db.execute<{ name: string }>(sql`SELECT name FROM catalog_items WHERE user_id = ${userId} AND published ORDER BY in_stock DESC, name`).catch(() => ({ rows: [] as Array<{ name: string }> }))).rows.map((r) => r.name);
   facts.push(`القطع الموجودة عندنا الآن (لا تذكري قطعة غير هذه، وبنفس الاسم): ${names.join(" · ")}`);
-  return { vertical: "jewelry", dialect: p.dialect ?? "gulf", ad, piece, facts, photo, names, pricing, rate24: r24 };
+  return { vertical: "jewelry", dialect: p.dialect ?? "gulf", ad, piece, facts, photo, names, pricing, rate24: r24, link };
 }

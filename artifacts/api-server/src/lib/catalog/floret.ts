@@ -34,22 +34,26 @@ const AUDIENCE: Record<string, string> = { women: "نسائي", men: "رجالي
 const OCCASION: Record<string, string> = { wedding: "زفاف", engagement: "خطوبة", gift: "هدية", daily: "يومي", eid: "عيد", birth: "مولود", graduation: "تخرج" };
 const ar = (m: Record<string, string>, xs?: string[]) => (xs ?? []).map((x) => m[x] ?? x).filter(Boolean);
 
+/** The shop's storefront: each piece has its page at /product/<slug>. */
+export const STORE_URL = (process.env["FLORET_SITE_URL"] ?? "https://floret-royal.io").replace(/\/$/, "");
+export const pieceUrl = (slug: string, site?: string | null) => `${(site ?? STORE_URL).replace(/\/$/, "")}/product/${slug}`;
+
 /** The knowledge-base text for one piece — what an employee reads to answer about it. Pure. */
 export function pieceEntry(i: { sku: string; name: string; purity: number | null; weightG: number | null; priceAed: number | null; tagline: string | null; highlights: string[]; occasion: string[]; audience: string[]; inStock: boolean; slug: string | null }, siteUrl?: string | null) {
-  const facts = [
-    i.purity ? `عيار ${i.purity}` : "", i.weightG ? `الوزن ${i.weightG} جم` : "",
-    i.priceAed ? `السعر ${i.priceAed.toLocaleString("en-US")} درهم شامل الضريبة` : "السعر يُحدد عند السؤال",
-    i.inStock ? "متوفر" : "غير متوفر حالياً",
-  ].filter(Boolean).join(" · ");
+  // No weight and no price in what the employee reads (the owner,
+  // 2026-10-19): they are on the piece's page, and the page is what she sends.
+  const facts = [i.purity ? `عيار ${i.purity}` : "", i.inStock ? "متوفر" : "غير متوفر حالياً"].filter(Boolean).join(" · ");
+  const highlights = i.highlights.map((h) => h.replace(/\s*[·،,]?\s*(الوزن|وزن)\s*[\d.٫]+\s*(جم|جرام|غرام|g)/gu, "").trim()).filter(Boolean);
   const content = [
     `${i.name} — ${facts}.`,
     i.tagline ?? "",
-    i.highlights.length ? `مميزاته: ${i.highlights.join("، ")}.` : "",
+    highlights.length ? `مميزاته: ${highlights.join("، ")}.` : "",
     ar(OCCASION, i.occasion).length ? `يناسب: ${ar(OCCASION, i.occasion).join("، ")}.` : "",
     ar(AUDIENCE, i.audience).length ? `لـ: ${ar(AUDIENCE, i.audience).join("، ")}.` : "",
-    `رمز القطعة: ${i.sku}${siteUrl && i.slug ? ` · الصفحة: ${siteUrl.replace(/\/$/, "")}/product/${i.slug}` : ""}`,
+    `رمز القطعة: ${i.sku}${i.slug ? ` · الصفحة: ${pieceUrl(i.slug, siteUrl)}` : ""}`,
+    "السعر والوزن في صفحة القطعة — لا يُذكران في المحادثة؛ من يسأل عنهما يُرسل له الرابط.",
   ].filter(Boolean).join("\n");
-  const keywords = [i.name, i.sku, ...i.highlights, ...ar(OCCASION, i.occasion), ...ar(AUDIENCE, i.audience), i.purity ? `عيار ${i.purity}` : ""].filter(Boolean).join(" ");
+  const keywords = [i.name, i.sku, ...highlights, ...ar(OCCASION, i.occasion), ...ar(AUDIENCE, i.audience), i.purity ? `عيار ${i.purity}` : ""].filter(Boolean).join(" ");
   return { title: i.name, content, keywords };
 }
 
@@ -73,7 +77,7 @@ export async function goldRate24(): Promise<{ aedPerG24: number; at: Date } | nu
 /** Copy the shop's pieces into this account. Returns what changed. */
 export async function syncCatalog(userId: number): Promise<{ pieces: number; published: number; kb: number; rate: number | null }> {
   const mediaDir = process.env["FLORET_MEDIA_DIR"] ?? "";
-  const siteUrl = process.env["FLORET_SITE_URL"] ?? null;
+  const siteUrl = STORE_URL;
   const rows = await floret((c) => c.query(`SELECT sku, slug, doc, price_aed, published FROM cms.product ORDER BY sort_order`).then((r) => r.rows));
   const rate = await goldRate24().catch(() => null);
 
@@ -113,9 +117,11 @@ export async function syncCatalog(userId: number): Promise<{ pieces: number; pub
   // Pieces the shop deleted outright.
   if (seen.length) await db.execute(sql`UPDATE catalog_items SET published = false WHERE user_id = ${userId} AND NOT (sku = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(seen)}::jsonb))))`);
 
-  // The day's rate, as a knowledge entry the employee can quote from.
+  // The day's rate is no longer written for the employee to quote: the owner
+  // forbids prices in the chat. An entry left from before is switched off.
+  await db.update(knowledgeBaseTable).set({ isActive: false, updatedAt: new Date() }).where(and(eq(knowledgeBaseTable.userId, userId), eq(knowledgeBaseTable.title, "سعر الذهب اليوم")));
   const pricing = await pricingOf(userId);
-  if (rate) {
+  if (rate && process.env["FLORET_QUOTE_RATE"] === "on") {
     const r21 = (rate.aedPerG24 * pricing.defaultKarat) / 24;
     const content = `سعر الذهب اليوم (${rate.at.toISOString().slice(0, 10)}): عيار 24 = ${rate.aedPerG24.toFixed(2)} درهم للجرام · عيار ${pricing.defaultKarat} = ${r21.toFixed(2)} درهم للجرام. المصنعية ${pricing.makingPerGram} درهم للجرام، والضريبة ${pricing.vatPct}٪ على المجموع. القاعدة: (الوزن × سعر الجرام + الوزن × المصنعية) × ${(1 + pricing.vatPct / 100).toFixed(2)}.`;
     const [ex] = await db.select({ id: knowledgeBaseTable.id }).from(knowledgeBaseTable).where(and(eq(knowledgeBaseTable.userId, userId), eq(knowledgeBaseTable.title, "سعر الذهب اليوم"))).limit(1);
