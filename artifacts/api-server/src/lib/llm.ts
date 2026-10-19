@@ -26,7 +26,7 @@ import { offDuty } from "./graph/switch";
 export type Provider =
   | "anthropic" | "gemini" | "groq" | "openrouter"
   | "zhipu" | "qwen" | "deepseek" | "moonshot" | "siliconflow"
-  | "pollinations" | "none";
+  | "pollinations" | "thegrid" | "none";
 
 export interface LlmMessage { role: "system" | "user" | "assistant"; content: string }
 export interface LlmResult  { text: string; provider: Provider }
@@ -41,6 +41,7 @@ const KEYS: Record<string, () => string> = {
   deepseek:    () => process.env["DEEPSEEK_API_KEY"]    ?? "",
   moonshot:    () => process.env["MOONSHOT_API_KEY"]    ?? "",
   siliconflow: () => process.env["SILICONFLOW_API_KEY"] ?? "",
+  thegrid:     () => process.env["THEGRID_API_KEY"]     ?? "",
 };
 
 // Everything except Gemini speaks the OpenAI chat-completions shape, so they
@@ -79,6 +80,11 @@ const OPENAI_COMPATIBLE: Record<string, { url: string; model: string }> = {
                  model: process.env["DEEPSEEK_MODEL"] ?? "deepseek-chat" },
   moonshot:    { url: "https://api.moonshot.cn/v1/chat/completions",
                  model: process.env["MOONSHOT_MODEL"] ?? "moonshot-v1-8k" },
+  // The Grid: one paid key that routes to whichever model is cheapest for the
+  // tier. text-standard (GPT-OSS 120B, ≈$0.03 per million tokens) — the owner
+  // asked for the cheapest, 2026-10-19. Only for the accounts in THEGRID_USERS.
+  thegrid:     { url: "https://api.thegrid.ai/v1/chat/completions",
+                 model: process.env["THEGRID_MODEL"] ?? "text-standard" },
   siliconflow: { url: "https://api.siliconflow.cn/v1/chat/completions",
                  model: process.env["SILICONFLOW_MODEL"] ?? "Qwen/Qwen2.5-7B-Instruct" },
 };
@@ -316,6 +322,12 @@ async function callOne(
   if (provider === "pollinations") return callPollinations(messages, timeoutMs);
   const cfg = OPENAI_COMPATIBLE[provider];
   if (!cfg) throw new Error(`مزوّد غير معروف: ${provider}`);
+  if (provider === "thegrid") {
+    if (gridInFlight >= GRID_MAX_IN_FLIGHT) throw new Error("thegrid 429: ثلاثة طلبات جارية — إلى البديل");
+    gridInFlight++;
+    try { return await callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs); }
+    finally { gridInFlight--; }
+  }
   return callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs);
 }
 
@@ -403,6 +415,23 @@ export function routeByTask<T extends { provider: string; model: string }>(order
   return ordered.filter((c) => !english(c));
 }
 
+// ── The Grid: paid, and only for the accounts the owner named ────────
+// THEGRID_USERS="2,4" — Pro Count and Floret. Everyone else, and any call
+// made outside an employee's context, never reaches it. For those two it is
+// tried first: a paid key answers where the free tiers queue. The account
+// allows three requests in flight; a fourth goes straight to the free chain
+// instead of waiting for a 429.
+const GRID_MAX_IN_FLIGHT = 3;
+let gridInFlight = 0;
+export function gridAllowed(userId: number | undefined, users = process.env["THEGRID_USERS"] ?? ""): boolean {
+  if (!userId) return false;
+  return users.split(",").map((x) => Number(x.trim())).filter(Boolean).includes(userId);
+}
+function paidFirst<T extends { provider: string }>(ordered: T[], userId: number | undefined): T[] {
+  if (!gridAllowed(userId)) return ordered;
+  return [...ordered.filter((c) => c.provider === "thegrid"), ...ordered.filter((c) => c.provider !== "thegrid")];
+}
+
 async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise<LlmResult | null> {
   const resolved = await resolveProvider();
   if (!resolved || !resolved.apiKey) return null;
@@ -432,7 +461,8 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise
   // capable than anything above it.
   add("pollinations", "", "");
 
-  const ordered = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), currentAgent()?.role ?? null);
+  const ranked = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), currentAgent()?.role ?? null);
+  const ordered = paidFirst(ranked.filter((c) => c.provider !== "thegrid" || gridAllowed(currentAgent()?.userId)), currentAgent()?.userId);
 
   let lastErr = "";
   for (const step of ordered) {
@@ -454,7 +484,8 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise
         return { text, provider: step.provider as Provider };
       } catch (err: any) {
         lastErr = String(err?.message ?? err).slice(0, 160);
-        await recordFail(step.provider, step.model, lastErr);
+        // Our own in-flight cap is not the provider failing: no cooldown for it.
+        if (!lastErr.includes("ثلاثة طلبات جارية")) await recordFail(step.provider, step.model, lastErr);
         const transient = isTransient(err);
         logger.warn({ provider: step.provider, model: step.model, attempt, transient, err: lastErr }, "LLM call failed");
         // A key or model problem will not fix itself on a retry.
