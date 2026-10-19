@@ -62,16 +62,6 @@ export const LADDER = { cold: [24, 72, 168, 336], warm: [4, 24, 72, 168] } as co
 export const MAX_RUNGS = 4;
 /** The shop's ladder: 1h · 6h · 1d · 3d · 1w · 2w · 1mo — seven rungs, the owner's own cadence. */
 export const SHOP_LADDER = [1, 6, 24, 72, 168, 336, 720] as const;
-/**
- * An ad lead's ladder (the owner, 2026-10-19): seven rungs inside the three
- * days after *their* last message, so every one is a warm message — outside
- * the firewall's cold budget (wa-firewall.ts treats anyone who wrote to us in
- * 72 h as warm). Hours from their last message, not from ours; nothing goes
- * after hour 71, so a rung the night pushed late is dropped, never sent cold.
- * A reply from them starts the three days again.
- */
-export const AD_WARM_LADDER = [1, 5, 21, 27, 45, 51, 69] as const;
-export const AD_WINDOW_H = 71;
 /** Smart follow-ups are recorded with step 100+rung, apart from the old ladder's 0–6. */
 export const STEP_BASE = 100;
 const MAX_PER_RUN = 8;
@@ -128,7 +118,7 @@ export function overlap(a: string, b: string): number {
  * Who is due, and at which rung. Pure: the thread, the rungs already taken
  * since their last message, and the time.
  */
-export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.now(), opts: { ladder?: readonly number[]; scope?: "spoke" | "all"; anchor?: "ours" | "theirs"; windowH?: number } = {}): { rung: number; dueAt: number } | null {
+export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.now(), opts: { ladder?: readonly number[]; scope?: "spoke" | "all" } = {}): { rung: number; dueAt: number } | null {
   const lastIn = [...turns].reverse().find((t) => !t.fromMe);
   const lastOut = [...turns].reverse().find((t) => t.fromMe);
   if (!lastOut) return null;
@@ -140,14 +130,6 @@ export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.
   const rung = since.length;
   const ladder = opts.ladder?.length ? opts.ladder : (warm ? LADDER.warm : LADDER.cold);
   if (rung >= ladder.length) return null;
-  if (opts.anchor === "theirs") {
-    // Measured from their last message, inside a window that keeps it warm.
-    if (!lastIn) return null;
-    if (now > from + (opts.windowH ?? AD_WINDOW_H) * H) return null;
-    const lastRung = since.length ? Math.max(...since.map((d) => d.getTime())) : 0;
-    const dueAt = Math.max(from + ladder[rung]! * H, lastRung + 2 * H);
-    return dueAt <= now && dueAt <= from + (opts.windowH ?? AD_WINDOW_H) * H ? { rung, dueAt } : null;
-  }
   const base = Math.max(lastOut.at.getTime(), ...since.map((d) => d.getTime()));
   const dueAt = base + ladder[rung]! * H;
   return dueAt <= now ? { rung, dueAt } : null;
@@ -185,9 +167,8 @@ async function candidates(userId: number, scope: "spoke" | "all"): Promise<strin
 type Draft = { send: boolean; text: string | null; reason: string; retry?: boolean; photo?: { path: string; caption: string } | null };
 
 /** خالد writes the rung, or declines. */
-async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null, fromAd = false): Promise<Draft> {
-  // The shop's angles name their timing («بعد أسبوع»); on the three-day ladder that would be untrue.
-  const angle = fromAd ? angleFor(rung, rungs, vertical).replace(/\s*\(بعد[^)]*\)/, "") : angleFor(rung, rungs, vertical);
+async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null): Promise<Draft> {
+  const angle = angleFor(rung, rungs, vertical);
   const [[me], [profile], card, company] = await Promise.all([
     db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
     db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
@@ -318,9 +299,6 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   ]);
   const filed = (await db.execute<{ phone: string }>(sql`SELECT phone FROM conversation_reviews WHERE user_id = ${userId} AND label IN ('machine','not_customer','refused')`).catch(() => ({ rows: [] as Array<{ phone: string }> }))).rows;
   const skip = new Set([...outRows, ...coldRows, ...filed].map((r) => r.phone));
-  // Who came from an ad: their seven rungs fit inside the warm three days.
-  const adLeads = new Set((await db.select({ phone: leadSourcesTable.phone }).from(leadSourcesTable)
-    .where(and(eq(leadSourcesTable.userId, userId), inArray(leadSourcesTable.phone, phones), eq(leadSourcesTable.source, "ad")))).map((r) => r.phone));
 
   // The rungs already taken, per phone.
   const takenRows = await db.select({ phone: followupDeliberationsTable.phone, at: followupDeliberationsTable.createdAt, draft: followupDeliberationsTable.draft, verdict: followupDeliberationsTable.verdict })
@@ -345,10 +323,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
 
     const mine = takenRows.filter((r) => r.phone === phone && (r.verdict === "send" || r.verdict === "drop"));
     const card = await getCard(userId, phone).catch(() => null);
-    const fromAd = adLeads.has(phone);
-    const due = fromAd
-      ? dueRung(turns, mine.map((r) => new Date(r.at)), true, now, { ladder: AD_WARM_LADDER, scope, anchor: "theirs", windowH: AD_WINDOW_H })
-      : dueRung(turns, mine.map((r) => new Date(r.at)), (card?.stage ?? 1) >= 5, now, { ladder: ladder ?? undefined, scope });
+    const due = dueRung(turns, mine.map((r) => new Date(r.at)), (card?.stage ?? 1) >= 5, now, { ladder: ladder ?? undefined, scope });
     if (!due) continue;
     result.considered++;
     if (await isHumanHeld(userId, phone)) continue;
@@ -363,7 +338,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
     if (recent) continue;
     const lastIn = [...turns].reverse().find((t) => !t.fromMe)?.at.getTime() ?? 0;
     const earlier = mine.filter((r) => new Date(r.at).getTime() > lastIn && r.draft).map((r) => r.draft!);
-    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, fromAd ? AD_WARM_LADDER.length : (ladder ?? LADDER.cold).length, vertical, fromAd));
+    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length, vertical));
     result.drafted++;
     if (!d.send || !d.text) {
       // A model that did not answer, or refused, costs this round only: «hold»
