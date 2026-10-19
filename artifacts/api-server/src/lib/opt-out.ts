@@ -1,6 +1,6 @@
 // ── The stop button ───────────────────────────────────────────────
 // Every campaign can carry «إيقاف الرسائل». A tap puts the number on the
-// account's unsubscribed list for five months — every send path already
+// account's unsubscribed list for six months — every send path already
 // skips that list — and the sweep below takes it off again when the time is
 // up. A customer who typed «إيقاف» themselves stays off for good, and a tap
 // never shortens that.
@@ -13,10 +13,11 @@ import { db, unsubscribedPhonesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger";
 
-export const STOP_MONTHS = 5;
+// Six months, the owner's rule (2026-10-19). A typed stop stays permanent.
+export const STOP_MONTHS = 6;
 export const STOP_ACK = "تم ✅ أوقفنا رسائلنا لك.";
 
-/** The day the block lifts: the same date, five months on. */
+/** The day the block lifts: the same date, six months on. */
 export function stopUntil(from = new Date()): Date {
   const d = new Date(from);
   d.setMonth(d.getMonth() + STOP_MONTHS);
@@ -38,7 +39,7 @@ export function tappedButtonId(message: any): string | null {
 }
 
 /**
- * Off the list for five months. If the number is already off for good, it
+ * Off the list for six months. If the number is already off for good, it
  * stays that way; if it is off until an earlier date, the later date wins.
  */
 export async function stopForMonths(userId: number, phone: string, reason = "زر إيقاف الرسائل"): Promise<Date> {
@@ -55,7 +56,7 @@ export async function stopForMonths(userId: number, phone: string, reason = "ز�
   return until;
 }
 
-/** Lift the blocks whose five months are up. */
+/** Lift the blocks whose six months are up. */
 export async function sweepExpiredOptOuts(): Promise<number> {
   const gone = await db.delete(unsubscribedPhonesTable)
     .where(sql`${unsubscribedPhonesTable.expiresAt} IS NOT NULL AND ${unsubscribedPhonesTable.expiresAt} <= now()`)
@@ -91,4 +92,17 @@ export function withStopButton(message: string, messageType: string | null | und
     : type === "text" || type === "button" ? "button"
     : type;
   return { message: text, messageType: sent, buttons: JSON.stringify(list) };
+}
+
+/**
+ * Whether a message, on its own, asks us to stop. Short messages only — a
+ * long one that mentions «إلغاء» is about something else — with punctuation
+ * and emoji ignored, in Arabic, Gulf Arabic and English. Pure.
+ */
+export function asksToStop(text: string): boolean {
+  const t = String(text ?? "").toLowerCase()
+    .replace(/[\u064B-\u0652\u0640]/g, "").replace(/[إأآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  if (!t || t.length > 45) return false;
+  return /^(stop|unsubscribe|remove me|stop messaging|dont message me|no more messages|توقف|وقف|اوقف|ايقاف|الغاء|الغاء الاشتراك|لا ارسال|لا تراسلني|لا تراسلوني|لا ترسل|لا ترسلوا|لا ترسلو|لا ترسلون|ارفع رقمي|شيل رقمي|شيلوا رقمي|احذف رقمي|احذفوا رقمي|امسح رقمي|ما ابي رسايل|ما ابغي رسايل|ما ابي رسائل|لا اريد رسائل|لا اريد رسايل|ما اريد رسائل|بطلوا ترسلوا|خلاص لا ترسلوا|ازعاج)( (لي|لو سمحت|please|plz|شكرا))?$/.test(t);
 }

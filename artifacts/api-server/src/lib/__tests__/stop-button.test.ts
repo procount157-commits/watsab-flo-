@@ -12,7 +12,7 @@ let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(64)} ${d}`); };
 
 const until = stopUntil(new Date("2026-10-06T10:00:00Z"));
-check("five months on, the same day", STOP_MONTHS === 5 && until.toISOString().startsWith("2027-03-06"), until.toISOString());
+check("six months on, the same day", STOP_MONTHS === 6 && until.toISOString().startsWith("2027-04-06"), until.toISOString());
 const stop = nativeFlowButtons([{ text: "إيقاف الرسائل", type: "stop" }])[0]!;
 check("the stop button goes as a quick reply with a stop id", stop.name === "quick_reply" && isStopTap(JSON.parse(stop.buttonParamsJson).id));
 check("a tap's id is read from the response", tappedButtonId({ interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{"id":"btn:stop:2"}' } } }) === "btn:stop:2");

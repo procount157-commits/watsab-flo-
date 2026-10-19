@@ -17,7 +17,7 @@ router.get("/", async (req, res) => {
   ]);
   const [{ name: guardName } = { name: "فهد" }] = (await db.execute<{ name: string }>(sql`SELECT name FROM bot_employees WHERE user_id = ${userId} AND role = ${GUARD_ROLE} LIMIT 1`)).rows;
   const blocked = (await db.execute<{ kind: string; n: number }>(sql`SELECT kind, count(*)::int AS n FROM wa_guard_events WHERE user_id = ${userId} AND created_at > now() - interval '24 hours' GROUP BY 1`)).rows;
-  res.json({ config, tests, guard: { name: guardName, ...guardStats(userId), blocked24h: Object.fromEntries(blocked.map((b) => [b.kind, Number(b.n)])) } });
+  res.json({ config, tests, guard: { name: guardName, ...(await guardStats(userId)), blocked24h: Object.fromEntries(blocked.map((b) => [b.kind, Number(b.n)])) } });
 });
 
 router.put("/", async (req, res) => res.json(await saveConfig(req.session.userId!, req.body ?? {})));

@@ -27,6 +27,8 @@ export const GUARD_RULES = {
   per10Min: 8, perHour: 45,
   /** No second campaign message to the same person within this window. */
   personQuietMs: 24 * 3_600_000,
+  /** The owner's ceiling (2026-10-19): campaign messages in any 24 hours, every campaign together. */
+  dailyCap: 200,
 };
 
 /** The person behind a number: its last nine digits. Pure. */
@@ -48,12 +50,17 @@ export function waitFor(sentAt: number[], now: number, gapMs: number, rules = GU
 const chains = new Map<number, Promise<unknown>>();
 const sent = new Map<number, number[]>();
 const reserved = new Map<number, Map<string, number>>();
-const stats = new Map<number, { blockedDup: number; blockedSame: number; waitedMs: number; sent: number; since: number }>();
-const statOf = (u: number) => { let s = stats.get(u); if (!s) { s = { blockedDup: 0, blockedSame: 0, waitedMs: 0, sent: 0, since: Date.now() }; stats.set(u, s); } return s; };
+const stats = new Map<number, { blockedDup: number; blockedSame: number; blockedBlack: number; waitedMs: number; sent: number; since: number }>();
+const statOf = (u: number) => { let s = stats.get(u); if (!s) { s = { blockedDup: 0, blockedSame: 0, blockedBlack: 0, waitedMs: 0, sent: 0, since: Date.now() }; stats.set(u, s); } return s; };
 
-export function guardStats(userId: number) {
+export async function guardStats(userId: number) {
   const now = Date.now(), ts = sent.get(userId) ?? [];
-  return { ...statOf(userId), last10Min: ts.filter((t) => t > now - 600_000).length, lastHour: ts.filter((t) => t > now - 3_600_000).length, rules: GUARD_RULES };
+  const [r] = (await db.execute<{ today: number; black: number; black_forever: number }>(sql`SELECT
+    (SELECT count(*)::int FROM message_logs ml JOIN campaigns c ON c.id = ml.campaign_id WHERE c.user_id = ${userId} AND ml.status = 'sent' AND ml.sent_at > now() - interval '24 hours') AS today,
+    (SELECT count(*)::int FROM unsubscribed_phones WHERE user_id = ${userId} AND (expires_at IS NULL OR expires_at > now())) AS black,
+    (SELECT count(*)::int FROM unsubscribed_phones WHERE user_id = ${userId} AND expires_at IS NULL) AS black_forever`)).rows;
+  return { ...statOf(userId), last10Min: ts.filter((t) => t > now - 600_000).length, lastHour: ts.filter((t) => t > now - 3_600_000).length,
+    today: Number(r?.today ?? 0), blacklist: Number(r?.black ?? 0), blacklistForever: Number(r?.black_forever ?? 0), rules: GUARD_RULES };
 }
 
 async function record(userId: number, kind: string, phone: string, campaignId: number, detail: string) {
@@ -77,6 +84,17 @@ export async function acquire(userId: number, phone: string, campaignId: number,
     const res = reserved.get(userId) ?? new Map<string, number>();
     reserved.set(userId, res);
     for (const [k, t] of res) if (t < now - GUARD_RULES.personQuietMs) res.delete(k);
+
+    // The ceiling: 200 campaign messages in 24 hours, every campaign together.
+    const [{ n: today } = { n: 0 }] = (await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM message_logs ml JOIN campaigns c ON c.id = ml.campaign_id
+      WHERE c.user_id = ${userId} AND ml.status = 'sent' AND ml.sent_at > now() - interval '24 hours'`)).rows;
+    if (Number(today) >= GUARD_RULES.dailyCap) { void record(userId, "daily", phone, campaignId, `السقف اليومي ${GUARD_RULES.dailyCap}`); return { ok: false, why: "daily" }; }
+
+    // The blacklist, by the person: whoever asked to stop, in any spelling of the number.
+    const black = (await db.execute(sql`SELECT 1 FROM unsubscribed_phones WHERE user_id = ${userId}
+      AND right(regexp_replace(split_part(phone, ':', 1), '[^0-9]', '', 'g'), 9) = ${key}
+      AND (expires_at IS NULL OR expires_at > now()) LIMIT 1`)).rows[0];
+    if (black) { statOf(userId).blockedBlack++; void record(userId, "black", phone, campaignId, "في القائمة السوداء"); return { ok: false, why: "black" }; }
 
     // The person, by any spelling of the number, within 24 hours — in memory first, then the record.
     if (res.has(key)) { statOf(userId).blockedDup++; void record(userId, "dup", phone, campaignId, "رسالة حملة أخرى خلال ٢٤ ساعة (محجوز)"); return { ok: false, why: "dup" }; }

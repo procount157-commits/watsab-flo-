@@ -1452,10 +1452,14 @@ async function runCampaign(userId: number, campaign: any, contactsIn: any[], inf
     // Mid-campaign unsubscribe check — BUGFIX: no retry before
     let isUnsub = false;
     try {
+      // By the person, not the spelling: a stop from «9715…» also covers «05…»
+      // and «+971 5…» in any other list of the account.
       const [unsubRow] = await withDbRetry(() =>
         db.select({ phone: unsubscribedPhonesTable.phone })
           .from(unsubscribedPhonesTable)
-          .where(and(eq(unsubscribedPhonesTable.userId, userId), eq(unsubscribedPhonesTable.phone, contact.phone)))
+          .where(and(eq(unsubscribedPhonesTable.userId, userId),
+            sql`right(regexp_replace(split_part(${unsubscribedPhonesTable.phone}, ':', 1), '[^0-9]', '', 'g'), 9) = ${sendGuard.phoneKey(contact.phone)}`,
+            sql`(${unsubscribedPhonesTable.expiresAt} IS NULL OR ${unsubscribedPhonesTable.expiresAt} > now())`))
           .limit(1)
       );
       isUnsub = !!unsubRow;
@@ -1510,6 +1514,13 @@ async function runCampaign(userId: number, campaign: any, contactsIn: any[], inf
     const slot = await sendGuard.acquire(userId, contact.phone, campaign.id, campaign.message ?? "", info);
     if (!slot.ok) {
       if (slot.why === "stopped") break;
+      if (slot.why === "daily") {
+        logger.info({ campaignId: campaign.id }, "حارس الإرسال: ٢٠٠ رسالة اليوم — إيقاف الحملة حتى الغد");
+        info.running = false;
+        activeCampaigns.delete(key);
+        await withDbRetry(() => db.update(campaignsTable).set({ status: "paused" }).where(eq(campaignsTable.id, campaign.id))).catch(() => {});
+        break;
+      }
       logger.info({ phone: contact.phone, campaignId: campaign.id, why: slot.why }, "حارس الإرسال منع رسالة مكررة");
       continue;
     }
