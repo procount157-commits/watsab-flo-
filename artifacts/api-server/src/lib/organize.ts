@@ -17,7 +17,7 @@
 
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db, contactGroupsTable, contactsTable, emailListsTable, emailListMembersTable } from "@workspace/db";
-import { folderForSector, fileUnfiledLists } from "./folders";
+import { folderForSector, fileUnfiledLists, AUTOPILOT_MARK } from "./folders";
 import { classifySector, UNCLASSIFIED } from "./email/sector";
 import { logger } from "./logger";
 
@@ -104,7 +104,9 @@ export function plan(rows: Placement[]): Map<string, { sector: string; source: s
 async function busyWaLists(userId: number): Promise<Set<number>> {
   const r = await db.execute<{ id: number }>(sql`SELECT DISTINCT contact_group_id AS id FROM campaigns
     WHERE user_id = ${userId} AND contact_group_id IS NOT NULL AND status IN ('running','sending','scheduled','pending','queued')`);
-  return new Set(r.rows.map((x) => Number(x.id)));
+  // The autopilot's lists are never rearranged: they are a test or a wave, on purpose.
+  const auto = await db.execute<{ id: number }>(sql`SELECT id FROM contact_groups WHERE user_id = ${userId} AND coalesce(description, '') LIKE ${AUTOPILOT_MARK + "%"}`);
+  return new Set([...r.rows, ...auto.rows].map((x) => Number(x.id)));
 }
 
 export interface OrganizeReport { channel: "whatsapp" | "email"; duplicatesRemoved: number; moved: number; listsMade: number; listsRemoved: number }
@@ -117,7 +119,8 @@ export async function organizeWhatsapp(userId: number): Promise<OrganizeReport> 
   const dup = await db.execute<{ id: number }>(sql`
     SELECT id FROM (
       SELECT c.id, row_number() OVER (PARTITION BY c.phone ORDER BY (c.name IS NOT NULL) DESC, (c.sector IS NOT NULL) DESC, c.id) AS rn
-      FROM contacts c JOIN contact_groups g ON g.id = c.group_id WHERE g.user_id = ${userId}
+      FROM contacts c JOIN contact_groups g ON g.id = c.group_id
+      WHERE g.user_id = ${userId} AND coalesce(g.description, '') NOT LIKE ${AUTOPILOT_MARK + "%"}
     ) x WHERE rn > 1`);
   const dupIds = dup.rows.map((x) => Number(x.id));
   for (let i = 0; i < dupIds.length; i += 1000) await db.delete(contactsTable).where(inArray(contactsTable.id, dupIds.slice(i, i + 1000)));

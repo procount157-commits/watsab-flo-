@@ -75,6 +75,14 @@ export async function ownFolder(userId: number, name: string, sector: string | n
 import { contactGroupsTable } from "@workspace/db";
 import { isNull, sql } from "drizzle-orm";
 
+/**
+ * The WhatsApp autopilot's own lists (a test half, a winner's wave) carry
+ * this at the head of their description. They copy contacts on purpose, so
+ * the organiser, the duplicate removal and the data desk leave them alone.
+ */
+export const AUTOPILOT_MARK = "حملة تلقائية:";
+export const AUTOPILOT_FOLDER = "حملات تلقائية";
+
 export const FROM_ADS = "عملاء الإعلانات";
 export const FROM_WHATSAPP = "مستخرج من واتساب";
 export const OTHER = "قوائم أخرى";

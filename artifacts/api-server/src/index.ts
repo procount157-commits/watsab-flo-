@@ -43,6 +43,7 @@ import { startWaManagerLoop } from "./lib/wa-manager";
 import { startCatalogSync } from "./lib/catalog/floret";
 import { upgradeShopRules } from "./lib/catalog/floret-account";
 import { startChatLead } from "./lib/chat-lead";
+import { startWaAutopilot } from "./lib/wa-autopilot";
 import { startListKeeper } from "./lib/list-keeper";
 import { startOrganizing } from "./lib/organize";
 import { startEngineerRounds } from "./lib/graph/engineer";
@@ -167,6 +168,8 @@ function startListening() {
     void upgradeShopRules().catch(() => {});
     // مسؤول الشات: يقرأ محادثات الأسبوع كل يوم ويكتب دليل الفريق.
     startChatLead();
+    // حملات واتساب التلقائية — لكل حسابٍ شغّلها صاحبه فقط.
+    startWaAutopilot();
     startListKeeper();
     // مجلدٌ لكل قطاع، قائمةٌ لكل ملف، وكل رقمٍ وإيميلٍ مرةً واحدة.
     startOrganizing();

@@ -19,7 +19,7 @@ import { asAgent } from "../agent-context";
 import { say } from "../agent-comms";
 import { receipt } from "../graph/receipts";
 import { logger } from "../logger";
-import { fileUnfiledLists } from "../folders";
+import { fileUnfiledLists, AUTOPILOT_MARK } from "../folders";
 import { organizeAccount } from "../organize";
 import { classifyRow, modelPrompt, parseModel, readList, bucketOf, BUCKET_AR, sendable, type SectorBy, type ListReading } from "./classify";
 import { cleanEmail, cleanName, type Clearance } from "./clean";
@@ -312,6 +312,7 @@ export async function runDeskAll(userId: number, channel: Channel, trigger: "man
     const groups = await db.select({ id: contactGroupsTable.id, name: contactGroupsTable.name }).from(contactGroupsTable).where(eq(contactGroupsTable.userId, userId));
     for (const g of groups) {
       if (g.name.startsWith("مفروز — ")) continue;   // ما فرزه المكتب لا يُعاد فرزه
+      if ((g as any).description?.startsWith?.(AUTOPILOT_MARK)) continue;   // قائمة الطيار تجربةٌ مقصودة
       out.push(await runDesk(userId, { channel, listId: g.id, trigger }).catch((err) => { logger.warn({ err: String(err?.message ?? err), list: g.name }, "desk failed"); return null as any; }));
     }
   } else {
