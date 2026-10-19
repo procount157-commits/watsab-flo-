@@ -7,7 +7,8 @@ const office = { vision: "مكتب وأوراق", fits: ["عام"], service: "se
 const build = { vision: "موقع بناء", fits: ["مقاولات"], service: "services" };
 ok(!fitsCampaign(gold, "عقارات", "aml"), "gold picture never goes to real estate");
 ok(fitsCampaign(gold, "ذهب ومجوهرات", "aml"), "gold AML picture for gold shops");
-ok(fitsCampaign(goldRe, "عقارات", "aml"), "a picture showing both goes to both");
+ok(!fitsCampaign(goldRe, "عقارات", "aml"), "gold beside buildings never goes to real estate");
+ok(!fitsCampaign(goldRe, "ذهب ومجوهرات", "aml"), "nor to gold — it shows another sector");
 ok(!fitsCampaign(office, "عقارات", "aml"), "an accounting picture is not an AML one");
 ok(fitsCampaign(office, "مقاولات", "services"), "general accounting picture for contractors");
 ok(fitsCampaign(build, "مقاولات", "services"), "construction picture for contractors");

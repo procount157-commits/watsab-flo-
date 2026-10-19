@@ -76,13 +76,15 @@ export async function describeAsset(a: Pick<MediaAsset, "id" | "url">): Promise<
 
 /**
  * Whether a picture may go with a campaign to this sector and service. Pure.
- * Strict: a picture of another sector never goes, even beside this one's — a
- * gold-and-buildings picture is for gold *and* real estate, and a gold-only
- * picture is for neither real estate nor accounting.
+ * Strict: a picture showing any other sector never goes — not even one that
+ * shows this sector beside it.
  */
 export function fitsCampaign(a: { fits: string[] | null; service: string | null; vision: string | null }, sector: string, service: string): boolean {
   if (!a.vision || !a.fits?.length) return false;              // not seen yet: not used
-  const sectorOk = a.fits.includes(sector) || (a.fits.length === 1 && a.fits[0] === GENERAL);
+  // Only this sector, or general. A picture that also shows another sector
+  // (gold beside buildings) is not sent to either: the owner saw exactly that
+  // picture under a real-estate message and asked for it to stop.
+  const sectorOk = a.fits.every((f) => f === sector || f === GENERAL);
   if (!sectorOk) return false;
   if (service === "aml") return a.service === "aml" || a.service === "general";
   if (service === "services") return a.service === "services" || a.service === "general";

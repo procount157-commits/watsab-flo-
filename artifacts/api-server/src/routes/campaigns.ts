@@ -419,6 +419,19 @@ export async function resumeRunningCampaigns(forUserId?: number): Promise<void> 
 // ── Daily per-phone dedup ─────────────────────────────────────────
 // Returns true if this phone received a successful message today
 // from ANY of this user's campaigns (midnight-to-now window).
+// صاحب العمل (١٩ أكتوبر): «لا تُرسل الرسالة نفسها لنفس الشخص أكثر من مرة».
+// النص نفسه — في هذه الحملة أو في أي حملة قبلها من الحساب، ولو كُرّرت الحملة
+// أو وُجد الرقم في قائمتين — لا يصل الرقم مرتين. المسافات لا تجعل نصّين مختلفين.
+async function wasSentSameMessage(userId: number, phone: string, message: string): Promise<boolean> {
+  const r = await db.execute(sql`
+    SELECT 1 FROM message_logs ml JOIN campaigns c ON c.id = ml.campaign_id
+    WHERE c.user_id = ${userId} AND ml.status = 'sent'
+      AND split_part(ml.phone, ':', 1) = split_part(${phone}, ':', 1)
+      AND regexp_replace(trim(c.message), '[[:space:]]+', ' ', 'g') = regexp_replace(trim(${message}), '[[:space:]]+', ' ', 'g')
+    LIMIT 1`);
+  return r.rows.length > 0;
+}
+
 async function wasSentTodayToPhone(userId: number, phone: string): Promise<boolean> {
   const midnight = new Date();
   midnight.setHours(0, 0, 0, 0);
@@ -1453,6 +1466,17 @@ async function runCampaign(userId: number, campaign: any, contacts: any[], info:
         logger.info({ phone: contact.phone, campaignId: campaign.id }, "Skipping — already sent today");
         continue;
       }
+    }
+
+    // ── The same message never reaches the same number twice ─────
+    // Always on, send-remaining included: a number in two lists, or a
+    // campaign run again, is still one person.
+    let sameBefore = false;
+    try { sameBefore = await withDbRetry(() => wasSentSameMessage(userId, contact.phone, campaign.message ?? "")); }
+    catch { /* DB error — the daily dedup above still stands */ }
+    if (sameBefore) {
+      logger.info({ phone: contact.phone, campaignId: campaign.id }, "Skipping — this message already reached this number");
+      continue;
     }
 
     const personalized = personalizeMessage(campaign.message, { name: contact.name, phone: contact.phone }, campaign.companyName);
