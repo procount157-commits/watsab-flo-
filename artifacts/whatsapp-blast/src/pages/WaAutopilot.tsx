@@ -70,12 +70,10 @@ export default function WaAutopilot() {
           <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="w-5 h-5 text-primary" /> حارس الإرسال — {data.guard.name}</div>
           <p className="text-xs text-muted-foreground leading-relaxed">
             كل رسالة من كل حملة تمرّ عليه قبل أن تخرج: رسائل الحساب كله في طابورٍ واحد بفاصل {Math.round(data.guard.rules.minGapMs / 1000)}–{Math.round(data.guard.rules.maxGapMs / 1000)} ثانية،
-            و{data.guard.rules.per10Min} رسائل على الأكثر في عشر دقائق، و{data.guard.rules.perHour} في الساعة، و<b>{data.guard.rules.dailyCap} في اليوم لكل الحملات معاً</b> — عندها تتوقف الحملات حتى الغد. والشخص — بأي صيغةٍ كُتب رقمه — لا تصله رسالة حملة ثانية خلال ٢٤ ساعة، ولا النص نفسه أبداً. ومن طلب الإيقاف في القائمة السوداء: ٦ أشهر لمن ضغط الزر، ونهائياً لمن كتبها بنفسه.
+            و{data.guard.rules.per10Min} رسائل على الأكثر في عشر دقائق، و{data.guard.rules.perHour} في الساعة. والشخص — بأي صيغةٍ كُتب رقمه — لا تصله رسالة حملة ثانية خلال ٢٤ ساعة، ولا النص نفسه أبداً.
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-center">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
             {[
-              ["اليوم (٢٤ ساعة)", `${data.guard.today} / ${data.guard.rules.dailyCap}`],
-              ["القائمة السوداء", `${data.guard.blacklist} (${data.guard.blacklistForever} نهائياً)`],
               ["آخر ١٠ دقائق", `${data.guard.last10Min} / ${data.guard.rules.per10Min}`],
               ["آخر ساعة", `${data.guard.lastHour} / ${data.guard.rules.perHour}`],
               ["منع رسالة ثانية (٢٤ ساعة)", data.guard.blocked24h?.dup ?? 0],

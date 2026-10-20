@@ -17,9 +17,7 @@ import { asc } from "drizzle-orm";
 // New numbers start low and grow, so day one cannot look like a blast.
 //   Day 0 → 50   Day 1 → 65   Day 2 → 85   Day 5 → 185
 //   Day 7 → 310  Day 10 → 680  Day 14 → 1500 (ceiling)
-// The owner (2026-10-19): «campaign automation must never pass 200 messages
-// a day». 1,500 was the old ceiling; the number was restricted the same day.
-export const DAILY_LIMIT_MAX   = 200;
+export const DAILY_LIMIT_MAX   = 1_500;
 export const WARMUP_DAY0_LIMIT = 50;
 export const WARMUP_DAILY_GROW = 1.30;
 

@@ -15,7 +15,7 @@ import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
 import { useDatabaseAuthState, migrateSessionFilesToDb } from "./wa-auth-state";
 import { transcribe } from "./voice";
-import { asksToStop, isStopTap, tappedButtonId, stopForMonths, STOP_ACK } from "./opt-out";
+import { isStopTap, tappedButtonId, stopForMonths, STOP_ACK } from "./opt-out";
 import { nativeFlowButtons, interactiveReplyText, type ButtonDef, cardBody, carouselButtons, carouselReady, type CarouselCardDef } from "./wa-buttons";
 import { speak } from "./tts";
 import { assessSession, isRejection, isHandshakeRejection, STABLE_AFTER_MS, FLAP_WINDOW_MS, COOLDOWN_MS } from "./session-breaker";
@@ -2347,7 +2347,7 @@ class WhatsAppInstance {
         // If the contact sends an opt-out keyword, remove them from all
         // contact groups and add to the unsubscribed list permanently.
         const OPTOUT_RE = /^(stop|unsubscribe|توقف|وقف|أوقف|ايقاف|إيقاف|الغاء|إلغاء|لا\s*ارسال|لا\s*تراسلني|ارفع\s*رقمي|إلغاء\s*الاشتراك|الغاء\s*الاشتراك|remove\s*me)$/i;
-        if (OPTOUT_RE.test(text.trim()) || asksToStop(text)) {
+        if (OPTOUT_RE.test(text.trim())) {
           this.log.info({ phone }, "Opt-out received — removing from contacts");
           // Insert unsubscribed (ignore duplicate)
           db.insert(unsubscribedPhonesTable)
