@@ -11,11 +11,12 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import { logger as appLogger } from "./logger";
+import * as firewall from "./wa-firewall";
 import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
 import { useDatabaseAuthState, migrateSessionFilesToDb } from "./wa-auth-state";
 import { transcribe } from "./voice";
-import { isStopTap, tappedButtonId, stopForMonths, STOP_ACK } from "./opt-out";
+import { isStopTap, tappedButtonId, stopForGood, asksToStop, STOP_ACK } from "./opt-out";
 import { nativeFlowButtons, interactiveReplyText, type ButtonDef, cardBody, carouselButtons, carouselReady, type CarouselCardDef } from "./wa-buttons";
 import { speak } from "./tts";
 import { assessSession, isRejection, isHandshakeRejection, STABLE_AFTER_MS, FLAP_WINDOW_MS, COOLDOWN_MS } from "./session-breaker";
@@ -923,6 +924,22 @@ class WhatsAppInstance {
     return out;
   }
 
+  /**
+   * Ask WhatsApp what it thinks of this account: the reachout time-lock (a
+   * restriction, with its end) and the new-chat message cap (quota and
+   * warnings). Both go to the firewall, which freezes or bounds the ladder.
+   */
+  async fetchStanding(): Promise<{ lock: any; cap: any }> {
+    const sock: any = this.state.socket;
+    if (!sock || !this.state.connected) throw new Error("WA_DISCONNECTED: واتساب غير متصل");
+    const within = <T,>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("STANDING_TIMEOUT")), ms))]);
+    const lock = typeof sock.fetchAccountReachoutTimelock === "function" ? await within(sock.fetchAccountReachoutTimelock(), 15_000).catch(() => null) : null;
+    const cap = typeof sock.fetchNewChatMessageCap === "function" ? await within(sock.fetchNewChatMessageCap(), 15_000).catch(() => null) : null;
+    this.log.info({ lock, cap }, "WhatsApp standing");
+    await firewall.noteStanding(this.userId, (lock ?? null) as any, (cap ?? null) as any);
+    return { lock, cap };
+  }
+
   async directSend(phone: string, message: string): Promise<{
     steps: Array<{ step: number; label: string; ok: boolean; detail?: string }>;
     msgId: string | null;
@@ -1536,6 +1553,10 @@ class WhatsAppInstance {
       if (myGen !== this.socketGeneration) return;
 
       const { connection, lastDisconnect, qr } = update;
+      // WhatsApp pushes the account's reachout time-lock here as it changes.
+      if ((update as any).reachoutTimeLock) {
+        void firewall.noteStanding(this.userId, (update as any).reachoutTimeLock, undefined).catch(() => {});
+      }
 
       // Track last Baileys event for deep idle detection
       this.lastEventReceivedAt = new Date();
@@ -1627,6 +1648,12 @@ class WhatsAppInstance {
           .set({ currentQr: null, qrExpiresAt: null })
           .where(eq(usersTable.id, this.userId))
           .catch(() => {});
+        // WhatsApp's own word on the account — a restriction, the new-chat
+        // quota — read once the line has settled, for the firewall's ladder.
+        setTimeout(() => {
+          if (this.socketGeneration !== myGen || !this.state.connected) return;
+          void this.fetchStanding().catch((err) => this.log.warn({ err: String(err?.message ?? err) }, "WhatsApp standing could not be read"));
+        }, 45_000);
         // ── Delayed keepalive start ─────────────────────────────────
         // Wait 30 s before sending any presence updates.
         // Immediate presence pings on reconnect can trigger WA to push a
@@ -1658,6 +1685,9 @@ class WhatsAppInstance {
         this.stopKeepAlive();
 
         this.log.info({ reason, gen: myGen }, "Connection closed");
+        // The firewall counts closes: four in half an hour while sending is a
+        // restriction showing itself; 401/403/405 is WhatsApp saying so.
+        firewall.noteClose(this.userId, typeof reason === "number" ? reason : undefined);
 
         // ── Dead-credential breaker ───────────────────────────────
         // Two ways a session becomes unrecoverable without ever saying so:
@@ -2323,16 +2353,23 @@ class WhatsAppInstance {
             return null;
           });
         }
-        // A lone «0» is the old way out — the line campaigns used to carry —
-        // and means the same as the button now: five months, not for good.
-        if (isStopTap(tappedButtonId(msg.message)) || buttonMatch?.action === "stop" || /^\s*[0٠]\s*$/.test(text ?? "")) {
+        // A tap, a lone «0», or any short message that asks us to stop: the
+        // owner's rule (2026-10-20) — «من اختار لا خلاص ما هرسل له تاني» — for good.
+        if (isStopTap(tappedButtonId(msg.message)) || buttonMatch?.action === "stop" || asksToStop(text ?? "")) {
           try {
-            const until = await stopForMonths(this.userId, phone);
-            receipt({ userId: this.userId, node: "gate", graph: "whatsapp", action: "optout.stop", subject: phone, why: `زر إيقاف الرسائل — لا مراسلة حتى ${until.toISOString().slice(0, 10)}`, metric: { counter: "stops", delta: 1 } });
-            this.log.info({ phone, until, campaign: buttonMatch?.campaignName }, "stop button — no messages to this number for five months");
+            await stopForGood(this.userId, phone, buttonMatch?.action === "stop" || isStopTap(tappedButtonId(msg.message)) ? "زر إيقاف الرسائل" : (text ?? "").trim().slice(0, 80));
+            receipt({ userId: this.userId, node: "gate", graph: "whatsapp", action: "optout.stop", subject: phone, why: "طلب الإيقاف — لا مراسلة بعد اليوم", metric: { counter: "stops", delta: 1 } });
+            this.log.info({ phone, campaign: buttonMatch?.campaignName }, "stop — no messages to this number again");
+            // Out of this account's lists too — the number may be another subscriber's customer.
+            db.delete(contactsTable)
+              .where(and(
+                sql`right(regexp_replace(split_part(${contactsTable.phone}, ':', 1), '[^0-9]', '', 'g'), 9) = ${String(phone).split(":")[0]!.replace(/\D/g, "").slice(-9)}`,
+                sql`${contactsTable.groupId} IN (SELECT id FROM contact_groups WHERE user_id = ${this.userId})`,
+              ))
+              .catch(() => {});
             this.sendMessage(phone, STOP_ACK).catch(() => {});
           } catch (err) {
-            this.log.error({ err, phone }, "stop button could not be recorded");
+            this.log.error({ err, phone }, "stop could not be recorded");
           }
           continue;
         }
@@ -2399,6 +2436,13 @@ class WhatsAppInstance {
     // message_logs UPDATE, which only matches rows that haven't been transitioned yet
     // (WHERE delivered_at IS NULL / read_at IS NULL).  Duplicate Baileys events
     // therefore produce zero-row UPDATEs and never double-count.
+    // WhatsApp's own cap on messages to new chats: quota, used, and its
+    // warnings. The firewall's ladder never climbs past it.
+    sock.ev.on("message-capping.update" as any, (cap: any) => {
+      if (myGen !== this.socketGeneration) return;
+      void firewall.noteStanding(this.userId, undefined, cap ?? null).catch(() => {});
+    });
+
     sock.ev.on("messages.update", async (updates) => {
       if (myGen !== this.socketGeneration) return;
       this.lastEventReceivedAt = new Date();
@@ -2630,6 +2674,7 @@ class WhatsAppInstance {
     mediaUrl?: string | null,
     buttons?: string | null,
     carousel?: string | null,
+    opts?: { cold?: boolean },
   ): Promise<string | undefined> {
     if (!this.state.socket || !this.state.connected) throw new Error("WhatsApp غير متصل");
 
@@ -2674,7 +2719,10 @@ class WhatsAppInstance {
     } catch (checkErr: any) {
       // If the error is our own NOT_ON_WHATSAPP, re-throw so campaign marks as failed
       if (String(checkErr?.message).startsWith("NOT_ON_WHATSAPP")) throw checkErr;
-      // Any other error (network, timeout) — log and proceed optimistically
+      // A cold message to a number nobody could verify does not go: a message
+      // to a number that is not on WhatsApp is one of the plainest spam signs.
+      if (opts?.cold) throw new Error(`NOT_ON_WHATSAPP: تعذّر التحقق من ${phone} — رسالة باردة لا تُرسل بلا تحقق`);
+      // A reply: log and proceed optimistically
       appLogger.warn({ phone, err: String(checkErr?.message) }, "onWhatsApp check failed — proceeding anyway");
     }
 
@@ -3106,7 +3154,13 @@ export function getSyncStats(userId: number){ return waManager.get(userId).syncS
 
 // ── Diagnostic exports ────────────────────────────────────────────
 export function getDiagnosticState(userId: number) { return waManager.get(userId).getDiagnosticState(); }
-export async function directSend(userId: number, phone: string, message: string) { return waManager.get(userId).directSend(phone, message); }
+/** The diagnostics probe: it skips the retries, not the firewall — a probe to a stranger is still a cold message. */
+export async function directSend(userId: number, phone: string, message: string) {
+  const a = await firewall.admit(userId, phone, "manual");
+  const r = await waManager.get(userId).directSend(phone, message);
+  await firewall.recordSent(userId, phone, "manual", a.cold, r?.msgId ?? null);
+  return r;
+}
 export function registerDiagListener(userId: number, fn: (event: { type: string; data: unknown; ts: string }) => void) { return waManager.get(userId).registerDiagListener(fn); }
 export function validateSession(userId: number) { return waManager.get(userId).validateSession(); }
 export async function checkNumbers(
@@ -3114,6 +3168,9 @@ export async function checkNumbers(
   phones: string[],
   onProgress?: (done: number, total: number) => void,
 ) { return waManager.get(userId).checkNumbers(phones, onProgress); }
+
+/** WhatsApp's own standing on the account, read into the firewall. */
+export async function fetchStanding(userId: number) { return waManager.get(userId).fetchStanding(); }
 
 export async function initWhatsApp(userId: number) { return waManager.get(userId).init(); }
 
@@ -3209,17 +3266,48 @@ export async function deleteForEveryone(userId: number, phone: string, messageId
   receipt({ userId, node: "sender", graph: "whatsapp", action: "recall.whatsapp", subject: phone, outputRef: messageId, why: "حُذفت الرسالة عند الطرفين بطلب صاحب العمل" });
 }
 
+/**
+ * Every outbound message of the app comes through here — campaigns,
+ * follow-ups, replies, the owner's own sends — and none reaches the wire
+ * without the firewall's leave (lib/wa-firewall.ts): its turn in the
+ * account's single line, today's cold budget, the tripwires. While the
+ * number convalesces, buttons and carousels go out as plain messages.
+ */
 export async function sendMessage(
   userId: number, phone: string, message: string,
   messageType?: string, mediaUrl?: string | null,
   buttons?: string | null, carousel?: string | null,
+  opts?: { kind?: firewall.SendKind; running?: boolean },
 ): Promise<string | undefined> {
-  return waManager.get(userId).sendMessage(phone, message, messageType, mediaUrl, buttons, carousel);
+  const kind: firewall.SendKind = opts?.kind ?? "followup";
+  const a = await firewall.admit(userId, phone, kind, opts?.running === undefined ? undefined : { running: opts.running });
+  let type = messageType, media = mediaUrl, btns = buttons, cards = carousel, text = message;
+  if (!a.interactive && (btns || cards || /button|carousel/.test(type ?? ""))) {
+    const d = firewall.downgrade(type, message, mediaUrl, carousel);
+    type = d.messageType; media = d.mediaUrl; btns = null; cards = null; text = d.message;
+  }
+  try {
+    const id = await waManager.get(userId).sendMessage(phone, text, type, media, btns, cards, { cold: a.cold });
+    await firewall.recordSent(userId, phone, kind, a.cold, id);
+    return id;
+  } catch (err) {
+    await firewall.recordError(userId, err).catch(() => {});
+    throw err;
+  }
 }
 
 /** The words as a voice note — spoken by the account's voice, with the text as the fallback. */
-export async function sendVoiceNote(userId: number, phone: string, text: string): Promise<string | undefined> {
-  return waManager.get(userId).sendMessage(phone, text, "voice");
+export async function sendVoiceNote(userId: number, phone: string, text: string, kind: firewall.SendKind = "reply"): Promise<string | undefined> {
+  // A voice note is a message like any other: it passes the same gate.
+  const a = await firewall.admit(userId, phone, kind);
+  try {
+    const id = await waManager.get(userId).sendMessage(phone, text, "voice", undefined, undefined, undefined, { cold: a.cold });
+    await firewall.recordSent(userId, phone, kind, a.cold, id);
+    return id;
+  } catch (err) {
+    await firewall.recordError(userId, err).catch(() => {});
+    throw err;
+  }
 }
 
 // ── User-connected hook ───────────────────────────────────────────

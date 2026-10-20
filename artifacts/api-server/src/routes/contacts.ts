@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { runDesk } from "../lib/data-desk/desk";
 import { db, contactGroupsTable, contactsTable } from "@workspace/db";
-import { eq, count, and, inArray, ne } from "drizzle-orm";
+import { eq, count, and, inArray, ne, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
 import { assertCanAddContacts, planErrorToResponse } from "../lib/plans";
 import * as XLSX from "xlsx";
 import multer from "multer";
 import { readWorkbook, readText, parseTables, whatsappEntries } from "../lib/phone-import";
-import { saveToGroup, saveToNewGroup, validateGroup, validateInBackground, validatePending } from "../lib/contact-save";
+import { saveToGroup, saveToNewGroup, validateInBackground, validatePending } from "../lib/contact-save";
+import { vetList, summary as vettingSummary } from "../lib/wa-vetting";
 import { registerOnConnectHook } from "../lib/whatsapp";
 
 // An import made while the line was down is checked the moment it comes back.
@@ -52,6 +53,10 @@ router.get("/", async (req, res) => {
       folderId: contactGroupsTable.folderId,
       createdAt: contactGroupsTable.createdAt,
       count: count(contactsTable.id),
+      // سيف's verdicts, for the list row: how many may be sent to.
+      ready: count(sql`CASE WHEN ${contactsTable.verdict} = 'ready' THEN 1 END`),
+      hold: count(sql`CASE WHEN ${contactsTable.verdict} = 'hold' THEN 1 END`),
+      rejected: count(sql`CASE WHEN ${contactsTable.verdict} = 'rejected' THEN 1 END`),
     })
     .from(contactGroupsTable)
     .leftJoin(contactsTable, eq(contactGroupsTable.id, contactsTable.groupId))
@@ -159,15 +164,38 @@ router.post("/:id/validate", async (req, res) => {
     .where(and(eq(contactGroupsTable.id, groupId), eq(contactGroupsTable.userId, userId)));
   if (!group) return res.status(404).json({ error: "القائمة غير موجودة" });
   try {
-    res.json(await validateGroup(userId, groupId));
+    // سيف judges the whole list again: WhatsApp's word is one of his readings.
+    const r = await vetList(userId, groupId, "owner", { foreignAllowed: req.body?.foreignAllowed === true });
+    res.json({ total: r.total, valid: r.ready, invalid: r.rejected, unknown: r.unknown, hold: r.hold, note: r.note, invalidPhones: [] });
   } catch (err: any) {
     const msg = String(err?.message ?? err);
-    req.log?.warn({ err: msg, groupId }, "list validation failed");
-    res.status(409).json({
-      error: msg.startsWith("WA_DISCONNECTED")
-        ? "واتساب غير متصل — اربط الجهاز أولاً ثم أعد الفحص"
-        : "تعذّر فحص الأرقام، حاول مرة أخرى",
-    });
+    req.log?.warn({ err: msg, groupId }, "list vetting failed");
+    res.status(409).json({ error: "تعذّر فحص الأرقام، حاول مرة أخرى" });
+  }
+});
+
+// ── سيف، فاحص الأرقام ──────────────────────────────────────────────
+// His verdicts on a list, and a run on the owner's word. A number marked
+// «ليس الآن» is looked at again at campaign start and once a day.
+router.get("/:id/vetting", async (req, res) => {
+  const userId = req.session.userId!;
+  const groupId = parseInt(req.params.id!);
+  const [group] = await db.select({ id: contactGroupsTable.id }).from(contactGroupsTable)
+    .where(and(eq(contactGroupsTable.id, groupId), eq(contactGroupsTable.userId, userId)));
+  if (!group) return res.status(404).json({ error: "القائمة غير موجودة" });
+  res.json(await vettingSummary(userId, groupId));
+});
+router.post("/:id/vet", async (req, res) => {
+  const userId = req.session.userId!;
+  const groupId = parseInt(req.params.id!);
+  const [group] = await db.select({ id: contactGroupsTable.id }).from(contactGroupsTable)
+    .where(and(eq(contactGroupsTable.id, groupId), eq(contactGroupsTable.userId, userId)));
+  if (!group) return res.status(404).json({ error: "القائمة غير موجودة" });
+  try {
+    const r = await vetList(userId, groupId, "owner", { onlyPending: req.body?.all !== true, foreignAllowed: req.body?.foreignAllowed === true });
+    res.json({ run: r, summary: await vettingSummary(userId, groupId) });
+  } catch (err: any) {
+    res.status(409).json({ error: String(err?.message ?? err).slice(0, 200) });
   }
 });
 

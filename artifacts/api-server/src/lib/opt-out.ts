@@ -1,9 +1,9 @@
-// ── The stop button ───────────────────────────────────────────────
-// Every campaign can carry «إيقاف الرسائل». A tap puts the number on the
-// account's unsubscribed list for five months — every send path already
-// skips that list — and the sweep below takes it off again when the time is
-// up. A customer who typed «إيقاف» themselves stays off for good, and a tap
-// never shortens that.
+// ── The stop button, and «no» for good ───────────────────────────
+// Every campaign carries «إيقاف الرسائل». The owner (2026-10-20): «من اختار
+// لا، اختار ما ترسل لي، خلاص ما هرسل له تاني». So a tap, a lone «0», a typed
+// «إيقاف», or any short message that asks us to stop puts the person on the
+// account's blacklist for good — every send path and the firewall's gate
+// refuse them afterwards. Nothing lifts it but the owner, by hand.
 //
 // Offering the way out is also the cheapest protection the number has: a
 // recipient who can stop the messages with one tap does not reach for
@@ -13,15 +13,9 @@ import { db, unsubscribedPhonesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger";
 
-export const STOP_MONTHS = 5;
+/** Kept for callers that still read it: a stop is permanent, so no months. */
+export const STOP_MONTHS = 0;
 export const STOP_ACK = "تم ✅ أوقفنا رسائلنا لك.";
-
-/** The day the block lifts: the same date, five months on. */
-export function stopUntil(from = new Date()): Date {
-  const d = new Date(from);
-  d.setMonth(d.getMonth() + STOP_MONTHS);
-  return d;
-}
 
 /** The line campaigns used to end with, before the button: «🔕 لإيقاف الرسائل أرسل: 0». */
 export const LEGACY_ZERO_LINE = /\n*━+\n🔕 لإيقاف الرسائل أرسل: 0[ \t]*/g;
@@ -38,36 +32,50 @@ export function tappedButtonId(message: any): string | null {
 }
 
 /**
- * Off the list for five months. If the number is already off for good, it
- * stays that way; if it is off until an earlier date, the later date wins.
+ * Off the list for good. A row that was once temporary becomes permanent too:
+ * the person said no, and the owner's rule is that no is final.
  */
-export async function stopForMonths(userId: number, phone: string, reason = "زر إيقاف الرسائل"): Promise<Date> {
-  const until = stopUntil();
+export async function stopForGood(userId: number, phone: string, reason = "زر إيقاف الرسائل"): Promise<void> {
   await db.insert(unsubscribedPhonesTable)
-    .values({ userId, phone, reason, expiresAt: until })
+    .values({ userId, phone, reason, expiresAt: null })
     .onConflictDoUpdate({
       target: [unsubscribedPhonesTable.userId, unsubscribedPhonesTable.phone],
-      set: {
-        expiresAt: sql`CASE WHEN ${unsubscribedPhonesTable.expiresAt} IS NULL THEN NULL
-                            ELSE GREATEST(${unsubscribedPhonesTable.expiresAt}, excluded.expires_at) END`,
-      },
+      set: { expiresAt: null },
     });
-  return until;
 }
 
-/** Lift the blocks whose five months are up. */
+/** The old name, kept so every caller still compiles; it stops for good now. */
+export async function stopForMonths(userId: number, phone: string, reason = "زر إيقاف الرسائل"): Promise<Date> {
+  await stopForGood(userId, phone, reason);
+  return new Date(8_640_000_000_000_000);
+}
+
+/** Rows from before the rule, with a date on them, are made permanent; nothing is lifted. */
 export async function sweepExpiredOptOuts(): Promise<number> {
-  const gone = await db.delete(unsubscribedPhonesTable)
-    .where(sql`${unsubscribedPhonesTable.expiresAt} IS NOT NULL AND ${unsubscribedPhonesTable.expiresAt} <= now()`)
+  const made = await db.update(unsubscribedPhonesTable).set({ expiresAt: null })
+    .where(sql`${unsubscribedPhonesTable.expiresAt} IS NOT NULL`)
     .returning({ id: unsubscribedPhonesTable.id });
-  if (gone.length) logger.info({ lifted: gone.length }, "stop-button blocks ended — those numbers may be messaged again");
-  return gone.length;
+  if (made.length) logger.info({ made: made.length }, "timed stops made permanent — a no is final");
+  return made.length;
 }
 
 export function startOptOutSweep() {
   const run = () => sweepExpiredOptOuts().catch((err) => logger.warn({ err: String(err) }, "opt-out sweep failed"));
   setTimeout(run, 60_000).unref();
-  setInterval(run, 60 * 60_000).unref();
+  setInterval(run, 6 * 60 * 60_000).unref();
+}
+
+/**
+ * Whether a message, on its own, asks us to stop. Short messages only — a
+ * long one that mentions «إلغاء» is about something else — with punctuation
+ * and emoji ignored, in Arabic, Gulf Arabic and English. Pure.
+ */
+export function asksToStop(text: string): boolean {
+  const t = String(text ?? "").toLowerCase()
+    .replace(/[ً-ْـ]/g, "").replace(/[إأآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  if (!t || t.length > 45) return false;
+  return /^(0|stop|unsubscribe|remove me|stop messaging|dont message me|do not message me|no more messages|توقف|وقف|اوقف|ايقاف|ايقاف الرسائل|الغاء|الغاء الاشتراك|لا ارسال|لا تراسلني|لا تراسلوني|لا ترسل|لا ترسلوا|لا ترسلو|لا ترسلون|لا ترسل لي|ارفع رقمي|ارفعوا رقمي|شيل رقمي|شيلوا رقمي|احذف رقمي|احذفوا رقمي|امسح رقمي|امسحوا رقمي|ما ابي رسايل|ما ابغي رسايل|ما ابي رسائل|ما ابغي رسائل|لا اريد رسائل|لا اريد رسايل|ما اريد رسائل|بطلوا ترسلوا|خلاص لا ترسلوا|ازعاج|مش عايز رسايل|مش عايز رسائل|ما بدي رسائل|ما بدي رسايل)( (لي|لو سمحت|please|plz|شكرا|من فضلك))?$/.test(t);
 }
 
 const STOP_BUTTON = { text: "إيقاف الرسائل", type: "stop" as const, url: "", color: "red" };

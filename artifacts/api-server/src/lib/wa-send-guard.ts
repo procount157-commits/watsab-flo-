@@ -20,11 +20,16 @@
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { logger } from "./logger";
+import { paceFor, LADDER } from "./wa-firewall-rules";
 
 export const GUARD_ROLE = "ops";
+// The pace itself is the ladder's (wa-firewall-rules paceFor): these are the
+// first rung's numbers, shown to the owner; the gate in sendMessage keeps the
+// real ones for the rung the number is on.
+const firstRung = paceFor(LADDER[0]);
 export const GUARD_RULES = {
-  minGapMs: 40_000, maxGapMs: 75_000,
-  per10Min: 8, perHour: 45,
+  minGapMs: firstRung.gapMs[0], maxGapMs: firstRung.gapMs[1],
+  per10Min: firstRung.per10Min, perHour: firstRung.perHour,
   /** No second campaign message to the same person within this window. */
   personQuietMs: 24 * 3_600_000,
 };
@@ -96,20 +101,9 @@ export async function acquire(userId: number, phone: string, campaignId: number,
     }
     res.set(key, now);
 
-    // The account's pace, across every campaign at once.
-    const ts = sent.get(userId) ?? [];
-    const gap = GUARD_RULES.minGapMs + Math.random() * (GUARD_RULES.maxGapMs - GUARD_RULES.minGapMs);
-    let wait = waitFor(ts, Date.now(), gap);
-    if (wait > 0) statOf(userId).waitedMs += wait;
-    while (wait > 0 && info.running) {
-      const step = Math.min(wait, 5_000);
-      await new Promise((ok) => setTimeout(ok, step));
-      wait -= step;
-      if (info.lastProgressAt != null) info.lastProgressAt = Date.now();
-    }
+    // The pace itself is the firewall's (wa-firewall.ts), inside sendMessage:
+    // one line for the whole account, whatever path a message takes.
     if (!info.running) { res.delete(key); return { ok: false, why: "stopped" }; }
-    ts.push(Date.now());
-    sent.set(userId, ts.filter((t) => t > Date.now() - 3_600_000));
     statOf(userId).sent++;
     return { ok: true };
   } finally { done(); }

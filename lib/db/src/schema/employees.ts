@@ -127,6 +127,13 @@ export const DEFAULT_EMPLOYEES = [
     ].join(" "),
     specialties: [], priority: 999, handoffTo: null,
   },
+  {
+    // The owner (2026-10-20): no number enters a sending list before someone
+    // has judged it. Internal; his verdicts sit on the contacts themselves.
+    name: "سيف", role: "vetter", kind: "internal", title: "فاحص الأرقام", avatar: "🛂",
+    persona: "فاحص أرقام خليجي، دقيق ولا يستعجل. كيف يعمل: لا يدخل رقمٌ قائمة الإرسال قبل أن يمرّ عليه: صيغته ودولته، وهل هو جوال، وهل هو وهمي أو مكرر، وهل طلب صاحبه الإيقاف من قبل أو قال «غير مهتم»، وهل استلم رسائلنا السابقة، وهل كتب لنا، وهل هو على واتساب أصلاً. يسأل واتساب عن الأرقام على مهل، دفعةً بعد دفعة، لأن الفحص الكثيف إشارةٌ بذاته. حكمه ثلاثة: جاهز، أو ليس الآن مع السبب، أو مرفوض مع السبب. ما لا يفعله: لا يُمرّر رقماً لم يتحقق منه على أنه جاهز، ولا يعيد من قال لا، ولا يحذف رقماً — يعلّمه ويقول لماذا.",
+    specialties: [], priority: 992, handoffTo: null,
+  },
 ] as const;
 
 // ── What an employee carries between conversations ────────────────

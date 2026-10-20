@@ -39,6 +39,7 @@ import { logger } from "./logger";
 import { parseLoose } from "./loose-json";
 import { strictSector } from "./email/sector";
 import { WA_DOCTRINE } from "./wa-doctrine";
+import { state as firewallState } from "./wa-firewall";
 import { describePending, fitsCampaign, messageLang, pictureMatches, unreadCount } from "./image-sense";
 import { languageOfText } from "./recipient-name";
 
@@ -393,6 +394,9 @@ export async function runCycle(userId: number): Promise<{ created?: number; judg
     else if (c.status === "paused") { await db.update(campaignsTable).set({ status: "running" }).where(eq(campaignsTable.id, t.waveCampaignId!)); await resume(userId); }
   }
 
+  // Nothing new while the firewall has the number frozen.
+  const fw = await firewallState(userId);
+  if (fw.mode === "frozen" || fw.manualFreeze) return { judged, why: `الحاجز يجمّد الإرسال: ${fw.reason ?? "تجميد يدوي"}` };
   // One new test at a time, and only with room in today's allowance on a number old enough.
   const [open] = await db.select({ id: waAutopilotTestsTable.id }).from(waAutopilotTestsTable)
     .where(and(eq(waAutopilotTestsTable.userId, userId), inArray(waAutopilotTestsTable.status, ["awaiting_approval", "testing"]))).limit(1);

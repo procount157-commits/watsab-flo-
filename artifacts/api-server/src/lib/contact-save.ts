@@ -8,6 +8,7 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { db, contactGroupsTable, contactsTable } from "@workspace/db";
 import { checkNumbers, getStatus } from "./whatsapp";
+import { vetInBackground, vetPending } from "./wa-vetting";
 import { canonical, inOtherLists } from "./dedupe";
 import { logger } from "./logger";
 
@@ -126,26 +127,19 @@ export async function validateGroup(userId: number, groupId: number, opts: { pru
  * open. Returns whether it started: only when the number is linked.
  */
 export function validateInBackground(userId: number, groupIds: number[]): boolean {
-  if (!groupIds.length || !getStatus(userId)?.connected) return false;
-  void (async () => {
-    for (const id of groupIds) {
-      await validateGroup(userId, id, { prune: true }).catch((err) =>
-        logger.warn({ userId, groupId: id, err: String(err?.message ?? err) }, "background validation failed"));
-    }
-  })();
-  return true;
+  // سيف, the number vetter, judges every new number (lib/wa-vetting.ts): the
+  // WhatsApp check is one of his readings. With the line down the rest of his
+  // verdict stands and the WhatsApp part waits for the connect.
+  vetInBackground(userId, groupIds, "upload");
+  return !!groupIds.length && !!getStatus(userId)?.connected;
 }
 
 
 /**
- * Every list of this account with numbers still waiting for WhatsApp's word —
- * an import made while the line was down — checked now, and what WhatsApp
- * does not know removed. Run on every (re)connect.
+ * Every list of this account with numbers still waiting for a verdict — an
+ * import made while the line was down, a number on hold — judged now by سيف.
+ * Run on every (re)connect.
  */
 export async function validatePending(userId: number) {
-  const groups = await db.selectDistinct({ id: contactsTable.groupId }).from(contactsTable)
-    .innerJoin(contactGroupsTable, eq(contactGroupsTable.id, contactsTable.groupId))
-    .where(and(eq(contactGroupsTable.userId, userId), eq(contactsTable.status, "pending")));
-  for (const g of groups) await validateGroup(userId, g.id, { prune: true }).catch((err) => logger.warn({ userId, groupId: g.id, err: String(err?.message ?? err) }, "pending validation failed"));
-  return groups.length;
+  return vetPending(userId, "connect");
 }

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import VettingCard, { VERDICT } from "@/components/VettingCard";
 
 interface ImportExtra {
   verifying?: boolean;
@@ -382,6 +383,9 @@ export default function ContactDetail() {
         </div>
       </div>
 
+      {/* سيف، فاحص الأرقام: حكمه على القائمة قبل أي حملة */}
+      <VettingCard groupId={id} onChanged={() => { queryClient.invalidateQueries({ queryKey: getGetContactGroupQueryKey(id) }); queryClient.invalidateQueries({ queryKey: getListContactsQueryKey() }); }} />
+
       {/* Contacts Table */}
       <div className="bg-card border border-card-border rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-card-border flex items-center justify-between">
@@ -411,6 +415,7 @@ export default function ContactDetail() {
                   {hasNames && <th className="text-right px-5 py-3 text-xs text-muted-foreground font-medium">الاسم</th>}
                   <th className="text-right px-5 py-3 text-xs text-muted-foreground font-medium">رقم الهاتف</th>
                   <th className="text-right px-5 py-3 text-xs text-muted-foreground font-medium">الحالة</th>
+                  <th className="text-right px-5 py-3 text-xs text-muted-foreground font-medium">حكم سيف</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-card-border">
@@ -431,6 +436,13 @@ export default function ContactDetail() {
                           : contact.status === "pending"
                           ? <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400">قيد الفحص…</span>
                           : <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{contact.status}</span>}
+                    </td>
+                    <td className="px-5 py-2.5">
+                      {contact.verdict && VERDICT[contact.verdict]
+                        ? <span title={(contact.vetReasons ?? []).join(" · ")} className={cn("text-xs px-2 py-0.5 rounded-full", VERDICT[contact.verdict]!.cls)}>
+                            {VERDICT[contact.verdict]!.label}{contact.vetReasons?.length ? ` — ${contact.vetReasons.join("، ")}` : ""}
+                          </span>
+                        : <span className="text-xs text-muted-foreground">لم يُفحص بعد</span>}
                     </td>
                   </tr>
                 ))}

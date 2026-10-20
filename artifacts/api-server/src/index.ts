@@ -24,6 +24,8 @@ import { startMissionWorker } from "./lib/email/missions";
 import { startAutopilotWorker } from "./lib/email/autopilot";
 import { startBounceGuard } from "./lib/email/bounce-guard";
 import { startImageSense } from "./lib/image-sense";
+import { startWaFirewall } from "./lib/wa-firewall";
+import { startVetting } from "./lib/wa-vetting";
 import { ensureEmailAgent } from "./lib/email/agent";
 import { db as dbx, botEmployeesTable as botEmp } from "@workspace/db";
 import { runAutoMaintenance } from "./lib/diagnosis-engine";
@@ -179,6 +181,9 @@ function startListening() {
     startAutopilotWorker();
     startBounceGuard();
     startImageSense();
+    startWaFirewall();
+    // سيف، فاحص الأرقام: ما على «ليس الآن» يُنظر فيه مرة في اليوم.
+    startVetting();
     // أربعة محلّلين، جولةٌ يومية بفاصلٍ بينهم: الحساب المجاني يعطي
     // ٨٠٠٠ رمزاً في الدقيقة، وأربعة نداءاتٍ متلاحقة تضربه.
     startSpecialistRounds();

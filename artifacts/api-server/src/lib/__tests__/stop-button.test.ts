@@ -1,9 +1,10 @@
-// The stop button: a tap keeps the number off for five months and no more;
-// a stop typed for good is never shortened by a tap; the sweep lifts only
-// what has expired. Runs on the test account with a number no one owns.
+// The stop button: a tap keeps the number off for good (the owner, 2026-10-20:
+// «من اختار لا خلاص ما هرسل له تاني»); a typed stop is read in any short
+// phrasing; the sweep makes old timed rows permanent and lifts nothing.
+// Runs on the test account with a number no one owns.
 
 export {};
-const { withStopButton, stripZeroLine, stopUntil, isStopTap, tappedButtonId, stopForMonths, sweepExpiredOptOuts, STOP_MONTHS } = await import("../opt-out");
+const { withStopButton, stripZeroLine, isStopTap, tappedButtonId, stopForGood, stopForMonths, sweepExpiredOptOuts, asksToStop, STOP_MONTHS } = await import("../opt-out");
 const { nativeFlowButtons } = await import("../wa-buttons");
 const { db, unsubscribedPhonesTable } = await import("@workspace/db");
 const { and, eq } = await import("drizzle-orm");
@@ -11,12 +12,14 @@ const { and, eq } = await import("drizzle-orm");
 let pass = 0, total = 0;
 const check = (n: string, c: boolean, d = "") => { total++; if (c) pass++; console.log(`${c ? "✅" : "❌"} ${n.padEnd(64)} ${d}`); };
 
-const until = stopUntil(new Date("2026-10-06T10:00:00Z"));
-check("five months on, the same day", STOP_MONTHS === 5 && until.toISOString().startsWith("2027-03-06"), until.toISOString());
+check("a stop has no months any more", STOP_MONTHS === 0);
 const stop = nativeFlowButtons([{ text: "إيقاف الرسائل", type: "stop" }])[0]!;
 check("the stop button goes as a quick reply with a stop id", stop.name === "quick_reply" && isStopTap(JSON.parse(stop.buttonParamsJson).id));
 check("a tap's id is read from the response", tappedButtonId({ interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{"id":"btn:stop:2"}' } } }) === "btn:stop:2");
 check("other buttons are not stops", !isStopTap("btn:interested:0") && !isStopTap(null) && tappedButtonId({ conversation: "x" }) === null);
+
+for (const t of ["إيقاف", "الغاء الاشتراك", "stop", "STOP!!", "0", "شيلوا رقمي لو سمحت", "لا ترسلوا لي", "ما ابي رسايل 🙏", "احذف رقمي", "Unsubscribe.", "مش عايز رسايل"]) check(`«${t}» asks to stop`, asksToStop(t));
+for (const t of ["الغاء الطلب رقم ٥٤٣ لو سمحت وارسلوا البديل بكرة الصبح مع التوصيل", "كم سعر الطقم؟", "تمام شكرا", "ابي اوقف الطلب واغير المقاس", "10"]) check(`«${t}» does not`, !asksToStop(t));
 
 const old = "هلا {الاسم}\n{تواصل معنا|كلمنا}\n\n━━━━━━━━━━\n🔕 لإيقاف الرسائل أرسل: 0\n\n━━━━━━━━━━\n🔕 لإيقاف الرسائل أرسل: 0";
 check("every copy of the old «أرسل: 0» line is taken out, the message kept", stripZeroLine(old) === "هلا {الاسم}\n{تواصل معنا|كلمنا}", JSON.stringify(stripZeroLine(old)));
@@ -37,27 +40,18 @@ const row = async () => (await db.select().from(unsubscribedPhonesTable).where(a
 const clear = () => db.delete(unsubscribedPhonesTable).where(and(eq(unsubscribedPhonesTable.userId, U), eq(unsubscribedPhonesTable.phone, P)));
 try {
   await clear();
-  await stopForMonths(U, P);
-  const r1 = await row();
-  const days = r1?.expiresAt ? (r1.expiresAt.getTime() - Date.now()) / 86_400_000 : 0;
-  check("a tap blocks the number for about five months", days > 148 && days < 156, `${days.toFixed(1)} days`);
-
-  await db.update(unsubscribedPhonesTable).set({ expiresAt: null }).where(and(eq(unsubscribedPhonesTable.userId, U), eq(unsubscribedPhonesTable.phone, P)));
-  await stopForMonths(U, P);
-  check("a stop for good is not shortened by a later tap", (await row())?.expiresAt === null);
+  await stopForGood(U, P);
+  check("a tap blocks the number for good", !!(await row()) && (await row())?.expiresAt === null);
 
   const past = new Date(Date.now() - 60_000);
   await db.update(unsubscribedPhonesTable).set({ expiresAt: past }).where(and(eq(unsubscribedPhonesTable.userId, U), eq(unsubscribedPhonesTable.phone, P)));
   await stopForMonths(U, P);
-  check("an expired block renewed by a new tap runs five months again", ((await row())?.expiresAt?.getTime() ?? 0) > Date.now() + 140 * 86_400_000);
+  check("an old timed row renewed by a tap becomes permanent", (await row())?.expiresAt === null);
 
   await db.update(unsubscribedPhonesTable).set({ expiresAt: past }).where(and(eq(unsubscribedPhonesTable.userId, U), eq(unsubscribedPhonesTable.phone, P)));
   await sweepExpiredOptOuts();
-  check("the sweep lifts an expired block", !(await row()));
-
-  await stopForMonths(U, P);
-  await sweepExpiredOptOuts();
-  check("...and leaves a live one", !!(await row()));
+  const r = await row();
+  check("the sweep lifts nothing: an expired row is made permanent", !!r && r.expiresAt === null);
 } finally {
   await clear();
 }

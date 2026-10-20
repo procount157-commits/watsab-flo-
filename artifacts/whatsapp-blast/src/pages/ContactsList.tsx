@@ -231,6 +231,13 @@ export default function ContactsList() {
                   <Users className="w-4 h-4 text-primary" />
                   <span className="font-medium text-foreground">{group.count.toLocaleString("ar-SA")}</span>
                   <span className="text-muted-foreground">رقم</span>
+                  {(group as any).ready !== undefined && group.count > 0 && (
+                    <span className="text-[11px] text-muted-foreground mr-1" title="حكم سيف، فاحص الأرقام: جاهز · ليس الآن · مرفوض">
+                      · <span className="text-green-400">{Number((group as any).ready ?? 0).toLocaleString("ar-SA")} جاهز</span>
+                      {Number((group as any).hold ?? 0) > 0 && <> · <span className="text-yellow-400">{Number((group as any).hold).toLocaleString("ar-SA")} ليس الآن</span></>}
+                      {Number((group as any).rejected ?? 0) > 0 && <> · <span className="text-red-400">{Number((group as any).rejected).toLocaleString("ar-SA")} مرفوض</span></>}
+                    </span>
+                  )}
                 </div>
                 <MoveToFolder kind="wa" listId={group.id} folderId={(group as any).folderId} onMoved={refreshLists} />
                 <Link
