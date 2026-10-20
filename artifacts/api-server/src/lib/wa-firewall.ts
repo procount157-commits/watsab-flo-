@@ -300,6 +300,7 @@ export async function judgeLadder(userId: number, force = false): Promise<{ rung
 const chains = new Map<number, Promise<unknown>>();
 const coldTimes = new Map<number, number[]>();
 const warmTimes = new Map<number, number[]>();
+const txTimes = new Map<number, number[]>();
 
 function dayStart(now = new Date()): number {
   // When the sending window opened today, in the sending timezone.
@@ -330,11 +331,15 @@ export async function admit(userId: number, phone: string, kind: SendKind, info?
 
     if (warm) {
       // Replies, notifications and warm follow-ups: never frozen, only paced like a person.
-      const ts = (warmTimes.get(userId) ?? []).filter((t) => t > now - 3_600_000);
-      if (ts.length >= RULES.warmPerHour) throw new FirewallBlocked(`أكثر من ${RULES.warmPerHour} رداً في الساعة`);
-      const wait = Math.max(0, (ts[ts.length - 1] ?? 0) + RULES.warmGapMs - now);
+      // Notifications the customer started keep their own, faster line.
+      const tx = kind === "transactional";
+      const times = tx ? txTimes : warmTimes;
+      const perHour = tx ? RULES.txPerHour : RULES.warmPerHour, gapMs = tx ? RULES.txGapMs : RULES.warmGapMs;
+      const ts = (times.get(userId) ?? []).filter((t) => t > now - 3_600_000);
+      if (ts.length >= perHour) throw new FirewallBlocked(`أكثر من ${perHour} ${tx ? "إشعاراً" : "رداً"} في الساعة`);
+      const wait = Math.max(0, (ts[ts.length - 1] ?? 0) + gapMs - now);
       if (wait) await new Promise((r) => setTimeout(r, wait));
-      ts.push(Date.now()); warmTimes.set(userId, ts);
+      ts.push(Date.now()); times.set(userId, ts);
       return { cold: false, mode, interactive };
     }
 

@@ -36,6 +36,8 @@ export const RULES = {
   gapMs: { min: 20_000, max: 240_000, jitter: [0.6, 1.1] as [number, number] },
   firstHour: { min: 4, max: 60, share: 0.5 },
   warmGapMs: 6_000, warmPerHour: 60,
+  /** Notifications the customer started (queue turn, order, appointment): a busy shop sends many, so their own line. */
+  txGapMs: 2_000, txPerHour: 400,
   /** Tripwires. */
   burstMin5: 6,
   undelivered: { sample: 10, bad: 4, freezeH: 6, sample2: 20, bad2: 10, freezeH2: 24, matureMin: 15 },
