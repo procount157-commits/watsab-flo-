@@ -104,7 +104,7 @@ export const DEFAULT_FOLLOW_UP_STEPS: ReadonlyArray<{ offsetMinutes: number; mes
   { offsetMinutes: 720,
     message: "حابين نطمئن عليك 🙏\nتحتاج مساعدة في اختيار الأنسب لك؟ اكتب لي وأرتبها لك." },
   { offsetMinutes: 1_440,
-    message: "صباح الخير ☀️\nما زال عرضنا متاحاً لك. تحب أحجز لك موعداً أو أرسل لك التفاصيل كاملة؟" },
+    message: "مرحباً 🌿\nما زال عرضنا متاحاً لك. تحب أحجز لك موعداً أو أرسل لك التفاصيل كاملة؟" },
   { offsetMinutes: 4_320,
     message: "مرّت أيام على تواصلك معنا 🌱\nإن كان الوقت غير مناسب الآن، قل لي متى أعاود التواصل وسأحترم ذلك." },
   { offsetMinutes: 10_080,

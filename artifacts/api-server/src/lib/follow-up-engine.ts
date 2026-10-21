@@ -24,7 +24,7 @@ import {
   type FollowUpStep,
 } from "@workspace/db";
 import { logger } from "./logger";
-import { isWithinSendingHours } from "./sending-hours";
+import { isWithinSendingHours, fixGreeting } from "./sending-hours";
 import { getDailyRemaining } from "./daily-limit";
 import { classify, INTENT_LABELS_AR, type Intent } from "./intent";
 import { answerFromKnowledge, shouldAutoReply, logAutoReply } from "./knowledge";
@@ -507,7 +507,7 @@ async function autoReplyIfAppropriate(
     // reply reads well aloud — prices, links and lists stay as text.
     const asVoice = theyspoke && (await voiceRepliesOn(userId)) && sayable(answer.reply).ok;
     if (asVoice) await sendVoiceNote(userId, phone, answer.reply);
-    else await sendMessage(userId, phone, answer.reply, undefined, undefined, undefined, undefined, { kind: "reply" });
+    else await sendMessage(userId, phone, fixGreeting(answer.reply), undefined, undefined, undefined, undefined, { kind: "reply" });
     // The piece's photo follows the words, when there is one and the reply is about it.
     if (shop?.photo && shop.piece && ["piece", "ad_lead", "photo", "interested", "weight_price"].includes(answer.reading?.situation ?? "")) {
       await sendMessage(userId, phone, shop.photo.caption, "image", shop.photo.path, undefined, undefined, { kind: "reply" }).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "تعذّر إرسال صورة القطعة"));
@@ -730,7 +730,7 @@ export async function runDueFollowUps(now = new Date()): Promise<{ sent: number;
     }
 
     try {
-      await sendMessage(job.userId, job.phone, step.message, undefined, undefined, undefined, undefined, { kind: "followup" });
+      await sendMessage(job.userId, job.phone, fixGreeting(step.message), undefined, undefined, undefined, undefined, { kind: "followup" });
       await db.update(followUpJobsTable)
         .set({ status: "sent", sentAt: new Date() })
         .where(eq(followUpJobsTable.id, job.id));

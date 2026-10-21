@@ -44,7 +44,7 @@ import { lastOutreach, outreachPreamble, savedName } from "./outreach-context";
 import { retrieve } from "./knowledge";
 import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
 import { opsVerdict, FOLLOWUP_ROLE } from "./followup-officer";
-import { isWithinSendingHours } from "./sending-hours";
+import { isWithinSendingHours, timeNote, fixGreeting } from "./sending-hours";
 import { getDailyRemaining } from "./daily-limit";
 import { assertCanSend } from "./plans";
 import { sendMessage, getStatus } from "./whatsapp";
@@ -333,7 +333,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   const transcript = turns.map((t) => `${t.fromMe ? "نحن" : "العميل"}: ${t.text.slice(0, 500)}`).join("\n");
   const out = await complete([
     { role: "system", content: system },
-    { role: "user", content: `المحادثة حتى الآن:\n${transcript}\n\nسكت العميل منذ آخر رسالة منا. اكتب ${angle.split(" — ")[0]}.` },
+    { role: "user", content: `${timeNote()}\n\nالمحادثة حتى الآن:\n${transcript}\n\nسكت العميل منذ آخر رسالة منا. اكتب ${angle.split(" — ")[0]}.` },
   ], 30_000);
   const raw = out?.text?.trim().replace(/^["«“]+|["»”]+$/g, "").trim();
   if (!raw) return { send: false, text: null, reason: "تعذّر الوصول للنموذج", retry: true };
@@ -411,7 +411,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   ].filter(Boolean).join("\n\n");
   const transcript = turns.slice(-8).map((t) => `${t.fromMe ? "نحن" : "الزبونة"}: ${t.text.slice(0, 300)}`).join("\n");
   const clean = (x?: string | null) => (x ?? "").trim().replace(/^["«“]+|["»”]+$/g, "").trim();
-  const out = await complete([{ role: "system", content: system }, { role: "user", content: `آخر المحادثة:\n${transcript}\n\nاكتب ${angle.split(" — ")[0]}.` }], 30_000);
+  const out = await complete([{ role: "system", content: system }, { role: "user", content: `${timeNote()}\n\nآخر المحادثة:\n${transcript}\n\nاكتب ${angle.split(" — ")[0]}.` }], 30_000);
   let text = clean(out?.text);
   if (!text) return { send: false, text: null, reason: "تعذّر الوصول للنموذج", retry: true };
   let issues = [...check(text), ...followupIssues(text, { last: rung >= rungs - 1, previous: [...turns].reverse().find((t) => t.fromMe)?.text ?? null })];
@@ -539,7 +539,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
     }
     if (await alreadySent(userId, phone, d.text)) { await record(userId, phone, due.rung, "drop", "النص نفسه وصلها من قبل", d.text, false, ops.view); result.declined++; continue; }
     try {
-      await sendMessage(userId, phone, d.text, undefined, undefined, undefined, undefined, { kind: "followup" });
+      await sendMessage(userId, phone, fixGreeting(d.text), undefined, undefined, undefined, undefined, { kind: "followup" });
       if (d.photo) await sendMessage(userId, phone, d.photo.caption, "image", d.photo.path, undefined, undefined, { kind: "followup" }).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "صورة المتابعة لم تُرسل"));
       await record(userId, phone, due.rung, "send", d.reason, d.text, true, ops.view);
       result.sent++; left--;
@@ -617,7 +617,7 @@ export async function sendApproved(userId: number, batch: number): Promise<{ sen
     const [moved] = (await db.execute(sql`SELECT 1 FROM wa_thread_messages WHERE user_id = ${userId} AND phone = ${r.phone} AND NOT from_me AND created_at > ${r.created_at} LIMIT 1`)).rows;
     if (moved) { await db.execute(sql`UPDATE followup_deliberations SET verdict = 'drop', reason = 'ردّت الزبونة بعد كتابتها — لم تُرسل' WHERE id = ${r.id}`); out.dropped++; continue; }
     try {
-      await sendMessage(userId, r.phone, r.draft, undefined, undefined, undefined, undefined, { kind: "followup" });
+      await sendMessage(userId, r.phone, fixGreeting(r.draft), undefined, undefined, undefined, undefined, { kind: "followup" });
       await db.execute(sql`UPDATE followup_deliberations SET verdict = 'send', executed = true WHERE id = ${r.id}`);
       receipt({ userId, node: FOLLOWUP_ROLE, graph: "whatsapp", action: "followup.sent", status: "ok", subject: r.phone, why: "متابعة اعتمدها صاحب العمل" });
       out.sent++;
