@@ -461,6 +461,8 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   if (mode === "live" && !getStatus(userId).connected) return result;
 
   const { ladder, scope, vertical, style, batch } = await ladderOf(userId);
+  // A copy that reached someone twice is taken back first.
+  if (getStatus(userId).connected) await recallDuplicateFollowups(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "فحص المكرر تعذّر"));
   // Approved drafts go first, through the firewall like any message.
   if (mode === "approve" || mode === "live") await sendApproved(userId, batch).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "إرسال المعتمد تعذّر"));
   const phones = await candidates(userId, scope);
@@ -476,7 +478,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
 
   // The rungs already taken, per phone.
   // A draft waiting for the owner (or approved and not yet sent) holds its person: no second draft beside it.
-  const waiting = new Set((await db.execute<{ phone: string }>(sql`SELECT DISTINCT phone FROM followup_deliberations WHERE user_id = ${userId} AND verdict IN ('pending', 'approved')`)).rows.map((r) => r.phone));
+  const waiting = new Set((await db.execute<{ phone: string }>(sql`SELECT DISTINCT phone FROM followup_deliberations WHERE user_id = ${userId} AND verdict IN ('pending', 'approved', 'sending')`)).rows.map((r) => r.phone));
   const takenRows = await db.select({ phone: followupDeliberationsTable.phone, at: followupDeliberationsTable.createdAt, draft: followupDeliberationsTable.draft, verdict: followupDeliberationsTable.verdict })
     .from(followupDeliberationsTable)
     .where(and(eq(followupDeliberationsTable.userId, userId), inArray(followupDeliberationsTable.phone, phones), sql`${followupDeliberationsTable.step} >= ${STEP_BASE}`, gt(followupDeliberationsTable.createdAt, new Date(now - 60 * 86_400_000))));
@@ -535,6 +537,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
       await record(userId, phone, due.rung, "pending", `${d.reason} — بانتظار موافقتك`, d.text, false, ops.view);
       continue;
     }
+    if (await alreadySent(userId, phone, d.text)) { await record(userId, phone, due.rung, "drop", "النص نفسه وصلها من قبل", d.text, false, ops.view); result.declined++; continue; }
     try {
       await sendMessage(userId, phone, d.text, undefined, undefined, undefined, undefined, { kind: "followup" });
       if (d.photo) await sendMessage(userId, phone, d.photo.caption, "image", d.photo.path, undefined, undefined, { kind: "followup" }).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "صورة المتابعة لم تُرسل"));
@@ -577,7 +580,7 @@ export async function pendingDrafts(userId: number) {
       (SELECT text FROM wa_thread_messages t WHERE t.user_id = d.user_id AND t.phone = d.phone AND NOT t.from_me AND coalesce(t.text,'') <> '' ORDER BY created_at DESC LIMIT 1) AS last_customer,
       (SELECT name FROM wa_conversations c WHERE c.user_id = d.user_id AND c.phone = d.phone LIMIT 1) AS name
     FROM followup_deliberations d LEFT JOIN conversation_reviews r ON r.user_id = d.user_id AND r.phone = d.phone
-    WHERE d.user_id = ${userId} AND d.verdict IN ('pending', 'approved') ORDER BY d.created_at`)).rows;
+    WHERE d.user_id = ${userId} AND d.verdict IN ('pending', 'approved', 'sending') ORDER BY d.created_at`)).rows;
 }
 
 export async function approveDraft(userId: number, id: number, text?: string | null): Promise<{ ok: boolean; why?: string }> {
@@ -601,6 +604,15 @@ export async function sendApproved(userId: number, batch: number): Promise<{ sen
   const rows = (await db.execute<{ id: number; phone: string; draft: string; created_at: Date }>(sql`SELECT id, phone, draft, created_at FROM followup_deliberations
     WHERE user_id = ${userId} AND verdict = 'approved' AND coalesce(draft, '') <> '' ORDER BY created_at LIMIT ${batch}`)).rows;
   for (const r of rows) {
+    // Claimed before anything else: the owner's «send now» and the round both
+    // read the same approved rows, and on 2026-10-21 both sent two of them.
+    const claimed = (await db.execute(sql`UPDATE followup_deliberations SET verdict = 'sending' WHERE id = ${r.id} AND verdict = 'approved' RETURNING id`)).rows.length;
+    if (!claimed) continue;
+    // The same words already reached this person: never twice.
+    if (await alreadySent(userId, r.phone, r.draft)) {
+      await db.execute(sql`UPDATE followup_deliberations SET verdict = 'drop', reason = 'النص نفسه وصلها من قبل — لم يُرسل مرة ثانية' WHERE id = ${r.id}`);
+      out.dropped++; continue;
+    }
     // She wrote after the draft: the conversation moved on, the draft is stale.
     const [moved] = (await db.execute(sql`SELECT 1 FROM wa_thread_messages WHERE user_id = ${userId} AND phone = ${r.phone} AND NOT from_me AND created_at > ${r.created_at} LIMIT 1`)).rows;
     if (moved) { await db.execute(sql`UPDATE followup_deliberations SET verdict = 'drop', reason = 'ردّت الزبونة بعد كتابتها — لم تُرسل' WHERE id = ${r.id}`); out.dropped++; continue; }
@@ -614,12 +626,51 @@ export async function sendApproved(userId: number, batch: number): Promise<{ sen
       // The person said no for good: the draft goes. The number's no: everything waits for the next round.
       if (m.startsWith("FIREWALL-REFUSED:")) { await db.execute(sql`UPDATE followup_deliberations SET verdict = 'drop', reason = ${m.slice(0, 200)} WHERE id = ${r.id}`); out.dropped++; continue; }
       out.held++;
+      await db.execute(sql`UPDATE followup_deliberations SET verdict = 'approved' WHERE id = ${r.id} AND verdict = 'sending'`);
       logger.info({ userId, phone: r.phone, why: m.slice(0, 160) }, "متابعة معتمدة تنتظر الجولة القادمة");
       if (m.startsWith("FIREWALL:")) break;
     }
   }
   if (out.sent || out.dropped) logger.info({ userId, ...out }, "أُرسلت المتابعات المعتمدة");
   return out;
+}
+
+/** Whether these words, or nearly these, already went to this person in the last week. */
+async function alreadySent(userId: number, phone: string, text: string): Promise<boolean> {
+  const key = String(phone).split(":")[0]!.replace(/\D/g, "").slice(-9);
+  const rows = (await db.execute<{ text: string }>(sql`SELECT text FROM wa_thread_messages WHERE user_id = ${userId} AND from_me
+    AND right(regexp_replace(split_part(phone, ':', 1), '[^0-9]', '', 'g'), 9) = ${key} AND coalesce(text, '') <> '' AND created_at > now() - interval '7 days'`)).rows;
+  return rows.some((r) => r.text.trim() === text.trim() || overlap(r.text, text) > 0.85);
+}
+
+/**
+ * A follow-up that reached the same person twice (the owner, 2026-10-21:
+ * «كرر نفس الرسالة لنفس الرقم — امسح المكرر») is taken back for everyone:
+ * the later copy only, and only when it is word for word a follow-up we
+ * sent, within an hour of the first and inside WhatsApp's recall window.
+ */
+export async function recallDuplicateFollowups(userId: number): Promise<number> {
+  const dups = (await db.execute<{ phone: string; message_id: string; text: string }>(sql`
+    SELECT later.phone, later.message_id, later.text FROM wa_thread_messages later
+    WHERE later.user_id = ${userId} AND later.from_me AND later.message_id IS NOT NULL AND coalesce(later.text, '') <> ''
+      AND later.created_at > now() - interval '36 hours'
+      AND EXISTS (SELECT 1 FROM wa_thread_messages earlier WHERE earlier.user_id = later.user_id AND earlier.phone = later.phone AND earlier.from_me
+        AND earlier.text = later.text AND earlier.created_at < later.created_at AND earlier.created_at > later.created_at - interval '1 hour')
+      AND EXISTS (SELECT 1 FROM followup_deliberations d WHERE d.user_id = later.user_id AND d.executed AND d.draft = later.text)
+      AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.user_id = later.user_id AND r.action = 'recall.whatsapp' AND r.output_ref = later.message_id)`)).rows;
+  if (!dups.length) return 0;
+  const { deleteForEveryone } = await import("./whatsapp");
+  let n = 0;
+  for (const d of dups) {
+    try {
+      await deleteForEveryone(userId, d.phone, d.message_id);
+      await db.execute(sql`UPDATE wa_thread_messages SET text = ${"🚫 حُذفت: نسخة مكررة من متابعة"} WHERE user_id = ${userId} AND message_id = ${d.message_id}`);
+      n++;
+      logger.info({ userId, phone: d.phone, messageId: d.message_id }, "حُذفت متابعة مكررة عند الطرفين");
+      await new Promise((r) => setTimeout(r, 4_000));
+    } catch (err: any) { logger.warn({ userId, phone: d.phone, err: String(err?.message ?? err).slice(0, 160) }, "حذف المكرر تعذّر"); }
+  }
+  return n;
 }
 
 /** Sending what the owner just approved, without holding the request open. */
