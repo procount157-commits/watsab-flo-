@@ -146,7 +146,7 @@ function SmartFollowUps() {
       <div className="grid md:grid-cols-3 gap-3 text-xs">
         <div className="rounded-lg border border-border p-3 space-y-2">
           <p className="font-medium">الأسلوب</p>
-          {[["service", "خدمة فقط", "هل تحتاجين شيئاً؟ نحن في الخدمة — بلا سعر ولا رابط ولا تحبّب ولا معلومة من عنده"], ["rich", "زاوية جديدة", "يضيف معلومة أو قطعة أو رابطاً من المعرفة في كل مرة"]].map(([v, l, d]) => (
+          {[["sales", "بيعي", "يدعوها لتصفح القطع في الموقع مع رابطه — بشري، بالعربي، بلا سعر ولا تحبّب"], ["service", "خدمة فقط", "هل تحتاجين شيئاً؟ نحن في الخدمة — بلا رابط ولا معلومة"], ["rich", "زاوية جديدة", "يضيف معلومة أو قطعة أو رابطاً من المعرفة في كل مرة"]].map(([v, l, d]) => (
             <label key={v} className="flex items-start gap-2 cursor-pointer">
               <input type="radio" checked={st?.style === v} onChange={() => patch.mutate({ style: v })} className="mt-0.5" />
               <span><b>{l}</b><span className="block text-muted-foreground">{d}</span></span>

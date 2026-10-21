@@ -45,3 +45,24 @@ console.log(`followup-service: ${n}/${n} ✅`);
   assert.ok(overlap(a, b) > 0.75, "two near-identical texts are caught as one");
   console.log("followup-service extra: 3/3 ✅");
 }
+// The sales style and the language rule (the owner, 2026-10-21).
+{
+  const { followupLanguage, salesIssues, SALES_ANGLE, angleFor: af } = await import("../smart-followup");
+  let m = 0; const t = (c: boolean, msg: string) => { assert.ok(c, msg); m++; };
+  t(followupLanguage(["Hello! Can I get more info on this?"]) === "ar", "the ad's prefilled English is not her language");
+  t(followupLanguage(["Hello! Can I get more info on this?", "كم سعره؟"]) === "ar", "she then wrote Arabic");
+  t(followupLanguage(["مرحبًا! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟"]) === "ar", "the Arabic prefill");
+  t(followupLanguage(["Hello! Can I get more info on this?", "Hello sir, I would like to buy some gold earrings."]) === "en", "she wrote English herself");
+  t(followupLanguage(["Hello! Can I get more info on this?سعر ووزن"]) === "ar", "the prefill glued to Arabic words");
+  t(followupLanguage(["Hello! Can I get more info on this?", "Okay"]) === "ar", "a lone «Okay» is not a language");
+  t(followupLanguage(["How much aed"]) === "en", "a real English question");
+  const site = "https://floret-royal.io";
+  t(salesIssues("مساء الخير 🌸 عندنا قطع كثيرة في الموقع، تقدرين تاخذين فكرة: https://floret-royal.io", site).length === 0, "the site's link is allowed");
+  t(salesIssues("شوفي https://other-shop.com", site).includes("فيها رابط غير رابط الموقع"), "another site is not");
+  t(salesIssues("هلا حبيبتي https://floret-royal.io", site).includes("فيها كلمة تحبّب"), "endearments still refused");
+  t(salesIssues("الطقم سعره حلو https://floret-royal.io", site).length > 0, "prices still refused");
+  t(salesIssues("Hello dear, check our site https://floret-royal.io", site, "ar").includes("فيها كلام بالإنجليزية والزبونة تُكتب لها بالعربية"), "English to an Arabic customer is refused");
+  t(salesIssues("Good evening, you can browse our pieces here: https://floret-royal.io", site, "en").length === 0, "English is fine for one who wrote it");
+  t(SALES_ANGLE.length === 7 && af(0, 7, "jewelry", "sales") === SALES_ANGLE[0], "seven sales moments");
+  console.log(`followup-sales: ${m}/${m} ✅`);
+}

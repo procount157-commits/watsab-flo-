@@ -319,7 +319,7 @@ router.patch("/smart", async (req, res) => {
     logger.info({ userId, mode }, "smart follow-up mode changed");
   }
   if (b.style !== undefined) {
-    if (!["rich", "service"].includes(String(b.style))) return res.status(400).json({ error: "الأسلوب: rich أو service" });
+    if (!["rich", "service", "sales"].includes(String(b.style))) return res.status(400).json({ error: "الأسلوب: rich أو service أو sales" });
     await db.execute(sql`UPDATE business_profile SET followup_style = ${String(b.style)} WHERE user_id = ${userId}`);
   }
   if (b.batch !== undefined) {

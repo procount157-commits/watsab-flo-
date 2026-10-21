@@ -139,9 +139,75 @@ export function serviceIssues(text: string): string[] {
   return out;
 }
 
+/**
+ * «Sales» (the owner, 2026-10-21, a few hours after «service»): still a
+ * person at the shop, still no price and no endearment, but now an
+ * invitation — «we have many pieces on the site, take a look» — with the
+ * site's link. The link is the only thing the writer may add.
+ */
+export const SALES_ANGLE: string[] = [
+  "المتابعة ١ — اطمئنان قصير بعد المحادثة، ثم دعوة لطيفة: عندنا قطع كثيرة في الموقع تقدر تاخذ فكرة عنها، مع رابط الموقع.",
+  "المتابعة ٢ — إن سألت عن شيء بعينه فاذكره بكلماتها هي، وقل إن في الموقع تصاميم قريبة منه تقدر تشوفها، مع الرابط. وإلا فادعها تتصفح على راحتها.",
+  "المتابعة ٣ — سؤال بيعي لطيف بلا رابط: هل تدوّر على شي لمناسبة معيّنة أو للبس اليومي، عشان نساعدها تختار.",
+  "المتابعة ٤ — دعوة للموقع من زاوية الهدية أو المناسبة: لو عندها مناسبة أو تبي تهدي أحد، الموقع فيه خيارات كثيرة، مع الرابط.",
+  "المتابعة ٥ — سطر قصير جداً: إذا شافت شي عجبها في الموقع ترسل لنا صورته أو اسمه ونساعدها، بلا رابط.",
+  "المتابعة ٦ — تذكير دافئ بالموقع: التصاميم كلها موجودة فيه بصورها، تتصفحها متى ما ارتاحت، مع الرابط.",
+  "المتابعة الأخيرة — ختام كريم: شكر على تواصلها، وأن الواتساب والموقع موجودين لها دائماً، بلا ضغط ولا سؤال.",
+];
+
+export const SALES_VOICE = [
+  "═══ أسلوب المتابعة: بيعي وبشري (تعليمات صاحب العمل) ═══",
+  "- اكتب كإنسان يعمل في محل ذهب ويعرف زبونته، يكتب بيده الآن: سطران إلى ثلاثة، طبيعيان، دافئان باحترام.",
+  "- هدفك أن تشجعها بلطف تتصفح القطع وتختار: «عندنا قطع كثيرة في الموقع، تقدرين تاخذين فكرة»، «الموقع فيه التصاميم كلها بصورها».",
+  "- الرابط الوحيد المسموح هو رابط الموقع المعطى لك، كما هو حرفياً. لا تخترع رابط قطعة.",
+  "- ممنوع منعاً باتاً: أي سعر أو رقم أو وزن أو عيار أو خصم أو عرض؛ اسم قطعة أو معلومة لم تذكرها هي؛ أي وعد بتوفر أو موعد.",
+  "- ممنوع منعاً باتاً أي تحبّب: حبيبتي، حبيبي، صاحبتي، قلبي، عمري، روحي، حياتي، يا قمر، يا عسل، غناتي. الاحترام هو الدفء.",
+  "- لا تبدأ بـ«وعليكم السلام» ولا «أتابع معك» ولا «للتذكير» ولا «هل وصلتك رسالتي». ابدأ بتحية الوقت أو بـ«هلا».",
+  "- كل زبونة تأخذ رسالة بكلمات مختلفة عن غيرها: نص واحد لعدة أشخاص يقرؤه واتساب رسالةً آلية.",
+  "- إيموجي واحد على الأكثر.",
+  "أمثلة:",
+  "✓ «مساء الخير 🌸 حبيت أقولك إن عندنا قطع كثيرة في الموقع، تقدرين تاخذين فكرة على راحتك: https://floret-royal.io وإذا عجبك شي قوليلي»",
+  "✓ «هلا، الخلخال اللي سألتي عنه في الموقع تصاميم قريبة منه تقدرين تشوفينها https://floret-royal.io»",
+  "✗ «هلا حبيبتي، الطقم سعره…» — تحبّب وسعر.",
+].join("\n");
+
+/** The prefilled text a Meta click-to-WhatsApp ad puts in the customer's mouth, in any of its languages. */
+const AD_PREFILL = /^\s*(hello!?\s*can\s+i\s+get\s+more\s+info(rmation)?\s+on\s+this\??|مرحب[اًا]?!?\s*هل\s*يمكنني\s*الحصول\s*على\s*مزيد\s*من\s*ال?\s*معلومات\s*حول\s*هذا\s*[؟?]?|سلام!?\s*می.?\s*توانم[^؟?]*[؟?]?)/i;
+
+/**
+ * The language to write in (the owner, 2026-10-21): Arabic always — unless
+ * she herself wrote in English, in words of her own and not the ad's
+ * prefilled «Hello! Can I get more info on this?». Pure.
+ */
+export function followupLanguage(customerTexts: string[]): "ar" | "en" {
+  for (const raw of customerTexts) {
+    const t = String(raw ?? "").replace(AD_PREFILL, "").trim();
+    if (!t || /[\u0600-\u06FF]/.test(t)) continue;
+    if ((t.match(/[A-Za-z]{2,}/g) ?? []).length >= 1 && !/^(ok|okay|yes|no|thanks|thank you|hi|hello)[.!\s]*$/i.test(t)) return "en";
+  }
+  return "ar";
+}
+
+/** The shop's site, the one link the sales style may carry. */
+export const shopSite = () => (process.env["FLORET_SITE_URL"] || "https://floret-royal.io").replace(/\/+$/, "");
+
+/** The sales style: the service style's limits, but the shop's own site may be linked. Pure. */
+export function salesIssues(text: string, site = shopSite(), lang: "ar" | "en" = "ar"): string[] {
+  const host = site.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  const links: string[] = String(text ?? "").match(/https?:\/\/\S+|www\.\S+|\b[\w-]+\.(io|com|ae|net)\S*/gi) ?? [];
+  const foreign = links.filter((l) => !l.replace(/^https?:\/\//, "").replace(/^www\./, "").startsWith(host));
+  let withoutSite = String(text ?? "");
+  for (const l of links) withoutSite = withoutSite.replace(l, " ");
+  const out = serviceIssues(withoutSite).filter((x) => x !== "أطول من سطرين أو ثلاثة");
+  if (foreign.length) out.push("فيها رابط غير رابط الموقع");
+  if (withoutSite.split(/\n+/).filter((l) => l.trim()).length > 4 || withoutSite.length > 320) out.push("أطول من ثلاثة أسطر");
+  if (lang === "ar" && /[A-Za-z]{3,}/.test(withoutSite)) out.push("فيها كلام بالإنجليزية والزبونة تُكتب لها بالعربية");
+  return out;
+}
+
 /** The angle for a rung on any ladder: the last angle is always the farewell. Pure. */
 export const angleFor = (rung: number, rungs: number, vertical?: string | null, style?: string | null) => {
-  const set = style === "service" ? SERVICE_ANGLE : vertical === "jewelry" ? JEWELRY_ANGLE : RUNG_ANGLE;
+  const set = style === "sales" ? SALES_ANGLE : style === "service" ? SERVICE_ANGLE : vertical === "jewelry" ? JEWELRY_ANGLE : RUNG_ANGLE;
   return rung >= rungs - 1 ? set[set.length - 1]! : set[Math.min(rung, set.length - 2)]!;
 };
 
@@ -218,7 +284,7 @@ type Draft = { send: boolean; text: string | null; reason: string; retry?: boole
 
 /** خالد writes the rung, or declines. */
 async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null, style = "rich"): Promise<Draft> {
-  if (style === "service") return composeService(userId, phone, turns, rung, earlier, rungs);
+  if (style === "service" || style === "sales") return composeService(userId, phone, turns, rung, earlier, rungs, style);
   const angle = angleFor(rung, rungs, vertical);
   const [[me], [profile], card, company] = await Promise.all([
     db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
@@ -316,8 +382,12 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
  * nothing to add, so nothing can be invented — and the code check refuses
  * an endearment, a number, a price word or a link even if he writes one.
  */
-async function composeService(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs: number): Promise<Draft> {
-  const angle = angleFor(rung, rungs, null, "service");
+async function composeService(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs: number, style = "service"): Promise<Draft> {
+  const sales = style === "sales";
+  const angle = angleFor(rung, rungs, null, style);
+  const lang = followupLanguage(turns.filter((t) => !t.fromMe).map((t) => t.text));
+  const site = shopSite();
+  const check = (x: string) => sales ? salesIssues(x, site, lang) : [...serviceIssues(x), ...(lang === "ar" && /[A-Za-z]{3,}/.test(x) ? ["فيها كلام بالإنجليزية والزبونة تُكتب لها بالعربية"] : [])];
   const [[me], [profile]] = await Promise.all([
     db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
     db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
@@ -329,9 +399,12 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   const system = [
     `اسمك ${me?.name ?? "خالد"}، تعمل في ${profile?.name ?? "المحل"}. تكتب رسالة متابعة واحدة لزبونة سكتت بعد محادثتها معنا.`,
     others.length ? `═══ رسائل كُتبت لزبونات أخريات — لا تشبهها في الكلمات ولا في البناء ═══\n${others.slice(0, 8).map((e) => `- ${e}`).join("\n")}` : "",
-    SERVICE_VOICE,
+    sales ? SALES_VOICE : SERVICE_VOICE,
     `═══ زاوية هذه الرسالة ═══\n${angle}`,
-    dialectLine(customerDialect),
+    sales ? `رابط الموقع (الوحيد المسموح، انسخه كما هو): ${site}` : "",
+    lang === "ar"
+      ? `اكتب بالعربية فقط، بلهجة خليجية طبيعية — ولا كلمة إنجليزية${sales ? " غير الرابط" : ""}. إن كانت رسالتها الأولى «Hello! Can I get more info on this?» فتلك رسالة الإعلان الجاهزة لا لغتها. ${dialectLine(customerDialect)}`
+      : "She writes to us in English herself, so write in natural, warm English.",
     profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
     earlier.length ? `═══ ما قلناه لها في المتابعات السابقة — اكتب شيئاً مختلفاً ═══\n${earlier.map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
     "أعد نص الرسالة وحده، بلا علامات اقتباس ولا شرح.",
@@ -341,19 +414,21 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   const out = await complete([{ role: "system", content: system }, { role: "user", content: `آخر المحادثة:\n${transcript}\n\nاكتب ${angle.split(" — ")[0]}.` }], 30_000);
   let text = clean(out?.text);
   if (!text) return { send: false, text: null, reason: "تعذّر الوصول للنموذج", retry: true };
-  let issues = [...serviceIssues(text), ...followupIssues(text, { last: rung >= rungs - 1, previous: [...turns].reverse().find((t) => t.fromMe)?.text ?? null })];
+  let issues = [...check(text), ...followupIssues(text, { last: rung >= rungs - 1, previous: [...turns].reverse().find((t) => t.fromMe)?.text ?? null })];
   if (issues.length) {
     const fixed = await complete([
-      { role: "system", content: "أنت محرر رسائل متابعة لمحل. تعيد الرسالة مصحّحة وحدها، سطراً أو سطرين، بلهجتها. لا سعر ولا رقم ولا رابط ولا تحبّب ولا معلومة جديدة: فقط هل تحتاج شيئاً ونحن في الخدمة." },
+      { role: "system", content: sales
+        ? `أنت محرر رسائل متابعة لمحل ذهب. تعيد الرسالة مصحّحة وحدها، سطرين أو ثلاثة، ${lang === "ar" ? "بالعربية الخليجية فقط" : "in English"}. لا سعر ولا رقم ولا تحبّب ولا اسم قطعة جديد، والرابط الوحيد المسموح ${site}.`
+        : `أنت محرر رسائل متابعة لمحل. تعيد الرسالة مصحّحة وحدها، سطراً أو سطرين، ${lang === "ar" ? "بالعربية الخليجية فقط" : "in English"}. لا سعر ولا رقم ولا رابط ولا تحبّب ولا معلومة جديدة: فقط هل تحتاج شيئاً ونحن في الخدمة.` },
       { role: "user", content: `الرسالة:\n${text}\n\nأصلح: ${issues.join("؛ ")}.` },
     ], 20_000).catch(() => null);
     const cand = clean(fixed?.text);
-    if (cand) { const again = [...serviceIssues(cand), ...followupIssues(cand, { last: rung >= rungs - 1, previous: null })]; if (again.length < issues.length) { text = cand; issues = again; } }
+    if (cand) { const again = [...check(cand), ...followupIssues(cand, { last: rung >= rungs - 1, previous: null })]; if (again.length < issues.length) { text = cand; issues = again; } }
   }
   if (issues.length) return { send: false, text, reason: `أُوقفت: ${issues[0]}`, retry: true };
   if (earlier.find((e) => overlap(e, text) > 0.6)) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة", retry: true };
   if (others.find((e) => overlap(e, text) > 0.75)) return { send: false, text, reason: "تشبه رسالة كُتبت لزبونة أخرى — تُكتب من جديد في الجولة القادمة", retry: true };
-  return { send: true, text, reason: "جاهزة — أسلوب الخدمة فقط", photo: null };
+  return { send: true, text, reason: sales ? `جاهزة — أسلوب بيعي (${lang === "ar" ? "بالعربية" : "بالإنجليزية لأنها كتبت بها"})` : "جاهزة — أسلوب الخدمة فقط", photo: null };
 }
 
 async function record(userId: number, phone: string, rung: number, verdict: "send" | "hold" | "drop" | "pending", reason: string, draft: string | null, executed: boolean, opsView: string) {

@@ -16,4 +16,7 @@ WHERE user_id = 4 AND vertical = 'jewelry' AND followup_style = 'rich';
 -- مسودات وضع التجربة لم تصل لأحد، فلا تُحسب متابعاتٍ أُخذت: تُعزل باسمها
 -- حتى تبدأ كل زبونة من متابعتها الأولى. لا تُحذف — تبقى في السجل.
 UPDATE followup_deliberations SET verdict = 'dry'
-WHERE user_id = 4 AND step >= 100 AND NOT executed AND verdict IN ('send', 'drop', 'hold');
+WHERE user_id = 4 AND step >= 100 AND NOT executed AND verdict IN ('send', 'drop', 'hold')
+  -- Only what dry mode wrote: deploy.sh re-runs every migration, and a later
+  -- «drop» is the owner's own rejection, which must stay counted.
+  AND created_at < '2026-10-21 11:00:00+00';
