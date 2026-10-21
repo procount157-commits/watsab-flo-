@@ -135,7 +135,7 @@ function SmartFollowUps() {
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {MODES.map((m) => (
-          <button key={m.val} onClick={() => patch.mutate({ mode: m.val })} disabled={patch.isPending}
+          <button key={m.val} onClick={() => (m.val !== "live" || confirm("وضع «تعمل» يرسل المتابعات للزبائن مباشرة دون مراجعتك. متأكد؟")) && patch.mutate({ mode: m.val })} disabled={patch.isPending}
             className={cn("rounded-lg border px-3 py-2 text-right transition-colors", mode === m.val ? m.cls + " font-semibold" : "border-border text-muted-foreground hover:border-primary/30")}>
             <span className="block text-sm">{m.label}</span>
             <span className="block text-[11px] opacity-80 mt-0.5">{m.desc}</span>

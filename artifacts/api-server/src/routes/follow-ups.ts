@@ -13,6 +13,7 @@ import { requireAuth } from "../lib/auth";
 import { enrolLead, enrolGroup, cancelPendingFollowUps } from "../lib/follow-up-engine";
 import { classify, classifyIntent, INTENT_LABELS_AR, type Intent } from "../lib/intent";
 import { logger } from "../lib/logger";
+import { receipt } from "../lib/graph/receipts";
 import { modeOf, runSmartFollowUps, STEP_BASE, pendingDrafts, approveDraft, rejectDraft, sendApprovedSoon } from "../lib/smart-followup";
 import { reviewAll } from "../lib/graph/review";
 
@@ -315,8 +316,12 @@ router.patch("/smart", async (req, res) => {
   if (b.mode !== undefined) {
     const mode = String(b.mode);
     if (!["off", "dry", "approve", "live"].includes(mode)) return res.status(400).json({ error: "الوضع: off أو dry أو approve أو live" });
+    const before = await modeOf(userId);
     await db.execute(sql`UPDATE business_profile SET smart_followup = ${mode} WHERE user_id = ${userId}`);
-    logger.info({ userId, mode }, "smart follow-up mode changed");
+    logger.info({ userId, from: before, mode }, "smart follow-up mode changed");
+    // Who switched it, and when: a mode change sends or stops messages to customers.
+    if (before !== mode) receipt({ userId, node: "owner", graph: "whatsapp", action: "followup.mode", status: "ok", subject: null,
+      evidence: { from: before, to: mode, ip: req.ip, ua: String(req.headers["user-agent"] ?? "").slice(0, 120) }, why: `وضع المتابعة: ${before} ← ${mode}` });
   }
   if (b.style !== undefined) {
     if (!["rich", "service", "sales"].includes(String(b.style))) return res.status(400).json({ error: "الأسلوب: rich أو service أو sales" });
