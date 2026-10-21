@@ -31,7 +31,7 @@ export const businessProfileTable = pgTable("business_profile", {
   guardrails:  text("guardrails"),
   /** off | mirror — answer a voice note with a voice note */
   voiceReplies: varchar("voice_replies", { length: 10 }).notNull().default("mirror"),
-  /** The follow-up that writes each message for the person: off | dry | live. */
+  /** The follow-up that writes each message for the person: off | dry | approve | live. */
   smartFollowup: varchar("smart_followup", { length: 8 }).notNull().default("dry"),
   /** The register the employees write in: gulf | egyptian | levant | msa. */
   dialect:        varchar("dialect", { length: 12 }),
@@ -43,6 +43,10 @@ export const businessProfileTable = pgTable("business_profile", {
   followupLadder: jsonb("followup_ladder").$type<number[]>(),
   /** spoke = only those who wrote to us; all = everyone we reached. */
   followupScope:  varchar("followup_scope", { length: 8 }).notNull().default("spoke"),
+  /** rich = خالد adds a new angle each time; service = only a polite «need anything? we are at your service». */
+  followupStyle:  varchar("followup_style", { length: 10 }).notNull().default("rich"),
+  /** Most follow-ups drafted, and most sent, in one round. */
+  followupBatch:  integer("followup_batch").notNull().default(8),
   /** The whole team's off switch. */
   teamPaused:     boolean("team_paused").notNull().default(false),
   /** Where the catalogue comes from: floret | null. */

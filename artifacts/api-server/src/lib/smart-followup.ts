@@ -89,18 +89,65 @@ export const JEWELRY_ANGLE: string[] = [
   "المتابعة الأخيرة (بعد شهر) — ختام كريم: شكر، وأن المعرض في العين والواتساب موجودان متى احتاجت، بلا سؤال ولا ضغط.",
 ];
 
+/**
+ * «Service only» (the owner, 2026-10-21, for Floret): no new information, no
+ * piece, no link, no price, no endearment — only a polite «do you need
+ * anything? we are at your service», seven different ways, the way a person
+ * at the shop would write it. Each rung is a different moment, not a template.
+ */
+export const SERVICE_ANGLE: string[] = [
+  "المتابعة ١ — اطمئنان قصير بعد المحادثة: هل وصلها ما تحتاجه أو بقي عندها سؤال، وأننا في الخدمة.",
+  "المتابعة ٢ — سؤال لطيف واحد: هل تحب تساعدها في شيء معيّن، بلا ذكر أي قطعة لم تذكرها هي.",
+  "المتابعة ٣ — تذكير دافئ أن المحل في خدمتها متى ما احتاجت، في سطر.",
+  "المتابعة ٤ — إن كانت سألت عن شيء بعينه فاذكره بكلماتها هي واسأل إن كانت ما زالت تفكر فيه؛ وإلا فاسأل إن كان هناك ما يمكن مساعدتها فيه.",
+  "المتابعة ٥ — سطر قصير جداً: نحن هنا لأي استفسار، بلا سؤال مباشر.",
+  "المتابعة ٦ — اسألها بلطف إن كانت تفضّل أن نتواصل لاحقاً أو أن تكتب هي متى ما احتاجت.",
+  "المتابعة الأخيرة — ختام كريم: شكر على تواصلها، وأن الواتساب مفتوح لها دائماً، بلا سؤال ولا ضغط.",
+];
+
+/** How a person at the shop writes these, and what they never do. */
+export const SERVICE_VOICE = [
+  "═══ أسلوب المتابعة: خدمة فقط (تعليمات صاحب العمل) ═══",
+  "- اكتب كإنسان يعمل في المحل يكتب بيده الآن: سطر أو سطران، طبيعيان وعاديان، بلهجة الزبونة.",
+  "- كل ما تقوله: هل تحتاج أي شيء، هل عندها سؤال، ونحن في الخدمة. لا شيء غير ذلك.",
+  "- ممنوع منعاً باتاً: أي سعر أو رقم أو وزن أو عيار أو خصم أو عرض؛ أي رابط؛ أي قطعة أو معلومة لم تذكرها هي؛ أي وعد.",
+  "- ممنوع منعاً باتاً أي تحبّب: حبيبتي، حبيبي، صاحبتي، قلبي، عمري، روحي، حياتي، يا قمر، يا عسل، غناتي. الاحترام هو الدفء.",
+  "- لا تبدأ بـ«أتابع معك» ولا «للتذكير» ولا «هل وصلتك رسالتي». ولا تكرر جملة قيلت لها من قبل.",
+  "- إيموجي واحد على الأكثر، أو لا شيء.",
+  "أمثلة:",
+  "✓ «مساء الخير، إذا احتجتي أي شي أو عندك سؤال، إحنا موجودين 🌸»",
+  "✓ «هلا، حبيت أطمّن إذا كل شي واضح عندك، وإذا تحتاجين مساعدة بأي شي قوليلي»",
+  "✗ «هلا حبيبتي، الطقم سعره…» — تحبّب وسعر.",
+  "✗ «شوفي هذا الرابط فيه قطع جديدة…» — رابط ومعلومة من عندنا.",
+].join("\n");
+
+const ENDEARMENT = /حبيبت|حبيبي|حبيبة|صاحبت|صاحبتي|قلبي|عمري|روحي|حياتي|يا ?قمر|يا ?عسل|غناتي|يا ?بعد|عيوني|يا ?روح/;
+const MONEY = /سعر|أسعار|اسعار|درهم|د\.إ|aed|dhs|خصم|تخفيض|عرض|عروض|وزن|جرام|غرام|عيار|مصنعية|قيراط/i;
+
+/** What the service style must never carry. Pure, so it is tested. */
+export function serviceIssues(text: string): string[] {
+  const t = String(text ?? "");
+  const out: string[] = [];
+  if (ENDEARMENT.test(t)) out.push("فيها كلمة تحبّب");
+  if (MONEY.test(t)) out.push("فيها كلام عن سعر أو وزن أو عرض");
+  if (/[0-9٠-٩]/.test(t)) out.push("فيها رقم");
+  if (/https?:|www\.|\.(io|com|ae|net)\b/i.test(t)) out.push("فيها رابط");
+  if (t.split(/\n+/).filter((l) => l.trim()).length > 3 || t.length > 260) out.push("أطول من سطرين أو ثلاثة");
+  return out;
+}
+
 /** The angle for a rung on any ladder: the last angle is always the farewell. Pure. */
-export const angleFor = (rung: number, rungs: number, vertical?: string | null) => {
-  const set = vertical === "jewelry" ? JEWELRY_ANGLE : RUNG_ANGLE;
+export const angleFor = (rung: number, rungs: number, vertical?: string | null, style?: string | null) => {
+  const set = style === "service" ? SERVICE_ANGLE : vertical === "jewelry" ? JEWELRY_ANGLE : RUNG_ANGLE;
   return rung >= rungs - 1 ? set[set.length - 1]! : set[Math.min(rung, set.length - 2)]!;
 };
 
-export type Mode = "off" | "dry" | "live";
+export type Mode = "off" | "dry" | "approve" | "live";
 
 export async function modeOf(userId: number): Promise<Mode> {
   const [p] = await db.select({ m: businessProfileTable.smartFollowup }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
   const m = (p?.m ?? "dry") as Mode;
-  return m === "live" || m === "off" ? m : "dry";
+  return m === "live" || m === "off" || m === "approve" ? m : "dry";
 }
 
 type Turn = { fromMe: boolean; text: string; at: Date };
@@ -136,10 +183,10 @@ export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.
 }
 
 /** The account's ladder and scope. */
-async function ladderOf(userId: number): Promise<{ ladder: number[] | null; scope: "spoke" | "all"; vertical: string | null }> {
-  const [p] = await db.select({ l: businessProfileTable.followupLadder, s: businessProfileTable.followupScope, v: businessProfileTable.vertical }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
+async function ladderOf(userId: number): Promise<{ ladder: number[] | null; scope: "spoke" | "all"; vertical: string | null; style: string; batch: number }> {
+  const [p] = await db.select({ l: businessProfileTable.followupLadder, s: businessProfileTable.followupScope, v: businessProfileTable.vertical, st: businessProfileTable.followupStyle, b: businessProfileTable.followupBatch }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
   const l = Array.isArray(p?.l) ? p!.l.map(Number).filter((h) => h > 0).slice(0, 10) : null;
-  return { ladder: l?.length ? l : null, scope: p?.s === "all" ? "all" : "spoke", vertical: p?.v ?? null };
+  return { ladder: l?.length ? l : null, scope: p?.s === "all" ? "all" : "spoke", vertical: p?.v ?? null, style: p?.st ?? "rich", batch: Math.max(1, Math.min(20, Number(p?.b ?? MAX_PER_RUN))) };
 }
 
 async function thread(userId: number, phone: string, limit = 14): Promise<Turn[]> {
@@ -167,7 +214,8 @@ async function candidates(userId: number, scope: "spoke" | "all"): Promise<strin
 type Draft = { send: boolean; text: string | null; reason: string; retry?: boolean; photo?: { path: string; caption: string } | null };
 
 /** خالد writes the rung, or declines. */
-async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null): Promise<Draft> {
+async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null, style = "rich"): Promise<Draft> {
+  if (style === "service") return composeService(userId, phone, turns, rung, earlier, rungs);
   const angle = angleFor(rung, rungs, vertical);
   const [[me], [profile], card, company] = await Promise.all([
     db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
@@ -259,7 +307,48 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   return { send: true, text, reason: q.issues.length ? `أُرسلت مع ملاحظات: ${q.issues.map((i) => i.note).join("، ")}`.slice(0, 300) : "جاهزة", photo: shop?.photo && shop.piece && normalizeArabic(text).includes(normalizeArabic(shop.piece.name.split(" ").slice(0, 2).join(" "))) ? shop.photo : null };
 }
 
-async function record(userId: number, phone: string, rung: number, verdict: "send" | "hold" | "drop", reason: string, draft: string | null, executed: boolean, opsView: string) {
+/**
+ * خالد in the service style: a person at the shop asking if she needs
+ * anything. No knowledge, no catalogue, no link is handed to him — there is
+ * nothing to add, so nothing can be invented — and the code check refuses
+ * an endearment, a number, a price word or a link even if he writes one.
+ */
+async function composeService(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs: number): Promise<Draft> {
+  const angle = angleFor(rung, rungs, null, "service");
+  const [[me], [profile]] = await Promise.all([
+    db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
+    db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
+  ]);
+  const customerDialect = dialectOf(turns.filter((t) => !t.fromMe).map((t) => t.text).join(" "), profile?.dialect ?? null);
+  const system = [
+    `اسمك ${me?.name ?? "خالد"}، تعمل في ${profile?.name ?? "المحل"}. تكتب رسالة متابعة واحدة لزبونة سكتت بعد محادثتها معنا.`,
+    SERVICE_VOICE,
+    `═══ زاوية هذه الرسالة ═══\n${angle}`,
+    dialectLine(customerDialect),
+    profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
+    earlier.length ? `═══ ما قلناه لها في المتابعات السابقة — اكتب شيئاً مختلفاً ═══\n${earlier.map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
+    "أعد نص الرسالة وحده، بلا علامات اقتباس ولا شرح.",
+  ].filter(Boolean).join("\n\n");
+  const transcript = turns.slice(-8).map((t) => `${t.fromMe ? "نحن" : "الزبونة"}: ${t.text.slice(0, 300)}`).join("\n");
+  const clean = (x?: string | null) => (x ?? "").trim().replace(/^["«“]+|["»”]+$/g, "").trim();
+  const out = await complete([{ role: "system", content: system }, { role: "user", content: `آخر المحادثة:\n${transcript}\n\nاكتب ${angle.split(" — ")[0]}.` }], 30_000);
+  let text = clean(out?.text);
+  if (!text) return { send: false, text: null, reason: "تعذّر الوصول للنموذج", retry: true };
+  let issues = [...serviceIssues(text), ...followupIssues(text, { last: rung >= rungs - 1, previous: [...turns].reverse().find((t) => t.fromMe)?.text ?? null })];
+  if (issues.length) {
+    const fixed = await complete([
+      { role: "system", content: "أنت محرر رسائل متابعة لمحل. تعيد الرسالة مصحّحة وحدها، سطراً أو سطرين، بلهجتها. لا سعر ولا رقم ولا رابط ولا تحبّب ولا معلومة جديدة: فقط هل تحتاج شيئاً ونحن في الخدمة." },
+      { role: "user", content: `الرسالة:\n${text}\n\nأصلح: ${issues.join("؛ ")}.` },
+    ], 20_000).catch(() => null);
+    const cand = clean(fixed?.text);
+    if (cand) { const again = [...serviceIssues(cand), ...followupIssues(cand, { last: rung >= rungs - 1, previous: null })]; if (again.length < issues.length) { text = cand; issues = again; } }
+  }
+  if (issues.length) return { send: false, text, reason: `أُوقفت: ${issues[0]}`, retry: true };
+  if (earlier.find((e) => overlap(e, text) > 0.6)) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة", retry: true };
+  return { send: true, text, reason: "جاهزة — أسلوب الخدمة فقط", photo: null };
+}
+
+async function record(userId: number, phone: string, rung: number, verdict: "send" | "hold" | "drop" | "pending", reason: string, draft: string | null, executed: boolean, opsView: string) {
   receipt({ userId, node: FOLLOWUP_ROLE, graph: "whatsapp", action: executed ? "followup.sent" : verdict === "send" ? "followup.draft" : "followup.decline",
     status: executed || verdict === "send" ? "ok" : "blocked", subject: phone, evidence: { rung: rung + 1, ops: opsView }, why: reason.slice(0, 600) });
   await db.insert(followupDeliberationsTable).values({
@@ -288,7 +377,9 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   if (!isWithinSendingHours(new Date(now))) return result;
   if (mode === "live" && !getStatus(userId).connected) return result;
 
-  const { ladder, scope, vertical } = await ladderOf(userId);
+  const { ladder, scope, vertical, style, batch } = await ladderOf(userId);
+  // Approved drafts go first, through the firewall like any message.
+  if (mode === "approve" || mode === "live") await sendApproved(userId, batch).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "إرسال المعتمد تعذّر"));
   const phones = await candidates(userId, scope);
   if (!phones.length) return result;
 
@@ -301,20 +392,22 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   const skip = new Set([...outRows, ...coldRows, ...filed].map((r) => r.phone));
 
   // The rungs already taken, per phone.
+  // A draft waiting for the owner (or approved and not yet sent) holds its person: no second draft beside it.
+  const waiting = new Set((await db.execute<{ phone: string }>(sql`SELECT DISTINCT phone FROM followup_deliberations WHERE user_id = ${userId} AND verdict IN ('pending', 'approved')`)).rows.map((r) => r.phone));
   const takenRows = await db.select({ phone: followupDeliberationsTable.phone, at: followupDeliberationsTable.createdAt, draft: followupDeliberationsTable.draft, verdict: followupDeliberationsTable.verdict })
     .from(followupDeliberationsTable)
     .where(and(eq(followupDeliberationsTable.userId, userId), inArray(followupDeliberationsTable.phone, phones), sql`${followupDeliberationsTable.step} >= ${STEP_BASE}`, gt(followupDeliberationsTable.createdAt, new Date(now - 60 * 86_400_000))));
 
   let ops: { ok: boolean; view: string } | null = null;
-  let left = mode === "live" ? await getDailyRemaining(userId).catch(() => 0) : Infinity;
+  let left = mode === "live" ? Math.min(batch, await getDailyRemaining(userId).catch(() => 0)) : Infinity;
   if (mode === "live") {
     const planOk = await assertCanSend(userId).then(() => true).catch(() => false);
     if (!planOk) return result;
   }
 
   for (const phone of phones) {
-    if (result.drafted >= MAX_PER_RUN) break;
-    if (skip.has(phone)) continue;
+    if (result.drafted >= batch) break;
+    if (skip.has(phone) || waiting.has(phone)) continue;
     const turns = await thread(userId, phone);
     // A thread whose every word from them is a machine's is not a conversation.
     const fromThem = turns.filter((t) => !t.fromMe);
@@ -337,8 +430,11 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
     const recent = mine.find((r) => r.verdict === "send" && now - new Date(r.at).getTime() < 2 * H);
     if (recent) continue;
     const lastIn = [...turns].reverse().find((t) => !t.fromMe)?.at.getTime() ?? 0;
+    // ريم reads the conversation first when it moved since she last did; her label can take the person out.
+    const reading = await freshReview(userId, phone, vertical, turns);
+    if (reading && OUT_LABELS.includes(reading.label)) { await record(userId, phone, due.rung, "drop", `ريم صنّفتها «${reading.label}» — لا متابعة`, null, false, "ريم"); result.declined++; continue; }
     const earlier = mine.filter((r) => new Date(r.at).getTime() > lastIn && r.draft).map((r) => r.draft!);
-    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length, vertical));
+    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length, vertical, style));
     result.drafted++;
     if (!d.send || !d.text) {
       // A model that did not answer, or refused, costs this round only: «hold»
@@ -350,6 +446,10 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
     }
     if (mode === "dry") {
       await record(userId, phone, due.rung, "send", `${d.reason} (وضع التجربة — لم تُرسل)`, d.text, false, ops.view);
+      continue;
+    }
+    if (mode === "approve") {
+      await record(userId, phone, due.rung, "pending", `${d.reason} — بانتظار موافقتك`, d.text, false, ops.view);
       continue;
     }
     try {
@@ -367,6 +467,88 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   }
   if (result.drafted) logger.info({ userId, ...result }, "smart follow-up round done");
   return result;
+}
+
+// ── ريم first ────────────────────────────────────────────────────
+const OUT_LABELS = ["machine", "not_customer", "refused"];
+async function freshReview(userId: number, phone: string, vertical: string | null, turns: Turn[]): Promise<{ label: string } | null> {
+  const [r] = (await db.execute<{ label: string; reviewed_at: Date }>(sql`SELECT label, reviewed_at FROM conversation_reviews WHERE user_id = ${userId} AND phone = ${phone}`)).rows;
+  const lastAt = Math.max(0, ...turns.map((t) => t.at.getTime()));
+  if (r && new Date(r.reviewed_at).getTime() >= lastAt) return r;
+  const { reviewAndSave } = await import("./graph/review");
+  const fresh = await reviewAndSave(userId, phone, vertical).catch(() => null);
+  return fresh ?? r ?? null;
+}
+
+// ── The owner's approval ──────────────────────────────────────────
+// approve: a draft waits as «pending». The owner approves it (as written or
+// edited), and it becomes «approved»; the next round — or one started at
+// once — sends the approved ones, the batch at most, each through the
+// firewall's gate, so the pace is the number's and not the owner's click.
+// A customer who wrote after the draft was made gets no follow-up: the
+// conversation moved, and the draft is dropped.
+
+export async function pendingDrafts(userId: number) {
+  return (await db.execute<any>(sql`SELECT d.id, d.phone, d.step - ${STEP_BASE} + 1 AS rung, d.verdict, d.reason, d.draft, d.created_at,
+      r.label, r.score, r.summary, r.piece,
+      (SELECT text FROM wa_thread_messages t WHERE t.user_id = d.user_id AND t.phone = d.phone AND NOT t.from_me AND coalesce(t.text,'') <> '' ORDER BY created_at DESC LIMIT 1) AS last_customer,
+      (SELECT name FROM wa_conversations c WHERE c.user_id = d.user_id AND c.phone = d.phone LIMIT 1) AS name
+    FROM followup_deliberations d LEFT JOIN conversation_reviews r ON r.user_id = d.user_id AND r.phone = d.phone
+    WHERE d.user_id = ${userId} AND d.verdict IN ('pending', 'approved') ORDER BY d.created_at`)).rows;
+}
+
+export async function approveDraft(userId: number, id: number, text?: string | null): Promise<{ ok: boolean; why?: string }> {
+  const t = text?.trim();
+  const r = await db.execute(sql`UPDATE followup_deliberations SET verdict = 'approved', draft = coalesce(${t || null}, draft),
+      reason = 'اعتمدها صاحب العمل' || CASE WHEN ${!!t} THEN ' بعد تعديلها' ELSE '' END
+    WHERE id = ${id} AND user_id = ${userId} AND verdict = 'pending' RETURNING id`);
+  return r.rows.length ? { ok: true } : { ok: false, why: "المسودة لم تعد بانتظار الموافقة" };
+}
+
+export async function rejectDraft(userId: number, id: number): Promise<{ ok: boolean }> {
+  const r = await db.execute(sql`UPDATE followup_deliberations SET verdict = 'drop', reason = 'رفضها صاحب العمل'
+    WHERE id = ${id} AND user_id = ${userId} AND verdict IN ('pending', 'approved') RETURNING id`);
+  return { ok: r.rows.length > 0 };
+}
+
+/** The approved drafts, oldest first, the batch at most, each through the gate. */
+export async function sendApproved(userId: number, batch: number): Promise<{ sent: number; dropped: number; held: number }> {
+  const out = { sent: 0, dropped: 0, held: 0 };
+  if (!isWithinSendingHours() || !getStatus(userId).connected) return out;
+  const rows = (await db.execute<{ id: number; phone: string; draft: string; created_at: Date }>(sql`SELECT id, phone, draft, created_at FROM followup_deliberations
+    WHERE user_id = ${userId} AND verdict = 'approved' AND coalesce(draft, '') <> '' ORDER BY created_at LIMIT ${batch}`)).rows;
+  for (const r of rows) {
+    // She wrote after the draft: the conversation moved on, the draft is stale.
+    const [moved] = (await db.execute(sql`SELECT 1 FROM wa_thread_messages WHERE user_id = ${userId} AND phone = ${r.phone} AND NOT from_me AND created_at > ${r.created_at} LIMIT 1`)).rows;
+    if (moved) { await db.execute(sql`UPDATE followup_deliberations SET verdict = 'drop', reason = 'ردّت الزبونة بعد كتابتها — لم تُرسل' WHERE id = ${r.id}`); out.dropped++; continue; }
+    try {
+      await sendMessage(userId, r.phone, r.draft, undefined, undefined, undefined, undefined, { kind: "followup" });
+      await db.execute(sql`UPDATE followup_deliberations SET verdict = 'send', executed = true WHERE id = ${r.id}`);
+      receipt({ userId, node: FOLLOWUP_ROLE, graph: "whatsapp", action: "followup.sent", status: "ok", subject: r.phone, why: "متابعة اعتمدها صاحب العمل" });
+      out.sent++;
+    } catch (err: any) {
+      const m = String(err?.message ?? err);
+      // The person said no for good: the draft goes. The number's no: everything waits for the next round.
+      if (m.startsWith("FIREWALL-REFUSED:")) { await db.execute(sql`UPDATE followup_deliberations SET verdict = 'drop', reason = ${m.slice(0, 200)} WHERE id = ${r.id}`); out.dropped++; continue; }
+      out.held++;
+      logger.info({ userId, phone: r.phone, why: m.slice(0, 160) }, "متابعة معتمدة تنتظر الجولة القادمة");
+      if (m.startsWith("FIREWALL:")) break;
+    }
+  }
+  if (out.sent || out.dropped) logger.info({ userId, ...out }, "أُرسلت المتابعات المعتمدة");
+  return out;
+}
+
+/** Sending what the owner just approved, without holding the request open. */
+const sendingNow = new Set<number>();
+export function sendApprovedSoon(userId: number) {
+  if (sendingNow.has(userId)) return;
+  sendingNow.add(userId);
+  void (async () => {
+    try { const { batch } = await ladderOf(userId); await sendApproved(userId, batch); }
+    catch (err: any) { logger.warn({ userId, err: String(err?.message ?? err) }, "إرسال المعتمد تعذّر"); }
+    finally { sendingNow.delete(userId); }
+  })();
 }
 
 let timer: NodeJS.Timeout | null = null;

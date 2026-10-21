@@ -33,7 +33,7 @@ const NAV = [
   { href: "/meetings",      label: "اجتماعات الفريق",    icon: Users2, badge: "جديد" },
   { href: "/browser",       label: "مكتب التصفّح",       icon: Globe },
   { href: "/employees",     label: "فريق البوتات",       icon: Users2 },
-  { href: "/follow-ups",    label: "بوت المتابعة",       icon: Clock },
+  { href: "/follow-ups",    label: "المتابعة وإعادة الاستهداف", icon: Clock, badge: "جديد" },
   { href: "/email-auto",    label: "تشغيل البريد",       icon: Mail, badge: "جديد" },
   { href: "/email",         label: "التسويق بالبريد",    icon: Mail },
   { href: "/instagram",     label: "إنستجرام",           icon: Instagram },

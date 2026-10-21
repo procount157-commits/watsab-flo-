@@ -13,7 +13,8 @@ import { requireAuth } from "../lib/auth";
 import { enrolLead, enrolGroup, cancelPendingFollowUps } from "../lib/follow-up-engine";
 import { classify, classifyIntent, INTENT_LABELS_AR, type Intent } from "../lib/intent";
 import { logger } from "../lib/logger";
-import { modeOf, runSmartFollowUps, STEP_BASE } from "../lib/smart-followup";
+import { modeOf, runSmartFollowUps, STEP_BASE, pendingDrafts, approveDraft, rejectDraft, sendApprovedSoon } from "../lib/smart-followup";
+import { reviewAll } from "../lib/graph/review";
 
 const router = Router();
 router.use(requireAuth);
@@ -298,16 +299,68 @@ router.get("/smart", async (req, res) => {
   const userId = req.session.userId!;
   const recent = await db.execute(sql`SELECT id, phone, step - ${STEP_BASE} + 1 AS rung, verdict, reason, draft, executed, created_at
     FROM followup_deliberations WHERE user_id = ${userId} AND step >= ${STEP_BASE} ORDER BY created_at DESC LIMIT 40`);
-  res.json({ mode: await modeOf(userId), recent: recent.rows });
+  const [p] = (await db.execute<any>(sql`SELECT followup_style, followup_batch, followup_ladder, followup_scope FROM business_profile WHERE user_id = ${userId}`)).rows;
+  const [rv] = (await db.execute<any>(sql`SELECT count(*)::int AS reviewed, max(reviewed_at) AS last,
+      (SELECT count(DISTINCT phone)::int FROM wa_thread_messages WHERE user_id = ${userId}) AS threads FROM conversation_reviews WHERE user_id = ${userId}`)).rows;
+  res.json({
+    mode: await modeOf(userId), recent: recent.rows, pending: await pendingDrafts(userId),
+    settings: { style: p?.followup_style ?? "rich", batch: Number(p?.followup_batch ?? 8), ladder: p?.followup_ladder ?? null, scope: p?.followup_scope ?? "spoke" },
+    review: { reviewed: Number(rv?.reviewed ?? 0), threads: Number(rv?.threads ?? 0), last: rv?.last ?? null, running: reviewing.has(userId) },
+  });
 });
 
 router.patch("/smart", async (req, res) => {
   const userId = req.session.userId!;
-  const mode = String((req.body as any)?.mode ?? "");
-  if (!["off", "dry", "live"].includes(mode)) return res.status(400).json({ error: "الوضع: off أو dry أو live" });
-  await db.execute(sql`UPDATE business_profile SET smart_followup = ${mode} WHERE user_id = ${userId}`);
-  logger.info({ userId, mode }, "smart follow-up mode changed");
-  res.json({ mode });
+  const b = (req.body ?? {}) as any;
+  if (b.mode !== undefined) {
+    const mode = String(b.mode);
+    if (!["off", "dry", "approve", "live"].includes(mode)) return res.status(400).json({ error: "الوضع: off أو dry أو approve أو live" });
+    await db.execute(sql`UPDATE business_profile SET smart_followup = ${mode} WHERE user_id = ${userId}`);
+    logger.info({ userId, mode }, "smart follow-up mode changed");
+  }
+  if (b.style !== undefined) {
+    if (!["rich", "service"].includes(String(b.style))) return res.status(400).json({ error: "الأسلوب: rich أو service" });
+    await db.execute(sql`UPDATE business_profile SET followup_style = ${String(b.style)} WHERE user_id = ${userId}`);
+  }
+  if (b.batch !== undefined) {
+    const n = Math.max(1, Math.min(20, Math.floor(Number(b.batch) || 0)));
+    await db.execute(sql`UPDATE business_profile SET followup_batch = ${n} WHERE user_id = ${userId}`);
+  }
+  if (b.ladder !== undefined) {
+    // Seven rungs at most, and never more than three days between two of them.
+    const l = (Array.isArray(b.ladder) ? b.ladder : []).map(Number).filter((h: number) => h > 0).slice(0, 7);
+    if (!l.length || l.some((h: number) => h > 72)) return res.status(400).json({ error: "حتى ٧ متابعات، والفاصل بين اثنتين ٧٢ ساعة على الأكثر" });
+    await db.execute(sql`UPDATE business_profile SET followup_ladder = ${JSON.stringify(l)}::jsonb WHERE user_id = ${userId}`);
+  }
+  res.json({ mode: await modeOf(userId) });
 });
 
 router.post("/smart/run", async (req, res) => res.json(await runSmartFollowUps(req.session.userId!)));
+
+// The owner's approval: one at a time (as written or edited), all at once, or no.
+router.post("/smart/:id/approve", async (req, res) => {
+  const userId = req.session.userId!;
+  const r = await approveDraft(userId, Number(req.params.id), (req.body as any)?.text ?? null);
+  if (!r.ok) return res.status(409).json({ error: r.why });
+  sendApprovedSoon(userId);
+  res.json({ ok: true });
+});
+router.post("/smart/:id/reject", async (req, res) => res.json(await rejectDraft(req.session.userId!, Number(req.params.id))));
+router.post("/smart/approve-all", async (req, res) => {
+  const userId = req.session.userId!;
+  const ids: number[] = (Array.isArray((req.body as any)?.ids) ? (req.body as any).ids : []).map(Number).filter(Boolean).slice(0, 20);
+  let n = 0;
+  for (const id of ids) if ((await approveDraft(userId, id)).ok) n++;
+  if (n) sendApprovedSoon(userId);
+  res.json({ approved: n });
+});
+
+// ريم reads every conversation that moved since she last read it, in the background.
+const reviewing = new Set<number>();
+router.post("/smart/review-all", async (req, res) => {
+  const userId = req.session.userId!;
+  if (reviewing.has(userId)) return res.json({ started: false, running: true });
+  reviewing.add(userId);
+  void reviewAll(userId, { onlyStale: true }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "قراءة ريم تعذّرت")).finally(() => reviewing.delete(userId));
+  res.json({ started: true });
+});

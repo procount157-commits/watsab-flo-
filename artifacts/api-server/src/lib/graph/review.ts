@@ -80,6 +80,22 @@ export async function reviewOne(userId: number, phone: string, vertical: string 
   return { ...parsed, dialect };
 }
 
+/**
+ * One conversation read and filed, now — for the follow-up, which asks ريم
+ * before it writes to anyone whose conversation moved since she last read it.
+ */
+export async function reviewAndSave(userId: number, phone: string, vertical: string | null): Promise<Review | null> {
+  const [ph] = (await db.execute<{ n: number; last: Date }>(sql`SELECT count(*)::int AS n, max(created_at) AS last FROM wa_thread_messages WHERE user_id = ${userId} AND phone = ${phone}`)).rows;
+  if (!ph || !Number(ph.n)) return null;
+  const r = await reviewOne(userId, phone, vertical);
+  if (!r) return null;
+  await db.execute(sql`INSERT INTO conversation_reviews (user_id, phone, label, score, piece, summary, next_action, dialect, msg_count, last_at, reviewed_at)
+    VALUES (${userId}, ${phone}, ${r.label}, ${r.score}, ${r.piece}, ${r.summary}, ${r.nextAction}, ${r.dialect}, ${Number(ph.n)}, ${ph.last}, now())
+    ON CONFLICT (user_id, phone) DO UPDATE SET label = EXCLUDED.label, score = EXCLUDED.score, piece = EXCLUDED.piece, summary = EXCLUDED.summary, next_action = EXCLUDED.next_action, dialect = EXCLUDED.dialect, msg_count = EXCLUDED.msg_count, last_at = EXCLUDED.last_at, reviewed_at = now()`);
+  receipt({ userId, node: REVIEW_ROLE, action: "review.conversation", subject: phone, evidence: { label: r.label, score: r.score, piece: r.piece }, why: r.summary });
+  return r;
+}
+
 export async function reviewAll(userId: number, opts: { limit?: number; onlyStale?: boolean } = {}): Promise<{ reviewed: number; byLabel: Record<string, number>; failed: number }> {
   const [p] = (await db.execute<{ vertical: string | null }>(sql`SELECT vertical FROM business_profile WHERE user_id = ${userId}`)).rows;
   const phones = (await db.execute<{ phone: string; n: number; last: Date }>(sql`

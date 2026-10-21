@@ -38,36 +38,94 @@ const INTENTS: Record<string, string> = {
 
 // ── The follow-up خالد writes ─────────────────────────────────────
 type SmartRow = { id: number; phone: string; rung: number; verdict: string; reason: string | null; draft: string | null; executed: boolean; created_at: string };
-const MODES: { val: "off" | "dry" | "live"; label: string; desc: string; cls: string }[] = [
-  { val: "off",  label: "متوقفة", desc: "لا يكتب ولا يرسل",                         cls: "bg-muted text-muted-foreground border-border" },
-  { val: "dry",  label: "تجربة",  desc: "يكتب كل متابعة ويسجّلها لك — لا يرسل شيئاً", cls: "bg-blue-500/15 text-blue-400 border-blue-500/30" },
-  { val: "live", label: "تعمل",   desc: "يرسل المتابعات فعلاً للعملاء",               cls: "bg-green-500/15 text-green-400 border-green-500/30" },
+type Pending = SmartRow & { label: string | null; score: number | null; summary: string | null; piece: string | null; last_customer: string | null; name: string | null };
+type Mode = "off" | "dry" | "approve" | "live";
+const MODES: { val: Mode; label: string; desc: string; cls: string }[] = [
+  { val: "off",     label: "متوقفة",   desc: "لا يكتب ولا يرسل",                          cls: "bg-muted text-muted-foreground border-border" },
+  { val: "dry",     label: "تجربة",    desc: "يكتب ويسجّل فقط — لا يرسل شيئاً",            cls: "bg-blue-500/15 text-blue-400 border-blue-500/30" },
+  { val: "approve", label: "بموافقتي", desc: "يكتب، وأنت تعتمد أو تعدّل أو ترفض قبل الإرسال", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
+  { val: "live",    label: "تعمل",     desc: "يرسل وحده دون مراجعة",                        cls: "bg-green-500/15 text-green-400 border-green-500/30" },
 ];
+const LABEL_AR: Record<string, string> = {
+  hot: "مهتمة جداً", order: "تريد أن تطلب", price: "سألت عن السعر", photo: "أرسلت صورة", question: "استفسار",
+  cold: "فاترة", refused: "رفضت", machine: "رد آلي", not_customer: "ليست عميلة", silent: "لم ترد",
+};
+const hoursText = (h: number) => (h < 24 ? `${h} ساعات` : h === 24 ? "يوم" : h === 48 ? "يومين" : `${Math.round(h / 24)} أيام`);
+const when = (d: string) => new Date(d).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" });
+
+function PendingCard({ r, onDone }: { r: Pending; onDone: () => void }) {
+  const [text, setText] = useState(r.draft ?? "");
+  const edited = text.trim() !== (r.draft ?? "").trim();
+  const approve = useMutation({
+    mutationFn: () => api(`/api/follow-ups/smart/${r.id}/approve`, { method: "POST", body: JSON.stringify({ text: edited ? text : null }) }),
+    onSuccess: () => { toast.success("اعتُمدت — تخرج من الحاجز بدورها"); onDone(); }, onError: (e: any) => toast.error(e.message),
+  });
+  const reject = useMutation({
+    mutationFn: () => api(`/api/follow-ups/smart/${r.id}/reject`, { method: "POST" }),
+    onSuccess: () => { toast.success("رُفضت"); onDone(); }, onError: (e: any) => toast.error(e.message),
+  });
+  return (
+    <div className="py-3 space-y-2">
+      <div className="flex items-center gap-2 text-xs flex-wrap">
+        <span className="font-medium text-foreground">{r.name || "زبونة"}</span>
+        <span dir="ltr" className="text-muted-foreground">+{r.phone.split(":")[0]}</span>
+        <span className="text-muted-foreground">· المتابعة {r.rung} من ٧</span>
+        {r.label && <span className="px-1.5 py-0.5 rounded border border-border bg-muted/40">ريم: {LABEL_AR[r.label] ?? r.label}{r.score != null ? ` · ${r.score}/100` : ""}</span>}
+        {r.verdict === "approved" && <span className="px-1.5 py-0.5 rounded border bg-green-500/15 text-green-400 border-green-500/20">معتمدة — تنتظر دورها</span>}
+        <span className="text-muted-foreground mr-auto">{when(r.created_at)}</span>
+      </div>
+      {r.summary && <p className="text-xs text-muted-foreground">قراءة ريم: {r.summary}</p>}
+      {r.last_customer && <p className="text-xs text-muted-foreground">آخر ما كتبته: «{r.last_customer.slice(0, 160)}»</p>}
+      {r.verdict === "pending" ? (
+        <>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className={cn(inputCls, "leading-relaxed")} />
+          <div className="flex gap-2">
+            <button onClick={() => approve.mutate()} disabled={approve.isPending || !text.trim()}
+              className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs disabled:opacity-50">{edited ? "اعتمد بعد التعديل" : "اعتمد"}</button>
+            <button onClick={() => reject.mutate()} disabled={reject.isPending}
+              className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-red-400">ارفض</button>
+          </div>
+        </>
+      ) : <p className="whitespace-pre-wrap text-sm bg-muted/30 rounded-md px-2.5 py-1.5">{r.draft}</p>}
+    </div>
+  );
+}
 
 function SmartFollowUps() {
   const qc = useQueryClient();
-  const { data } = useQuery<{ mode: "off" | "dry" | "live"; recent: SmartRow[] }>({
-    queryKey: ["fu-smart"], queryFn: () => api("/api/follow-ups/smart"), refetchInterval: 60_000,
+  const refresh = () => qc.invalidateQueries({ queryKey: ["fu-smart"] });
+  const { data } = useQuery<{ mode: Mode; recent: SmartRow[]; pending: Pending[]; settings: { style: string; batch: number; ladder: number[] | null }; review: { reviewed: number; threads: number; last: string | null; running: boolean } }>({
+    queryKey: ["fu-smart"], queryFn: () => api("/api/follow-ups/smart"), refetchInterval: 30_000,
   });
-  const setMode = useMutation({
-    mutationFn: (mode: string) => api("/api/follow-ups/smart", { method: "PATCH", body: JSON.stringify({ mode }) }),
-    onSuccess: (d: any) => { qc.invalidateQueries({ queryKey: ["fu-smart"] }); toast.success(d.mode === "live" ? "المتابعة تعمل الآن وترسل" : d.mode === "dry" ? "وضع التجربة: يكتب ولا يرسل" : "أُوقفت المتابعة"); },
-    onError: (e: any) => toast.error(e.message),
+  const patch = useMutation({
+    mutationFn: (b: any) => api("/api/follow-ups/smart", { method: "PATCH", body: JSON.stringify(b) }),
+    onSuccess: () => { refresh(); toast.success("حُفظ"); }, onError: (e: any) => toast.error(e.message),
   });
   const run = useMutation({
     mutationFn: () => api("/api/follow-ups/smart/run", { method: "POST" }),
-    onSuccess: (d: any) => { qc.invalidateQueries({ queryKey: ["fu-smart"] }); toast.success(d.drafted ? `كتب ${d.drafted} متابعة${d.sent ? ` وأرسل ${d.sent}` : ""}` : "لا أحد مستحق للمتابعة الآن"); },
+    onSuccess: (d: any) => { refresh(); toast.success(d.drafted ? `كتب ${d.drafted} متابعة${d.sent ? ` وأرسل ${d.sent}` : ""}` : "لا أحد مستحق للمتابعة الآن"); },
     onError: (e: any) => toast.error(e.message),
   });
+  const reviewAll = useMutation({
+    mutationFn: () => api("/api/follow-ups/smart/review-all", { method: "POST" }),
+    onSuccess: (d: any) => { refresh(); toast.success(d.started ? "ريم تقرأ المحادثات الآن" : "ريم تقرأ بالفعل"); }, onError: (e: any) => toast.error(e.message),
+  });
+  const pendingOnly = (data?.pending ?? []).filter((p) => p.verdict === "pending");
+  const approveAll = useMutation({
+    mutationFn: () => api("/api/follow-ups/smart/approve-all", { method: "POST", body: JSON.stringify({ ids: pendingOnly.slice(0, 20).map((p) => p.id) }) }),
+    onSuccess: (d: any) => { refresh(); toast.success(`اعتُمدت ${d.approved}`); }, onError: (e: any) => toast.error(e.message),
+  });
   const mode = data?.mode ?? "dry";
+  const st = data?.settings;
+  const ladder = st?.ladder ?? [];
   return (
     <div className={cn(card, "space-y-4")}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <p className="font-semibold">🧠 المتابعة الذكية — يكتبها خالد لكل عميل</p>
+          <p className="font-semibold">🧠 المتابعة وإعادة الاستهداف — يكتبها خالد لكل عميل</p>
           <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-2xl">
-            يتابع فقط من تكلّم معنا ثم سكت — لا يلاحق من وصلته حملة ولم يرد. كل رسالة مكتوبة له هو من محادثته وما أرسلناه له،
-            بزاوية جديدة في كل مرة: بعد يوم، ٣ أيام، أسبوع، أسبوعين (وأسرع للعميل المهتم)، ثم يتوقف. أي رد منه يعيد العدّ.
+            يتابع من تكلّم معنا ثم سكت. ريم تقرأ المحادثة وتصنّفها قبل كل متابعة، ومن صنّفته رداً آلياً أو رافضاً أو ليس عميلاً لا يُتابَع.
+            كل رسالة تخرج من الحاجز التلقائي بسرعته وحدوده، وأي رد من العميل يعيد العدّ.
           </p>
         </div>
         <button onClick={() => run.mutate()} disabled={run.isPending || mode === "off"}
@@ -75,35 +133,91 @@ function SmartFollowUps() {
           {run.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} جولة الآن
         </button>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {MODES.map((m) => (
-          <button key={m.val} onClick={() => setMode.mutate(m.val)} disabled={setMode.isPending}
+          <button key={m.val} onClick={() => patch.mutate({ mode: m.val })} disabled={patch.isPending}
             className={cn("rounded-lg border px-3 py-2 text-right transition-colors", mode === m.val ? m.cls + " font-semibold" : "border-border text-muted-foreground hover:border-primary/30")}>
             <span className="block text-sm">{m.label}</span>
             <span className="block text-[11px] opacity-80 mt-0.5">{m.desc}</span>
           </button>
         ))}
       </div>
-      {(data?.recent?.length ?? 0) > 0 ? (
-        <div className="divide-y divide-card-border max-h-96 overflow-y-auto">
-          {data!.recent.map((r) => (
-            <div key={r.id} className="py-2.5 text-sm space-y-1">
-              <div className="flex items-center gap-2 text-xs">
-                <span dir="ltr" className="text-muted-foreground">+{r.phone}</span>
-                <span className="text-muted-foreground">· المتابعة {r.rung}</span>
-                <span className={cn("px-1.5 py-0.5 rounded border",
-                  r.executed ? "bg-green-500/15 text-green-400 border-green-500/20"
-                  : r.verdict === "send" ? "bg-blue-500/15 text-blue-400 border-blue-500/20"
-                  : "bg-muted text-muted-foreground border-border")}>
-                  {r.executed ? "أُرسلت" : r.verdict === "send" ? "مسودة" : "لم تُرسل"}
-                </span>
-                <span className="text-muted-foreground mr-auto">{new Date(r.created_at).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" })}</span>
-              </div>
-              {r.draft && <p className="whitespace-pre-wrap text-foreground/90 bg-muted/30 rounded-md px-2.5 py-1.5">{r.draft}</p>}
-              {r.reason && <p className="text-xs text-muted-foreground">{r.reason}</p>}
-            </div>
+
+      <div className="grid md:grid-cols-3 gap-3 text-xs">
+        <div className="rounded-lg border border-border p-3 space-y-2">
+          <p className="font-medium">الأسلوب</p>
+          {[["service", "خدمة فقط", "هل تحتاجين شيئاً؟ نحن في الخدمة — بلا سعر ولا رابط ولا تحبّب ولا معلومة من عنده"], ["rich", "زاوية جديدة", "يضيف معلومة أو قطعة أو رابطاً من المعرفة في كل مرة"]].map(([v, l, d]) => (
+            <label key={v} className="flex items-start gap-2 cursor-pointer">
+              <input type="radio" checked={st?.style === v} onChange={() => patch.mutate({ style: v })} className="mt-0.5" />
+              <span><b>{l}</b><span className="block text-muted-foreground">{d}</span></span>
+            </label>
           ))}
         </div>
+        <div className="rounded-lg border border-border p-3 space-y-2">
+          <p className="font-medium">المواعيد — {ladder.length || "؟"} متابعات</p>
+          <p className="text-muted-foreground leading-relaxed">{ladder.length ? ladder.map((h, i) => `${i + 1}: بعد ${hoursText(h)}`).join(" · ") : "الافتراضي"}</p>
+          <p className="text-muted-foreground">كل متابعة تُحسب من الرسالة التي قبلها، والفاصل لا يتجاوز ٣ أيام.</p>
+        </div>
+        <div className="rounded-lg border border-border p-3 space-y-2">
+          <p className="font-medium">الحد في الجولة</p>
+          <div className="flex items-center gap-2">
+            <input type="number" min={1} max={20} defaultValue={st?.batch ?? 8} key={st?.batch} onBlur={(e) => Number(e.target.value) !== st?.batch && patch.mutate({ batch: Number(e.target.value) })} className={cn(inputCls, "w-20")} />
+            <span className="text-muted-foreground">رسالة على الأكثر (حتى ٢٠)</span>
+          </div>
+          <p className="text-muted-foreground">جولة كل ٢٠ دقيقة في ساعات الإرسال.</p>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border p-3 flex items-center justify-between gap-3 flex-wrap text-xs">
+        <p className="text-muted-foreground">
+          <b className="text-foreground">ريم — تصنيف المحادثات:</b> صنّفت {data?.review.reviewed ?? 0} من {data?.review.threads ?? 0} محادثة
+          {data?.review.last ? ` · آخر قراءة ${when(data.review.last)}` : ""}. وتقرأ أي محادثة تحركت قبل أن يكتب خالد متابعتها.
+        </p>
+        <button onClick={() => reviewAll.mutate()} disabled={reviewAll.isPending || data?.review.running}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border hover:border-primary/30 disabled:opacity-50">
+          {data?.review.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ListChecks className="w-3.5 h-3.5" />} {data?.review.running ? "ريم تقرأ…" : "ريم تقرأ كل المحادثات الآن"}
+        </button>
+      </div>
+
+      {(data?.pending?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="font-semibold text-sm">بانتظار موافقتك ({pendingOnly.length})</p>
+            {pendingOnly.length > 0 && (
+              <button onClick={() => confirm(`اعتماد ${Math.min(20, pendingOnly.length)} متابعة كما كُتبت؟`) && approveAll.mutate()} disabled={approveAll.isPending}
+                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs disabled:opacity-50">اعتمد الكل (حتى ٢٠)</button>
+            )}
+          </div>
+          <div className="divide-y divide-card-border max-h-[32rem] overflow-y-auto">
+            {data!.pending.map((r) => <PendingCard key={r.id} r={r} onDone={refresh} />)}
+          </div>
+        </div>
+      )}
+
+      {(data?.recent?.length ?? 0) > 0 ? (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-xs text-muted-foreground">السجل — آخر ٤٠ قراراً</summary>
+          <div className="divide-y divide-card-border max-h-96 overflow-y-auto mt-2">
+            {data!.recent.map((r) => (
+              <div key={r.id} className="py-2.5 text-sm space-y-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <span dir="ltr" className="text-muted-foreground">+{r.phone.split(":")[0]}</span>
+                  <span className="text-muted-foreground">· المتابعة {r.rung}</span>
+                  <span className={cn("px-1.5 py-0.5 rounded border",
+                    r.executed ? "bg-green-500/15 text-green-400 border-green-500/20"
+                    : r.verdict === "pending" ? "bg-amber-500/15 text-amber-400 border-amber-500/20"
+                    : r.verdict === "send" || r.verdict === "approved" ? "bg-blue-500/15 text-blue-400 border-blue-500/20"
+                    : "bg-muted text-muted-foreground border-border")}>
+                    {r.executed ? "أُرسلت" : r.verdict === "pending" ? "بانتظار موافقتك" : r.verdict === "approved" ? "معتمدة" : r.verdict === "dry" ? "تجربة قديمة" : r.verdict === "send" ? "مسودة" : "لم تُرسل"}
+                  </span>
+                  <span className="text-muted-foreground mr-auto">{when(r.created_at)}</span>
+                </div>
+                {r.draft && <p className="whitespace-pre-wrap text-foreground/90 bg-muted/30 rounded-md px-2.5 py-1.5">{r.draft}</p>}
+                {r.reason && <p className="text-xs text-muted-foreground">{r.reason}</p>}
+              </div>
+            ))}
+          </div>
+        </details>
       ) : (
         <p className="text-xs text-muted-foreground">لا مسودات بعد — يمر خالد على المحادثات كل ٢٠ دقيقة في ساعات الإرسال.</p>
       )}
