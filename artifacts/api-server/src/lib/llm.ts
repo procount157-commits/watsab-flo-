@@ -31,11 +31,21 @@ export type Provider =
 export interface LlmMessage { role: "system" | "user" | "assistant"; content: string }
 export interface LlmResult  { text: string; provider: Provider }
 
+/**
+ * Spare OpenRouter keys, tried in order when the first one is refused (401,
+ * 402, 429). OPENROUTER_API_KEYS="k1,k2,…". The owner added four on
+ * 2026-10-21; keys of one account share its free allowance, so the pool
+ * buys resilience, not more free requests.
+ */
+export function openrouterPool(): string[] {
+  return (process.env["OPENROUTER_API_KEYS"] ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+}
+
 const KEYS: Record<string, () => string> = {
   anthropic:   () => process.env["ANTHROPIC_API_KEY"]   ?? "",
   gemini:      () => process.env["GEMINI_API_KEY"]      ?? "",
   groq:        () => process.env["GROQ_API_KEY"]        ?? "",
-  openrouter:  () => process.env["OPENROUTER_API_KEY"]  ?? "",
+  openrouter:  () => process.env["OPENROUTER_API_KEY"] || openrouterPool()[0] || "",
   zhipu:       () => process.env["ZHIPU_API_KEY"]       ?? "",
   qwen:        () => process.env["QWEN_API_KEY"]        ?? "",
   deepseek:    () => process.env["DEEPSEEK_API_KEY"]    ?? "",
@@ -69,9 +79,9 @@ const OPENAI_COMPATIBLE: Record<string, { url: string; model: string }> = {
   // a clean English B2B email and readable Gulf Arabic; nemotron-3.5-lightning
   // is the faster second. inkling:free answers only «agentic harnesses» (403).
   openrouter:  { url: "https://openrouter.ai/api/v1/chat/completions",
-                 model: process.env["OPENROUTER_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b:free" },
+                 model: process.env["OPENROUTER_MODEL"] ?? "nvidia/nemotron-3-ultra-550b-a55b:free" },
   openrouter2: { url: "https://openrouter.ai/api/v1/chat/completions",
-                 model: process.env["OPENROUTER_MODEL"] ?? "nvidia/nemotron-3-super-120b-a12b:free" },
+                 model: process.env["OPENROUTER_MODEL"] ?? "nvidia/nemotron-3-ultra-550b-a55b:free" },
   // Zhipu's GLM-4-Flash is free outright rather than trial credit.
   zhipu:       { url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
                  // glm-4-flash was retired; glm-4.5-flash is the free tier now, checked
@@ -270,7 +280,11 @@ async function callOpenAiCompatible(
   // looked like an outage. Switching reasoning off returns a full answer inside
   // 400 tokens. `reasoning.exclude` is not the same thing: it hides the
   // thinking from the response while still paying for it.
-  if (url.includes("openrouter.ai")) body["reasoning"] = { enabled: false };
+  if (url.includes("openrouter.ai")) {
+    // MiniMax M3.1 refuses with 400 when reasoning is off: kept short instead.
+    if (/minimax/i.test(model)) { body["reasoning"] = { effort: "low" }; body["max_tokens"] = 1600; }
+    else body["reasoning"] = { enabled: false };
+  }
   // Zhipu's GLM-4.5 does the same by default — 251 tokens of thinking for a
   // one-word answer, measured — and takes its own switch.
   if (url.includes("bigmodel.cn")) body["thinking"] = { type: "disabled" };
@@ -339,6 +353,16 @@ async function callOne(
     try { return await callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs); }
     finally { gridInFlight--; }
   }
+  if (provider === "openrouter" || provider === "openrouter2") {
+    // The account's key first, then each spare key on a refusal.
+    const keys = [apiKey, ...openrouterPool()].filter((k, i, a) => k && a.indexOf(k) === i);
+    let lastErr: unknown = new Error("openrouter: لا مفتاح");
+    for (const k of keys) {
+      try { return await callOpenAiCompatible(cfg.url, k, model || cfg.model, messages, timeoutMs); }
+      catch (err) { lastErr = err; if (!/\b(401|402|429)\b/.test(String((err as any)?.message ?? err))) throw err; }
+    }
+    throw lastErr;
+  }
   return callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs);
 }
 
@@ -358,13 +382,21 @@ function isTransient(err: unknown): boolean {
  * Measured on this account's own sales task, 2026-09-25. Latency is the median
  * of the benchmark run; the notes are why each one is where it is.
  */
+// OpenRouter's free models, strongest first — measured on 2026-10-21 with a
+// Gulf-Arabic sales question: nemotron-3-ultra (default above, 1.8s, clean
+// and on-task) → nemotron-3.5-super-vl (1.3s, reads images) → minimax-m3.1-flash
+// (7.5s, the best Gulf dialect but invented a date; reasoning is mandatory)
+// → north-mini-code (5s) → laguna-s-2.1 (5.3s). Dropped the same day:
+// nemotron-3-super-120b (404, withdrawn), nemotron-3.5-lightning (wrong
+// facts), gemma-4 and xing4.0 (429 upstream), inkling (403, agent apps only),
+// dots-3-note-preview (English words in Arabic).
 const EXTRA_MODELS: Record<string, string[]> = {
   zhipu: ["glm-4.7-flash"],
   // 1.3s, and the only model that stated the pricing rule back — "التسعير
   // يعتمد على تفاصيل نشاطك" — instead of inventing a number.
   groq: ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"],
-  openrouter: ["nvidia/nemotron-3.5-lightning:free"],
-  openrouter2: ["nvidia/nemotron-3.5-lightning:free"],
+  openrouter: ["nvidia/nemotron-3.5-super-vl:free", "minimax/minimax-m3.1-flash:free", "cohere/north-mini-code:free", "poolside/laguna-s-2.1:free"],
+  openrouter2: ["nvidia/nemotron-3.5-super-vl:free", "minimax/minimax-m3.1-flash:free", "cohere/north-mini-code:free", "poolside/laguna-s-2.1:free"],
 };
 
 // Excluded deliberately, so nobody adds them back by guessing:
@@ -419,7 +451,9 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000): Prom
  * first, and everyone who writes Arabic to people (WhatsApp) never gets it.
  * Pure over the ranked list.
  */
-export const ENGLISH_ONLY_MODELS = /nemotron/i;
+// nemotron-3-ultra and 3.5-super-vl wrote clean Arabic on 2026-10-21; the older
+// ones mixed English and Cyrillic into Gulf replies.
+export const ENGLISH_ONLY_MODELS = /nemotron-3-super-120b|nemotron-3\.5-lightning|dots-3/i;
 export function routeByTask<T extends { provider: string; model: string }>(ordered: T[], role: string | null): T[] {
   const english = (c: T) => ENGLISH_ONLY_MODELS.test(c.model);
   const emailTeam = !!role && (role === "email" || role.startsWith("email_"));
