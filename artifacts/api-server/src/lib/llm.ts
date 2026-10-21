@@ -41,10 +41,15 @@ export function openrouterPool(): string[] {
   return (process.env["OPENROUTER_API_KEYS"] ?? "").split(",").map((k) => k.trim()).filter(Boolean);
 }
 
+/** Spare Groq keys, the same way: GROQ_API_KEYS="k1,k2". Added 2026-10-21. */
+export function groqPool(): string[] {
+  return (process.env["GROQ_API_KEYS"] ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+}
+
 const KEYS: Record<string, () => string> = {
   anthropic:   () => process.env["ANTHROPIC_API_KEY"]   ?? "",
   gemini:      () => process.env["GEMINI_API_KEY"]      ?? "",
-  groq:        () => process.env["GROQ_API_KEY"]        ?? "",
+  groq:        () => process.env["GROQ_API_KEY"] || groqPool()[0] || "",
   openrouter:  () => process.env["OPENROUTER_API_KEY"] || openrouterPool()[0] || "",
   zhipu:       () => process.env["ZHIPU_API_KEY"]       ?? "",
   qwen:        () => process.env["QWEN_API_KEY"]        ?? "",
@@ -353,9 +358,9 @@ async function callOne(
     try { return await callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs); }
     finally { gridInFlight--; }
   }
-  if (provider === "openrouter" || provider === "openrouter2") {
+  if (provider === "openrouter" || provider === "openrouter2" || provider === "groq") {
     // The account's key first, then each spare key on a refusal.
-    const keys = [apiKey, ...openrouterPool()].filter((k, i, a) => k && a.indexOf(k) === i);
+    const keys = [apiKey, ...(provider === "groq" ? groqPool() : openrouterPool())].filter((k, i, a) => k && a.indexOf(k) === i);
     let lastErr: unknown = new Error("openrouter: لا مفتاح");
     for (const k of keys) {
       try { return await callOpenAiCompatible(cfg.url, k, model || cfg.model, messages, timeoutMs); }
