@@ -35,3 +35,13 @@ ok(dueRung(turns, seven, false, t0 + 30 * 24 * H, { ladder }) === null, "nothing
 const replied = [...turns, { fromMe: false, text: "شكراً", at: new Date(t0 + 200 * H) }];
 ok(dueRung(replied, six, false, t0 + 210 * H, { ladder }) === null, "her reply is answered by a person first, not a follow-up");
 console.log(`followup-service: ${n}/${n} ✅`);
+// Added after the first live round (2026-10-21): no reply-to-a-greeting opener, and one text is not for many.
+{
+  const { serviceIssues: si, overlap } = await import("../smart-followup");
+  assert.ok(si("وعليكم السلام، إذا تحتاجين شي إحنا موجودين").length > 0, "a reply to an old greeting is refused");
+  assert.ok(si("هلا، إذا تحتاجين شي إحنا موجودين").length === 0, "«هلا» is fine");
+  const a = "Hello, I just wanted to check if you have any further questions or if there is anything else I can help you with.";
+  const b = "Hello, I just wanted to check if you have any further questions or if there is anything else I can assist you with.";
+  assert.ok(overlap(a, b) > 0.75, "two near-identical texts are caught as one");
+  console.log("followup-service extra: 3/3 ✅");
+}

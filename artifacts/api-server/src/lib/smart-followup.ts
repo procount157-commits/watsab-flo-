@@ -114,6 +114,8 @@ export const SERVICE_VOICE = [
   "- ممنوع منعاً باتاً أي تحبّب: حبيبتي، حبيبي، صاحبتي، قلبي، عمري، روحي، حياتي، يا قمر، يا عسل، غناتي. الاحترام هو الدفء.",
   "- لا تبدأ بـ«أتابع معك» ولا «للتذكير» ولا «هل وصلتك رسالتي». ولا تكرر جملة قيلت لها من قبل.",
   "- إيموجي واحد على الأكثر، أو لا شيء.",
+  "- لا تبدأ بـ«وعليكم السلام»: هذه رسالة جديدة منك لا رد على تحية قديمة. ابدأ بتحية الوقت أو بـ«هلا».",
+  "- كل زبونة تأخذ رسالة بكلمات مختلفة عن غيرها: نص واحد لعدة أشخاص يقرؤه واتساب رسالةً آلية.",
   "أمثلة:",
   "✓ «مساء الخير، إذا احتجتي أي شي أو عندك سؤال، إحنا موجودين 🌸»",
   "✓ «هلا، حبيت أطمّن إذا كل شي واضح عندك، وإذا تحتاجين مساعدة بأي شي قوليلي»",
@@ -131,6 +133,7 @@ export function serviceIssues(text: string): string[] {
   if (ENDEARMENT.test(t)) out.push("فيها كلمة تحبّب");
   if (MONEY.test(t)) out.push("فيها كلام عن سعر أو وزن أو عرض");
   if (/[0-9٠-٩]/.test(t)) out.push("فيها رقم");
+  if (/^\s*(و\s?عليكم|wa\s?alaikum)/i.test(t)) out.push("تبدأ بردّ السلام كأنها ترد على تحية قديمة");
   if (/https?:|www\.|\.(io|com|ae|net)\b/i.test(t)) out.push("فيها رابط");
   if (t.split(/\n+/).filter((l) => l.trim()).length > 3 || t.length > 260) out.push("أطول من سطرين أو ثلاثة");
   return out;
@@ -320,8 +323,12 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
     db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
   ]);
   const customerDialect = dialectOf(turns.filter((t) => !t.fromMe).map((t) => t.text).join(" "), profile?.dialect ?? null);
+  // What went, or waits, to other customers in the last two days: this one must not read like them.
+  const others = (await db.execute<{ draft: string }>(sql`SELECT draft FROM followup_deliberations WHERE user_id = ${userId} AND phone <> ${phone}
+    AND verdict IN ('pending', 'approved', 'send') AND coalesce(draft, '') <> '' AND created_at > now() - interval '48 hours' ORDER BY created_at DESC LIMIT 25`)).rows.map((r) => r.draft);
   const system = [
     `اسمك ${me?.name ?? "خالد"}، تعمل في ${profile?.name ?? "المحل"}. تكتب رسالة متابعة واحدة لزبونة سكتت بعد محادثتها معنا.`,
+    others.length ? `═══ رسائل كُتبت لزبونات أخريات — لا تشبهها في الكلمات ولا في البناء ═══\n${others.slice(0, 8).map((e) => `- ${e}`).join("\n")}` : "",
     SERVICE_VOICE,
     `═══ زاوية هذه الرسالة ═══\n${angle}`,
     dialectLine(customerDialect),
@@ -345,6 +352,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   }
   if (issues.length) return { send: false, text, reason: `أُوقفت: ${issues[0]}`, retry: true };
   if (earlier.find((e) => overlap(e, text) > 0.6)) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة", retry: true };
+  if (others.find((e) => overlap(e, text) > 0.75)) return { send: false, text, reason: "تشبه رسالة كُتبت لزبونة أخرى — تُكتب من جديد في الجولة القادمة", retry: true };
   return { send: true, text, reason: "جاهزة — أسلوب الخدمة فقط", photo: null };
 }
 
