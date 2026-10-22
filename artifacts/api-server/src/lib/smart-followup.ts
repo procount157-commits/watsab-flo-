@@ -175,7 +175,7 @@ export const SALES_VOICE = [
 ].join("\n");
 
 /** The prefilled text a Meta click-to-WhatsApp ad puts in the customer's mouth, in any of its languages. */
-const AD_PREFILL = /^\s*(hello!?\s*can\s+i\s+get\s+more\s+info(rmation)?\s+on\s+this\??|مرحب[اًا]?!?\s*هل\s*يمكنني\s*الحصول\s*على\s*مزيد\s*من\s*ال?\s*معلومات\s*حول\s*هذا\s*[؟?]?|سلام!?\s*می.?\s*توانم[^؟?]*[؟?]?)/i;
+const AD_PREFILL = /^\s*(hello!?\s*can\s+i\s+get\s+more\s+info(rmation)?\s+on\s+this\??|مرحب[اًٌٍ]*!?\s*هل\s*يمكنني\s*الحصول\s*على\s*مزيد\s*من\s*ال?\s*معلومات\s*حول\s*هذا\s*[؟?]?|سلام!?\s*می.?\s*توانم[^؟?]*[؟?]?)/i;
 
 /**
  * The language to write in (the owner, 2026-10-21): Arabic always — unless
@@ -235,6 +235,8 @@ export function herLast(turns: Array<{ fromMe: boolean; text: string }>): { word
 export const shopSite = () => (process.env["FLORET_SITE_URL"] || "https://floret-royal.io").replace(/\/+$/, "");
 
 /** The sales style: the service style's limits, but the shop's own site may be linked. Pure. */
+/** A promise only the shop can make — availability, delivery, wrapping, anything free. Pure. */
+const PROMISE = /متوفر|متوفره|متوفرة|متاح|متاحه|متاحة|موجود[ةه]? عندنا|نوصل|نوصّل|بنوصل|نغلف|تغليف|مجان|ببلاش|in stock|available|we deliver|free/i;
 export function salesIssues(text: string, site = shopSite(), lang: "ar" | "en" = "ar"): string[] {
   const host = site.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   const links: string[] = String(text ?? "").match(/https?:\/\/\S+|www\.\S+|\b[\w-]+\.(io|com|ae|net)\S*/gi) ?? [];
@@ -243,6 +245,7 @@ export function salesIssues(text: string, site = shopSite(), lang: "ar" | "en" =
   for (const l of links) withoutSite = withoutSite.replace(l, " ");
   const out = serviceIssues(withoutSite).filter((x) => x !== "أطول من سطرين أو ثلاثة");
   if (foreign.length) out.push("فيها رابط غير رابط الموقع");
+  if (PROMISE.test(withoutSite)) out.push("فيها وعد لا يملكه إلا المحل (توفر، توصيل، تغليف، مجاناً) — قل «أتأكد لك» بدلاً منه");
   if (withoutSite.split(/\n+/).filter((l) => l.trim()).length > 4 || withoutSite.length > 320) out.push("أطول من ثلاثة أسطر");
   if (lang === "ar" && /[A-Za-z]{3,}/.test(withoutSite)) out.push("فيها كلام بالإنجليزية والزبونة تُكتب لها بالعربية");
   return out;
@@ -454,6 +457,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   ], 30_000).catch(() => null);
   const { parseLoose } = await import("./loose-json");
   const a: any = analysisOut?.text ? parseLoose(analysisOut.text) : null;
+  if (a?.last_question && !String(a.last_question).replace(AD_PREFILL, "").trim()) a.last_question = last.question;
   const analysis = a ? [
     a.last_question ? `آخر سؤال سألته: «${String(a.last_question).slice(0, 200)}»${a.answered === false ? " — ولم نجبها عليه بعد" : ""}` : (last.question ? `آخر سؤال سألته: «${last.question.slice(0, 200)}»` : ""),
     a.wants ? `ما تريده: ${String(a.wants).slice(0, 200)}` : "",
@@ -467,7 +471,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
     `اسمك ${me?.name ?? "خالد"}، تعمل في ${profile?.name ?? "المحل"}. تكتب رسالة متابعة واحدة لزبونة سكتت بعد محادثتها معنا.`,
     others.length ? `═══ رسائل كُتبت لزبونات أخريات — لا تشبهها في الكلمات ولا في البناء ═══\n${others.slice(0, 8).map((e) => `- ${e}`).join("\n")}` : "",
     sales ? SALES_VOICE : SERVICE_VOICE,
-    analysis || last.words ? `═══ تحليل محادثتها — ابنِ رسالتك عليه أولاً ═══\n${analysis}${last.words ? `\nآخر ما كتبته هي: «${last.words.slice(0, 300)}»` : ""}\nرسالتك ترد على آخر ما قالته وآخر سؤال سألته، بطريقة تخصها هي — لا كلاماً عاماً يصلح لأي زبونة. إن كان سؤالها عن السعر أو الوزن فلا تذكر أي رقم ولا كلمة سعر: قل إن تفاصيل القطعة وصورها كلها في الموقع، أو اعرض أن تساعدها تختار.` : "",
+    analysis || last.words ? `═══ تحليل محادثتها — ابنِ رسالتك عليه أولاً ═══\n${analysis}${last.words ? `\nآخر ما كتبته هي: «${last.words.slice(0, 300)}»` : ""}\nرسالتك ترد على آخر ما قالته وآخر سؤال سألته، بطريقة تخصها هي — لا كلاماً عاماً يصلح لأي زبونة. إن كان سؤالها عن السعر أو الوزن فلا تذكر أي رقم ولا كلمة سعر: قل إن تفاصيل القطعة وصورها كلها في الموقع، أو اعرض أن تساعدها تختار. وإن سألت عن التوصيل أو توفر قطعة أو بيعها لحالها، فلا تَعِد بشيء: قل «أتأكد لك وأرد عليك» واعرض عليها الموقع.` : "",
     book?.content ? `═══ ما تعلّمه الفريق من كل محادثات المحل هذا الأسبوع ═══\n${book.content.slice(0, 1500)}` : "",
     `═══ زاوية احتياطية لهذه الدرجة (إن لم يكن عندها سؤال مفتوح) ═══\n${angle}`,
     sales ? `رابط الموقع (الوحيد المسموح، انسخه كما هو): ${site}` : "",

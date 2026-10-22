@@ -92,3 +92,14 @@ console.log(`followup-service: ${n}/${n} ✅`);
   assert.ok(c.question === "عندكم خواتم بنات", "«عندكم…» without a question mark is still a question");
   console.log("followup-last: 4/4 ✅");
 }
+// No promises the shop did not make, and the Arabic prefill with its tanween (2026-10-22).
+{
+  const { salesIssues: si, herLast: hl, followupLanguage: fl } = await import("../smart-followup");
+  const site = "https://floret-royal.io";
+  for (const t of ["نعم التوصيل للشارقة متاح https://floret-royal.io", "السلسلة متوفرة عندنا وتقدرين تطلبينها لحالها", "نجهز الطلب مع تغليفه كهدية", "الشحن مجاني"])
+    assert.ok(si(t, site).some((x) => x.startsWith("فيها وعد")), `«${t}» is a promise`);
+  assert.ok(si("بخصوص التوصيل للشارقة أتأكد لك وأرد عليك، وتقدرين تشوفين القطع هنا https://floret-royal.io", site).length === 0, "«أتأكد لك» is not a promise");
+  assert.ok(hl([{ fromMe: false, text: "مرحبًا! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟" }]).question === null, "the Arabic prefill with tanween is not her question");
+  assert.ok(fl(["مرحبًا! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟"]) === "ar", "and not a language change");
+  console.log("followup-promises: 7/7 ✅");
+}
