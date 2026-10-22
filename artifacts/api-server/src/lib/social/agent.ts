@@ -11,6 +11,93 @@ import { asAgent } from "../agent-context";
 import { lessonsFor } from "../feedback";
 import { offerLine } from "../deals/meetings";
 import { companyKnowledge, knowledgeLines } from "../company-knowledge";
+import { sql } from "drizzle-orm";
+import { db } from "@workspace/db";
+import { SALES_VOICE, salesIssues, serviceIssues, followupLanguage, herLast, shopSite } from "../smart-followup";
+
+// ── A shop speaks the same everywhere ─────────────────────────────
+// The owner (2026-10-22), for Floret: «يرد نفس ردود الواتساب في كل المنصات —
+// في التعليقات: تواصل في الخاص؛ في الخاص: رسالة الموقع، شوفوا كل التفاصيل
+// وكل القطع». A shop account (its follow-ups in the sales or service
+// style, or a jewellery shop) writes on TikTok and Instagram with the
+// WhatsApp follow-up's voice and rules, and the same code check: no price,
+// number, endearment, promise or foreign link; Arabic unless they wrote
+// English themselves.
+export async function shopMode(userId: number): Promise<boolean> {
+  const [p] = (await db.execute<{ v: string | null; s: string | null }>(sql`SELECT vertical AS v, followup_style AS s FROM business_profile WHERE user_id = ${userId}`).catch(() => ({ rows: [] as Array<{ v: string | null; s: string | null }> }))).rows;
+  return !!p && (p.v === "jewelry" || p.s === "sales" || p.s === "service");
+}
+async function guardrails(userId: number): Promise<string> {
+  const [p] = (await db.execute<{ g: string | null }>(sql`SELECT guardrails AS g FROM business_profile WHERE user_id = ${userId}`).catch(() => ({ rows: [] as Array<{ g: string | null }> }))).rows;
+  return p?.g ? `تعليمات صاحب العمل: ${p.g}` : "";
+}
+const langLine = (lang: "ar" | "en") => lang === "ar"
+  ? "اكتب بالعربية فقط، بلهجة خليجية طبيعية — ولا كلمة إنجليزية غير الرابط."
+  : "They write to us in English themselves, so write in natural, warm English.";
+
+/** A shop's public reply: short, warm, and «talk to us in private» — no price, no link. */
+async function shopCommentReply(userId: number, p: SocialPlatform, c: { author: string; text: string; intent: Intent }, recent: string[]) {
+  const lang = followupLanguage([c.text]);
+  const rules = [
+    "اكتب الرد العلني على هذا التعليق في حساب محل الذهب. سطر واحد قصير، كإنسان من المحل.",
+    c.intent === "praise"
+      ? "تعليق مدح: شكر لطيف بكلمات بسيطة، بلا دعوة ولا سؤال."
+      : "دعوة لطيفة للتواصل في الخاص: «تواصلي معنا على الخاص ونرسل لك كل التفاصيل» أو ما يشبهها بكلمات مختلفة.",
+    "ممنوع منعاً باتاً في العلن: أي سعر أو رقم أو وزن أو رابط أو وعد بتوفر أو توصيل، وأي تحبّب (حبيبتي، صاحبتي، قلبي، عمري…)، و«هلا وغلا».",
+    langLine(lang), await guardrails(userId),
+    recent.length ? `ردود استعملتها مؤخراً — لا تكررها ولا تقاربها:\n${recent.slice(0, 6).map((r) => `- ${r}`).join("\n")}` : "",
+    "اكتب الرد وحده بلا مقدمات ولا علامات اقتباس.",
+  ];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const t = clean(await ask(userId, p, "writer", attempt ? [...rules, "المحاولة السابقة خالفت القواعد: لا رقم، لا رابط، لا سعر، لا تحبّب، سطر واحد."] : rules, `@${c.author}: ${c.text}`), 300);
+    const issues = serviceIssues(t).concat(lang === "ar" && /[A-Za-z]{3,}/.test(t) ? ["إنجليزية"] : []);
+    if (t.length > 1 && !issues.length) return t;
+  }
+  return null;
+}
+
+/** A shop's private reply: the WhatsApp follow-up's voice, built on their last question, with the site. */
+async function shopDmReply(userId: number, p: SocialPlatform, who: string, history: Array<{ fromMe: boolean; text: string }>) {
+  const lang = followupLanguage(history.filter((m) => !m.fromMe).map((m) => m.text));
+  const last = herLast(history);
+  const site = shopSite();
+  const rules = [
+    `أنت موظف في محل الذهب يرد في رسائل ${PLATFORM[p].labelAr} الخاصة.`,
+    SALES_VOICE,
+    `رابط الموقع (الوحيد المسموح، انسخه كما هو): ${site}`,
+    last.question ? `آخر سؤال سألته/سأله: «${last.question.slice(0, 200)}» — ردك يجيب عليه هو. إن كان عن السعر أو الوزن فلا رقم ولا كلمة سعر: كل تفاصيل القطع وصورها في الموقع. إن كان عن التوصيل أو التوفر فلا تَعِد: «أتأكد لك وأرد عليك».` : "إن كانت أول رسالة: رحّب بكلمة، وأرسل الموقع: «شوفي في الموقع كل القطع بصورها وتفاصيلها»، واطلب ترسل صورة اللي يعجبها.",
+    "إن طلب التوقف أو رفض بوضوح: اكتب «(لا رد)» فقط.",
+    langLine(lang), await guardrails(userId),
+    "اكتب الرد وحده.",
+  ];
+  const convo = `المحادثة مع ${who} (الأقدم أولاً):\n${history.slice(-20).map((m) => `${m.fromMe ? "نحن" : who}: ${m.text}`).join("\n")}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const t = clean(await ask(userId, p, "dm", attempt ? [...rules, "المحاولة السابقة خالفت القواعد — أعد الكتابة بلا سعر ولا رقم ولا تحبّب ولا وعد ولا رابط غير الموقع."] : rules, convo), 900);
+    if (!t || /\(لا رد\)/.test(t)) return null;
+    if (!salesIssues(t, site, lang).length) return t;
+  }
+  return null;
+}
+
+/** A shop's first private message to someone who commented with interest: the site message. */
+async function shopFirstMessage(userId: number, p: SocialPlatform, t: TargetBrief, recent: string[]) {
+  const site = shopSite();
+  const lang = followupLanguage([t.note ?? ""]);
+  const rules = [
+    `اكتب أول رسالة خاصة في ${PLATFORM[p].labelAr} لشخص علّق على منشور محل الذهب باهتمام.`,
+    SALES_VOICE,
+    `رابط الموقع (الوحيد المسموح، انسخه كما هو): ${site}`,
+    "سطران: شكر على تعليقه بكلمة، ثم «شوفي في الموقع كل القطع بصورها وتفاصيلها» مع الرابط، واطلب ترسل صورة اللي يعجبها.",
+    langLine(lang), await guardrails(userId),
+    recent.length ? `رسائل أولى استعملتها مؤخراً — لا تكرر صياغتها:\n${recent.slice(0, 5).map((r) => `- ${r.slice(0, 160)}`).join("\n")}` : "",
+    "اكتب الرسالة وحدها.",
+  ];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = clean(await ask(userId, p, "prospector", rules, t.note ? `ما علّق به: ${t.note}` : `@${t.handle}`), PLATFORM[p].firstContactMax);
+    if (r.length > 10 && !salesIssues(r, site, lang).length) return r;
+  }
+  return null;
+}
 
 export const INTENTS = ["question", "interested", "praise", "complaint", "spam", "stop", "other"] as const;
 export type Intent = typeof INTENTS[number];
@@ -53,6 +140,7 @@ export async function triage(userId: number, p: SocialPlatform, text: string, au
 /** The writer: the public reply, or nothing. */
 export async function draftCommentReply(userId: number, p: SocialPlatform, c: { author: string; text: string; intent: Intent }, recent: string[]) {
   if (c.intent === "spam" || c.intent === "stop") return null;
+  if (await shopMode(userId)) return shopCommentReply(userId, p, c, recent);
   const t = await ask(userId, p, "writer", [
     "اكتب الرد العلني على التعليق. سطر أو سطران كحد أقصى، بلهجة صاحب التعليق.",
     "لا سعر ولا تفاصيل في العلن — ادعه للخاص إن احتاج سؤاله ذلك. لا تبدأ بـ«شكراً لتواصلك» ولا «يسعدنا».",
@@ -66,6 +154,7 @@ export async function draftCommentReply(userId: number, p: SocialPlatform, c: { 
 
 /** The DM desk: the next reply in a conversation. */
 export async function draftDmReply(userId: number, p: SocialPlatform, who: string, history: Array<{ fromMe: boolean; text: string }>) {
+  if (await shopMode(userId)) return shopDmReply(userId, p, who, history);
   const last = history.filter((m) => !m.fromMe).slice(-3).map((m) => m.text).join("\n");
   const t = await ask(userId, p, "dm", [
     "اكتب الرد التالي في هذه المحادثة الخاصة، كما يكتبه موظف من الشركة.",
@@ -83,6 +172,7 @@ export type TargetBrief = { handle: string; name?: string | null; headline?: str
 
 /** The prospector: the first message to someone on the owner's list. */
 export async function draftFirstMessage(userId: number, p: SocialPlatform, t: TargetBrief, recent: string[]) {
+  if (await shopMode(userId)) return shopFirstMessage(userId, p, t, recent);
   const P = PLATFORM[p];
   const about = [t.name && `الاسم: ${t.name}`, t.headline && `الوصف: ${t.headline}`, t.company && `الشركة: ${t.company}`, t.sector && `القطاع: ${t.sector}`, t.city && `المدينة: ${t.city}`, t.note && `ملاحظة صاحب العمل: ${t.note}`].filter(Boolean).join("\n");
   const text = await ask(userId, p, "prospector", [
@@ -100,6 +190,14 @@ export async function draftFirstMessage(userId: number, p: SocialPlatform, t: Ta
 
 /** The follow-up: once, shorter, a new angle. */
 export async function draftFollowup(userId: number, p: SocialPlatform, t: TargetBrief, first: string) {
+  if (await shopMode(userId)) {
+    const site = shopSite();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = clean(await ask(userId, p, "followup", [SALES_VOICE, `رابط الموقع: ${site}`, "متابعة واحدة أخيرة، أقصر من الأولى وبكلمات مختلفة: تذكير لطيف بالموقع وأن تفاصيل القطع كلها فيه، بلا ضغط.", langLine("ar"), await guardrails(userId), "اكتب الرسالة وحدها."], `رسالتنا الأولى:\n${first}`), PLATFORM[p].firstContactMax);
+      if (r.length > 8 && !salesIssues(r, site, "ar").length) return r;
+    }
+    return null;
+  }
   const text = await ask(userId, p, "followup", [
     "اكتب متابعة واحدة لمن لم يرد على رسالتنا الأولى. هي الأخيرة: بعدها نتوقف.",
     "أقصر من الأولى بنصفها، بزاوية جديدة لا تكرار، بلا لوم ولا «لم ترد». مخرج كريم: إن لم يكن الوقت مناسباً فلا بأس.",

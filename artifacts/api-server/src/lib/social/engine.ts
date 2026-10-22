@@ -293,13 +293,17 @@ export async function prepareOutreach(userId: number, p: SocialPlatform, opts: {
   const a = await account(userId, p);
   if (!a) return 0;
   const lists = opts.listId ? [opts.listId] : (a.listIds ?? []);
-  if (!lists.length) return 0;
+  // A shop also writes privately to whoever commented with interest (the owner, 2026-10-22).
+  const shop = await agent.shopMode(userId);
+  if (!lists.length && !shop) return 0;
   const t = await todayCounts(userId, p);
   const room = opts.max ?? Math.max(0, capsFor(p, a.caps).outreach - t.used.outreach) + 3;
   const queued = await db.select({ n: sql<number>`count(*)` }).from(socialTargetsTable).where(and(eq(socialTargetsTable.userId, userId), eq(socialTargetsTable.platform, p), inArray(socialTargetsTable.status, ["drafted", "approved"])));
   const want = Math.max(0, room - Number(queued[0]?.n ?? 0));
   if (!want) return 0;
-  const next = await db.select().from(socialTargetsTable).where(and(eq(socialTargetsTable.userId, userId), eq(socialTargetsTable.platform, p), eq(socialTargetsTable.status, "new"), inArray(socialTargetsTable.listId, lists)))
+  const fromLists = lists.length ? inArray(socialTargetsTable.listId, lists) : sql`false`;
+  const next = await db.select().from(socialTargetsTable).where(and(eq(socialTargetsTable.userId, userId), eq(socialTargetsTable.platform, p), eq(socialTargetsTable.status, "new"),
+      shop ? or(fromLists, eq(socialTargetsTable.source, "comment")) : fromLists))
     .orderBy(asc(socialTargetsTable.createdAt)).limit(want);
   const recent = await recentFirsts(userId, p);
   let n = 0;
