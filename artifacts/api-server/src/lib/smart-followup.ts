@@ -65,6 +65,9 @@ export const SHOP_LADDER = [1, 6, 24, 72, 168, 336, 720] as const;
 /** Smart follow-ups are recorded with step 100+rung, apart from the old ladder's 0–6. */
 export const STEP_BASE = 100;
 const MAX_PER_RUN = 8;
+/** Between one follow-up and the next, whoever they go to: a minute or two, like a person (the owner, 2026-10-22). */
+export const FOLLOWUP_GAP_MS: [number, number] = [60_000, 120_000];
+const followupPause = () => new Promise((r) => setTimeout(r, FOLLOWUP_GAP_MS[0] + Math.random() * (FOLLOWUP_GAP_MS[1] - FOLLOWUP_GAP_MS[0])));
 
 /** What each rung is for — so the four messages are four different messages. */
 export const RUNG_ANGLE: string[] = [
@@ -146,12 +149,12 @@ export function serviceIssues(text: string): string[] {
  * site's link. The link is the only thing the writer may add.
  */
 export const SALES_ANGLE: string[] = [
-  "المتابعة ١ — اطمئنان قصير بعد المحادثة، ثم دعوة لطيفة: عندنا قطع كثيرة في الموقع تقدر تاخذ فكرة عنها، مع رابط الموقع.",
-  "المتابعة ٢ — إن سألت عن شيء بعينه فاذكره بكلماتها هي، وقل إن في الموقع تصاميم قريبة منه تقدر تشوفها، مع الرابط. وإلا فادعها تتصفح على راحتها.",
-  "المتابعة ٣ — سؤال بيعي لطيف بلا رابط: هل تدوّر على شي لمناسبة معيّنة أو للبس اليومي، عشان نساعدها تختار.",
-  "المتابعة ٤ — دعوة للموقع من زاوية الهدية أو المناسبة: لو عندها مناسبة أو تبي تهدي أحد، الموقع فيه خيارات كثيرة، مع الرابط.",
-  "المتابعة ٥ — سطر قصير جداً: إذا شافت شي عجبها في الموقع ترسل لنا صورته أو اسمه ونساعدها، بلا رابط.",
-  "المتابعة ٦ — تذكير دافئ بالموقع: التصاميم كلها موجودة فيه بصورها، تتصفحها متى ما ارتاحت، مع الرابط.",
+  "المتابعة ١ — اطمئنان قصير، ثم دعوة واثقة: عندنا قطع كثيرة في الموقع بصورها، تقدر تاخذ فكرة وتختار على راحتها، مع رابط الموقع.",
+  "المتابعة ٢ — إن سألت عن شيء بعينه فاذكره بكلماتها هي: «في الموقع تصاميم قريبة من اللي سألتي عنه»، مع الرابط، وادعها ترسل صورة اللي يعجبها عشان ترتب لها الطلب.",
+  "المتابعة ٣ — سؤال يقرّبها من الشراء بلا رابط: تدوّر على شي لمناسبة قريبة أو للبس اليومي أو هدية؟ عشان نساعدها تختار الأنسب.",
+  "المتابعة ٤ — زاوية الهدية والمناسبات: لو عندها مناسبة أو تبي تهدي أحد، الموقع فيه خيارات كثيرة تناسب كل ذوق، مع الرابط.",
+  "المتابعة ٥ — تسهيل الخطوة: إذا شافت شي عجبها ترسل صورته أو اسمه هنا وتكمل الباقي معها خطوة بخطوة، بلا رابط.",
+  "المتابعة ٦ — تذكير دافئ بالموقع: التصاميم كلها فيه بصورها وتفاصيلها، تتصفحها متى ما ارتاحت، مع الرابط.",
   "المتابعة الأخيرة — ختام كريم: شكر على تواصلها، وأن الواتساب والموقع موجودين لها دائماً، بلا ضغط ولا سؤال.",
 ];
 
@@ -267,12 +270,12 @@ async function thread(userId: number, phone: string, limit = 14): Promise<Turn[]
 }
 
 /** Conversations where we spoke last, they had spoken in the last month, and the quiet has lasted at least four hours. */
-async function candidates(userId: number, scope: "spoke" | "all"): Promise<string[]> {
+async function candidates(userId: number, scope: "spoke" | "all", days = 30): Promise<string[]> {
   const r = await db.execute(sql`
     SELECT phone FROM wa_thread_messages
-    WHERE user_id = ${userId} AND created_at > now() - interval '35 days'
+    WHERE user_id = ${userId} AND created_at > now() - make_interval(days => ${days + 5})
     GROUP BY phone
-    HAVING ${scope === "all" ? sql`true` : sql`max(created_at) FILTER (WHERE NOT from_me) > now() - interval '30 days'`}
+    HAVING ${scope === "all" ? sql`true` : sql`max(created_at) FILTER (WHERE NOT from_me) > now() - make_interval(days => ${days})`}
        AND max(created_at) FILTER (WHERE from_me) > coalesce(max(created_at) FILTER (WHERE NOT from_me), '-infinity')
        AND max(created_at) < now() - interval '1 hour'
     ORDER BY max(created_at) DESC
@@ -461,11 +464,17 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   if (mode === "live" && !getStatus(userId).connected) return result;
 
   const { ladder, scope, vertical, style, batch } = await ladderOf(userId);
+  // A send claimed and never finished (a restart mid-send) goes back to the queue; alreadySent() stops a second copy.
+  await db.execute(sql`UPDATE followup_deliberations SET verdict = 'approved' WHERE user_id = ${userId} AND verdict = 'sending' AND created_at < now() - interval '15 minutes'`).catch(() => {});
   // A copy that reached someone twice is taken back first.
   if (getStatus(userId).connected) await recallDuplicateFollowups(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "فحص المكرر تعذّر"));
   // Approved drafts go first, through the firewall like any message.
   if (mode === "approve" || mode === "live") await sendApproved(userId, batch).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "إرسال المعتمد تعذّر"));
-  const phones = await candidates(userId, scope);
+  // The shop's styles follow every customer of the last two months, a few at a time (the owner, 2026-10-22).
+  const wide = style === "sales" || style === "service";
+  // ريم keeps the listing current: up to ten conversations that moved since her last reading, every round.
+  if (wide) { const { reviewAll } = await import("./graph/review"); await reviewAll(userId, { onlyStale: true, limit: 10 }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "قراءة ريم تعذّرت")); }
+  const phones = await candidates(userId, scope, wide ? 60 : 30);
   if (!phones.length) return result;
 
   // Who is not to be followed at all.
@@ -544,7 +553,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
       await record(userId, phone, due.rung, "send", d.reason, d.text, true, ops.view);
       result.sent++; left--;
       logger.info({ userId, phone, rung: due.rung + 1 }, "smart follow-up sent");
-      await new Promise((r) => setTimeout(r, 20_000 + Math.random() * 25_000));
+      await followupPause();
     } catch (err: any) {
       logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 160) }, "smart follow-up send failed — will try next round");
       // The firewall's no is about the number today, not this person: the round ends here.
@@ -621,6 +630,7 @@ export async function sendApproved(userId: number, batch: number): Promise<{ sen
       await db.execute(sql`UPDATE followup_deliberations SET verdict = 'send', executed = true WHERE id = ${r.id}`);
       receipt({ userId, node: FOLLOWUP_ROLE, graph: "whatsapp", action: "followup.sent", status: "ok", subject: r.phone, why: "متابعة اعتمدها صاحب العمل" });
       out.sent++;
+      await followupPause();
     } catch (err: any) {
       const m = String(err?.message ?? err);
       // The person said no for good: the draft goes. The number's no: everything waits for the next round.
@@ -633,6 +643,52 @@ export async function sendApproved(userId: number, batch: number): Promise<{ sen
   }
   if (out.sent || out.dropped) logger.info({ userId, ...out }, "أُرسلت المتابعات المعتمدة");
   return out;
+}
+
+/**
+ * ريم's listing (the owner, 2026-10-22: «يعمل listing للناس اللي في الشات
+ * كلهم وشوف اللي المفروض يتابع معاهم»): every conversation of the last two
+ * months, her reading of it, and what happens next — the follow-up and when,
+ * or why not. Read-only; the round is what acts.
+ */
+export async function followupPlan(userId: number, now = Date.now()) {
+  const { ladder, scope, style } = await ladderOf(userId);
+  const rungs = (ladder ?? LADDER.cold).length;
+  const rows = (await db.execute<any>(sql`
+    SELECT m.phone, max(m.created_at) FILTER (WHERE NOT m.from_me) AS last_in, max(m.created_at) FILTER (WHERE m.from_me) AS last_out,
+      r.label, r.score, r.summary, r.piece, r.reviewed_at,
+      (SELECT name FROM wa_conversations c WHERE c.user_id = m.user_id AND c.phone = m.phone LIMIT 1) AS name,
+      EXISTS (SELECT 1 FROM unsubscribed_phones u WHERE u.user_id = m.user_id AND right(regexp_replace(u.phone, '[^0-9]', '', 'g'), 9) = right(regexp_replace(split_part(m.phone, ':', 1), '[^0-9]', '', 'g'), 9) AND (u.expires_at IS NULL OR u.expires_at > now())) AS stopped,
+      (SELECT verdict FROM followup_deliberations d WHERE d.user_id = m.user_id AND d.phone = m.phone AND d.verdict IN ('pending','approved','sending') LIMIT 1) AS waiting
+    FROM wa_thread_messages m LEFT JOIN conversation_reviews r ON r.user_id = m.user_id AND r.phone = m.phone
+    WHERE m.user_id = ${userId} AND m.created_at > now() - interval '65 days'
+    GROUP BY m.phone, m.user_id, r.label, r.score, r.summary, r.piece, r.reviewed_at
+    ORDER BY max(m.created_at) DESC LIMIT 400`)).rows;
+  const taken = (await db.execute<{ phone: string; at: Date }>(sql`SELECT phone, created_at AS at FROM followup_deliberations
+    WHERE user_id = ${userId} AND step >= ${STEP_BASE} AND verdict IN ('send', 'drop') AND created_at > now() - interval '60 days'`)).rows;
+  const out = [];
+  for (const r of rows) {
+    const lastIn = r.last_in ? new Date(r.last_in).getTime() : 0, lastOut = r.last_out ? new Date(r.last_out).getTime() : 0;
+    const mine = taken.filter((t) => t.phone === r.phone && new Date(t.at).getTime() > lastIn).map((t) => new Date(t.at).getTime());
+    let status: string, next: number | null = null, follow = false;
+    if (r.stopped) status = "طلبت إيقاف الرسائل — لا تُتابَع أبداً";
+    else if (r.label && OUT_LABELS.includes(r.label)) status = `ريم: ${r.label === "machine" ? "رد آلي" : r.label === "refused" ? "رفضت" : "ليست زبونة"} — لا تُتابَع`;
+    else if (!lastIn && scope !== "all") status = "لم تكتب لنا — لا تُتابَع";
+    else if (lastIn > lastOut) status = "كتبت لنا آخر شيء — تنتظر رداً من المحل، لا متابعة";
+    else if (lastIn < now - 60 * 86_400_000) status = "آخر رسالة منها قبل أكثر من شهرين";
+    else if (r.waiting) status = r.waiting === "pending" ? "متابعة مكتوبة بانتظار موافقتك" : "متابعة معتمدة تنتظر دورها";
+    else if (mine.length >= rungs) status = `أخذت المتابعات ${rungs} كلها`;
+    else {
+      const l = ladder ?? LADDER.cold;
+      const base = Math.max(lastOut, ...mine);
+      next = base + l[mine.length]! * H; follow = true;
+      status = `المتابعة ${mine.length + 1} من ${rungs}`;
+    }
+    out.push({ phone: r.phone, name: r.name ?? null, label: r.label ?? null, score: r.score ?? null, summary: r.summary ?? null, piece: r.piece ?? null,
+      reviewed: !!r.reviewed_at, lastIn: r.last_in, lastOut: r.last_out, taken: mine.length, rungs, follow, next: next ? new Date(next).toISOString() : null, status });
+  }
+  const summary = { total: out.length, follow: out.filter((x) => x.follow).length, dueNow: out.filter((x) => x.follow && x.next && new Date(x.next).getTime() <= now).length, unreviewed: out.filter((x) => !x.reviewed).length, style };
+  return { summary, people: out.sort((a, b) => Number(b.follow) - Number(a.follow) || (a.next ?? "z").localeCompare(b.next ?? "z")) };
 }
 
 /** Whether these words, or nearly these, already went to this person in the last week. */

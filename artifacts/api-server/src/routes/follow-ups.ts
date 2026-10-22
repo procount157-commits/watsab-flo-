@@ -14,7 +14,7 @@ import { enrolLead, enrolGroup, cancelPendingFollowUps } from "../lib/follow-up-
 import { classify, classifyIntent, INTENT_LABELS_AR, type Intent } from "../lib/intent";
 import { logger } from "../lib/logger";
 import { receipt } from "../lib/graph/receipts";
-import { modeOf, runSmartFollowUps, STEP_BASE, pendingDrafts, approveDraft, rejectDraft, sendApprovedSoon } from "../lib/smart-followup";
+import { modeOf, runSmartFollowUps, STEP_BASE, pendingDrafts, approveDraft, rejectDraft, sendApprovedSoon, followupPlan } from "../lib/smart-followup";
 import { reviewAll } from "../lib/graph/review";
 
 const router = Router();
@@ -341,6 +341,9 @@ router.patch("/smart", async (req, res) => {
 });
 
 router.post("/smart/run", async (req, res) => res.json(await runSmartFollowUps(req.session.userId!)));
+
+// ريم's listing: every conversation, and who is to be followed when.
+router.get("/smart/plan", async (req, res) => res.json(await followupPlan(req.session.userId!)));
 
 // The owner's approval: one at a time (as written or edited), all at once, or no.
 router.post("/smart/:id/approve", async (req, res) => {

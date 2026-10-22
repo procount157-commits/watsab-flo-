@@ -91,6 +91,37 @@ function PendingCard({ r, onDone }: { r: Pending; onDone: () => void }) {
   );
 }
 
+function PlanList() {
+  const [show, setShow] = useState<"follow" | "not" | null>(null);
+  const { data, isLoading } = useQuery<{ summary: { total: number; follow: number; dueNow: number; unreviewed: number }; people: any[] }>({
+    queryKey: ["fu-plan"], queryFn: () => api("/api/follow-ups/smart/plan"), refetchInterval: 120_000,
+  });
+  if (isLoading || !data) return <div className="text-xs text-muted-foreground">ريم تجهّز القائمة…</div>;
+  const list = data.people.filter((p) => show === "follow" ? p.follow : show === "not" ? !p.follow : false);
+  return (
+    <div className="rounded-lg border border-border p-3 space-y-2 text-xs">
+      <div className="flex items-center gap-2 flex-wrap">
+        <p className="font-medium text-sm">قائمة ريم — كل محادثات آخر شهرين ({data.summary.total})</p>
+        <button onClick={() => setShow(show === "follow" ? null : "follow")} className={cn("px-2 py-1 rounded border", show === "follow" ? "border-primary text-primary" : "border-border")}>ستُتابَع: {data.summary.follow}</button>
+        <button onClick={() => setShow(show === "not" ? null : "not")} className={cn("px-2 py-1 rounded border", show === "not" ? "border-primary text-primary" : "border-border")}>لن تُتابَع: {data.summary.total - data.summary.follow}</button>
+        <span className="text-muted-foreground">مستحقة الآن: {data.summary.dueNow} · لم تصنّفها ريم بعد: {data.summary.unreviewed}</span>
+      </div>
+      {show && (
+        <div className="max-h-96 overflow-y-auto divide-y divide-card-border">
+          {list.map((p) => (
+            <div key={p.phone} className="py-1.5 flex items-start gap-2">
+              <span className="w-28 shrink-0 truncate">{p.name || "—"}</span>
+              <span dir="ltr" className="w-28 shrink-0 text-muted-foreground">+{String(p.phone).split(":")[0]}</span>
+              <span className="w-24 shrink-0">{p.label ? (LABEL_AR[p.label] ?? p.label) : "لم تُصنَّف"}</span>
+              <span className="flex-1 text-muted-foreground">{p.status}{p.next ? ` · ${new Date(p.next).getTime() <= Date.now() ? "مستحقة الآن" : when(p.next)}` : ""}{p.summary ? ` — ${p.summary}` : ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SmartFollowUps() {
   const qc = useQueryClient();
   const refresh = () => qc.invalidateQueries({ queryKey: ["fu-smart"] });
@@ -125,7 +156,7 @@ function SmartFollowUps() {
           <p className="font-semibold">🧠 المتابعة وإعادة الاستهداف — يكتبها خالد لكل عميل</p>
           <p className="text-xs text-muted-foreground mt-1 leading-relaxed max-w-2xl">
             يتابع من تكلّم معنا ثم سكت. ريم تقرأ المحادثة وتصنّفها قبل كل متابعة، ومن صنّفته رداً آلياً أو رافضاً أو ليس عميلاً لا يُتابَع.
-            كل رسالة تخرج من الحاجز التلقائي بسرعته وحدوده، وأي رد من العميل يعيد العدّ.
+            بين كل متابعة والتي بعدها دقيقة إلى دقيقتين، وكل رسالة تخرج من الحاجز التلقائي بسرعته وحدوده، وأي رد من العميل يعيد العدّ.
           </p>
         </div>
         <button onClick={() => run.mutate()} disabled={run.isPending || mode === "off"}
@@ -178,6 +209,8 @@ function SmartFollowUps() {
           {data?.review.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ListChecks className="w-3.5 h-3.5" />} {data?.review.running ? "ريم تقرأ…" : "ريم تقرأ كل المحادثات الآن"}
         </button>
       </div>
+
+      <PlanList />
 
       {(data?.pending?.length ?? 0) > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
