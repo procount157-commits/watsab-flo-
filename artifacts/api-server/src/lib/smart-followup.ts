@@ -191,6 +191,33 @@ export function followupLanguage(customerTexts: string[]): "ar" | "en" {
   return "ar";
 }
 
+/**
+ * How this one message opens and is built — so twenty customers on the same
+ * rung do not get one sentence (the first live round wrote «صباح الخير 🌸
+ * حبيت أطمّنك…» for ten of them). Picked from the person and the rung, so a
+ * retry of the same draft keeps its shape. Pure.
+ */
+export const OPENERS = ["هلا", "هلا والله", "أهلين", "حياك الله", "يا هلا", "مرحبا", "{وقت}", "{وقت} 🌸", "السلام عليكم", "هلا وغلا"];
+export const SHAPES = [
+  "ابدأ بما سألت عنه هي بكلماتها، ثم الدعوة للموقع.",
+  "ابدأ بسؤال قصير عنها (مناسبة؟ هدية؟ لبس يومي؟)، ثم الرابط في سطر لحاله.",
+  "جملة واحدة قصيرة فيها الدعوة والرابط، ثم سطر صغير يعرض المساعدة.",
+  "ابدأ بالرابط مع وصف قصير لما ستجده فيه، ثم اطلب منها ترسل صورة اللي يعجبها.",
+  "سطر دافئ عن تواصلها السابق، ثم الدعوة للموقع بصيغة اقتراح لا أمر.",
+  "اكتبها كأنك تذكرت شي يناسبها: «تذكرتك لما…» ثم الرابط.",
+];
+export function variety(phone: string, rung: number, hourDubai: number): { opener: string; shape: string } {
+  let h = rung * 7919;
+  for (const ch of String(phone)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const time = hourDubai < 12 ? "صباح الخير" : "مساء الخير";
+  return { opener: OPENERS[h % OPENERS.length]!.replace("{وقت}", time), shape: SHAPES[(h >>> 5) % SHAPES.length]! };
+}
+/** Word overlap with the links and the shop's site taken out: the shared link is not a shared text. Pure. */
+export const textOverlap = (a: string, b: string) => {
+  const strip = (x: string) => x.replace(/https?:\/\/\S+|www\.\S+|\b[\w-]+\.(io|com|ae|net)\S*/gi, " ");
+  return overlap(strip(a), strip(b));
+};
+
 /** The shop's site, the one link the sales style may carry. */
 export const shopSite = () => (process.env["FLORET_SITE_URL"] || "https://floret-royal.io").replace(/\/+$/, "");
 
@@ -405,6 +432,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
     sales ? SALES_VOICE : SERVICE_VOICE,
     `═══ زاوية هذه الرسالة ═══\n${angle}`,
     sales ? `رابط الموقع (الوحيد المسموح، انسخه كما هو): ${site}` : "",
+    (() => { const v = variety(phone, rung, Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Dubai", hour: "2-digit", hour12: false }).format(new Date()))); return lang === "ar" ? `═══ شكل هذه الرسالة بالذات ═══\nابدأ بـ«${v.opener}» (لا بغيرها). ${v.shape}\nلا تستعمل «حبيت أطمّنك» ولا «حبيت أطمّن».` : ""; })(),
     lang === "ar"
       ? `اكتب بالعربية فقط، بلهجة خليجية طبيعية — ولا كلمة إنجليزية${sales ? " غير الرابط" : ""}. إن كانت رسالتها الأولى «Hello! Can I get more info on this?» فتلك رسالة الإعلان الجاهزة لا لغتها. ${dialectLine(customerDialect)}`
       : "She writes to us in English herself, so write in natural, warm English.",
@@ -430,7 +458,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   }
   if (issues.length) return { send: false, text, reason: `أُوقفت: ${issues[0]}`, retry: true };
   if (earlier.find((e) => overlap(e, text) > 0.6)) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة", retry: true };
-  if (others.find((e) => overlap(e, text) > 0.75)) return { send: false, text, reason: "تشبه رسالة كُتبت لزبونة أخرى — تُكتب من جديد في الجولة القادمة", retry: true };
+  if (others.find((e) => textOverlap(e, text) > 0.75)) return { send: false, text, reason: "تشبه رسالة كُتبت لزبونة أخرى — تُكتب من جديد في الجولة القادمة", retry: true };
   return { send: true, text, reason: sales ? `جاهزة — أسلوب بيعي (${lang === "ar" ? "بالعربية" : "بالإنجليزية لأنها كتبت بها"})` : "جاهزة — أسلوب الخدمة فقط", photo: null };
 }
 

@@ -66,3 +66,16 @@ console.log(`followup-service: ${n}/${n} ✅`);
   t(SALES_ANGLE.length === 7 && af(0, 7, "jewelry", "sales") === SALES_ANGLE[0], "seven sales moments");
   console.log(`followup-sales: ${m}/${m} ✅`);
 }
+// Variety (2026-10-22): twenty customers on one rung do not open alike.
+{
+  const { variety, textOverlap, OPENERS, SHAPES } = await import("../smart-followup");
+  const phones = Array.from({ length: 20 }, (_, i) => `97150${(1000000 + i * 7919).toString().slice(0, 7)}:0`);
+  const openers = new Set(phones.map((p) => variety(p, 0, 10).opener)), shapes = new Set(phones.map((p) => variety(p, 0, 10).shape));
+  assert.ok(openers.size >= 5 && shapes.size >= 4, `twenty phones, ${openers.size} openers and ${shapes.size} shapes`);
+  assert.ok(variety("971501234567:0", 2, 10).opener === variety("971501234567:0", 2, 10).opener, "the same person and rung keep their shape");
+  assert.ok(variety("x", 0, 9).opener.includes("صباح") || !variety("x", 0, 9).opener.includes("مساء"), "morning in the morning");
+  assert.ok(OPENERS.length >= 8 && SHAPES.length >= 5, "enough to choose from");
+  const a = "هلا، عندنا قطع كثيرة في الموقع https://floret-royal.io", b = "مساء الخير، شوفي الموقع https://floret-royal.io/";
+  assert.ok(textOverlap(a, b) < 0.75, "the shared link does not make two texts one");
+  console.log("followup-variety: 5/5 ✅");
+}
