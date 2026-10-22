@@ -146,9 +146,10 @@ export async function discoverPosts(userId: number, p: SocialPlatform, force = f
   const a = await account(userId, p);
   const d = driverFor(p);
   const key = `${userId}:${p}`;
-  if (!a?.username || !d || (!force && Date.now() - (discovered.get(key) ?? 0) < 12 * 3_600_000)) return 0;
+  // Every three hours, the ten newest: a new post's comments are answered the same day without anyone choosing it (the owner, 2026-10-22).
+  if (!a?.username || !d || (!force && Date.now() - (discovered.get(key) ?? 0) < 3 * 3_600_000)) return 0;
   discovered.set(key, Date.now());
-  const posts = await d.myPosts(await pageFor(userId, a), a.username, 6).catch(() => []);
+  const posts = await d.myPosts(await pageFor(userId, a), a.username, 10).catch(() => []);
   let added = 0;
   for (const x of posts) {
     const r = await db.insert(socialPostsTable).values({ userId, platform: p, externalId: x.externalId, url: x.url }).onConflictDoNothing().returning({ id: socialPostsTable.id });
@@ -164,7 +165,7 @@ export async function collectComments(userId: number, p: SocialPlatform) {
   const d = driverFor(p);
   if (!a || !d) return { found: 0, fresh: 0 };
   const posts = await db.select().from(socialPostsTable).where(and(eq(socialPostsTable.userId, userId), eq(socialPostsTable.platform, p), eq(socialPostsTable.watching, true)))
-    .orderBy(desc(socialPostsTable.createdAt)).limit(8);
+    .orderBy(desc(socialPostsTable.createdAt)).limit(10);
   let found = 0, fresh = 0;
   const page = await pageFor(userId, a);
   for (const post of posts) {
@@ -319,6 +320,47 @@ export async function prepareOutreach(userId: number, p: SocialPlatform, opts: {
   return n;
 }
 
+/**
+ * A shop's follow-ups (the owner, 2026-10-22: «المتابعة على التيك توك بنفس
+ * الواتساب — الكلمات الممنوعة، الأسلوب، الرابط، الـ schedule»): every private
+ * thread where we spoke last, on the account's WhatsApp ladder (hours from
+ * our last message, ≤ 7 rungs), the batch at most, nothing while a draft
+ * waits in the thread.
+ */
+export async function prepareShopFollowups(userId: number, p: SocialPlatform, max = 5) {
+  const a = await account(userId, p);
+  if (!a) return 0;
+  const [prof] = (await db.execute<{ l: number[] | null; b: number | null }>(sql`SELECT followup_ladder AS l, followup_batch AS b FROM business_profile WHERE user_id = ${userId}`)).rows;
+  const ladder = Array.isArray(prof?.l) && prof!.l.length ? prof!.l.map(Number).filter((h) => h > 0).slice(0, 7) : [4, 24, 48, 72, 72, 72, 72];
+  const batch = Math.min(max, Math.max(1, Number(prof?.b ?? max)));
+  const threads = await db.select().from(socialThreadsTable).where(and(eq(socialThreadsTable.userId, userId), eq(socialThreadsTable.platform, p), ne(socialThreadsTable.status, "stopped"), eq(socialThreadsTable.lastFromThem, false)))
+    .orderBy(asc(socialThreadsTable.lastMessageAt)).limit(200);
+  let n = 0;
+  for (const t of threads) {
+    if (n >= batch) break;
+    const msgs = await db.select().from(socialMessagesTable).where(eq(socialMessagesTable.threadId, t.id)).orderBy(asc(socialMessagesTable.createdAt));
+    if (msgs.some((m) => m.fromMe && ["drafted", "approved"].includes(m.status))) continue;
+    const sent = msgs.filter((m) => !m.fromMe || m.status === "sent");
+    const lastThem = [...sent].reverse().find((m) => !m.fromMe);
+    const lastUs = [...sent].reverse().find((m) => m.fromMe);
+    if (!lastUs) continue;
+    if (lastThem && lastThem.createdAt.getTime() > (lastUs.sentAt ?? lastUs.createdAt).getTime()) continue;
+    const since = sent.filter((m) => m.fromMe && m.kind === "followup" && (!lastThem || m.createdAt.getTime() > lastThem.createdAt.getTime()));
+    const rung = since.length;
+    if (rung >= ladder.length) continue;
+    const base = (lastUs.sentAt ?? lastUs.createdAt).getTime();
+    if (Date.now() < base + ladder[rung]! * 3_600_000) continue;
+    const history = sent.map((m) => ({ fromMe: m.fromMe, text: m.text }));
+    const text = await agent.shopThreadFollowup(userId, p, t.displayName ?? t.handle, history, rung, ladder.length, since.map((m) => m.text));
+    if (!text) continue;
+    const status = await settle(userId, p, a, text, []);
+    await db.insert(socialMessagesTable).values({ userId, platform: p, threadId: t.id, fromMe: true, text, status, kind: "followup", role: roleOf(p, "followup") });
+    n++;
+  }
+  if (n) await activity(userId, p, "followup", "draft", `كتبت ${n} متابعة على جدول الواتساب${a.mode === "auto" ? "" : " — تنتظر موافقتك"}`);
+  return n;
+}
+
 /** The one follow-up, for whoever has not answered the first message. */
 export async function prepareFollowups(userId: number, p: SocialPlatform, max = 10) {
   const a = await account(userId, p);
@@ -358,7 +400,7 @@ export async function sendApproved(userId: number, p: SocialPlatform, max = 12):
   for (const { m, t } of replies) {
     if (sent >= max) break;
     const kind: ActionKind = m.kind === "followup" ? "followup" : "dm";
-    if (t.status === "stopped" || (m.kind === "followup" && (await stillSilent(userId, p, t.handle)) === false)) {
+    if (t.status === "stopped" || (m.kind === "followup" && (t.lastFromThem || (await stillSilent(userId, p, t.handle)) === false))) {
       await db.update(socialMessagesTable).set({ status: "skipped", error: "ردّ أو طلب التوقف قبل الإرسال" }).where(eq(socialMessagesTable.id, m.id));
       continue;
     }
@@ -448,7 +490,7 @@ export async function runRound(userId: number, p: SocialPlatform) {
     const processed = await processComments(userId, p);
     const inbox = await syncInbox(userId, p);
     const outreach = await prepareOutreach(userId, p);
-    const followups = await prepareFollowups(userId, p);
+    const followups = (await agent.shopMode(userId)) ? await prepareShopFollowups(userId, p) : await prepareFollowups(userId, p);
     const sent = await sendApproved(userId, p);
     await db.update(socialAccountsTable).set({ lastRunAt: new Date() }).where(and(eq(socialAccountsTable.userId, userId), eq(socialAccountsTable.platform, p)));
     return { guard, collected, processed, inbox, outreach, followups, sent };

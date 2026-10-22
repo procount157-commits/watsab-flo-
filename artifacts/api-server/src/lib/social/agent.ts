@@ -79,6 +79,35 @@ async function shopDmReply(userId: number, p: SocialPlatform, who: string, histo
   return null;
 }
 
+/**
+ * A shop's follow-up in a private thread that went quiet: the WhatsApp
+ * ladder's moment for this rung, built on their last question, the same
+ * voice, checks and site link.
+ */
+export async function shopThreadFollowup(userId: number, p: SocialPlatform, who: string, history: Array<{ fromMe: boolean; text: string }>, rung: number, rungs: number, earlier: string[]) {
+  const { SALES_ANGLE } = await import("../smart-followup");
+  const lang = followupLanguage(history.filter((m) => !m.fromMe).map((m) => m.text));
+  const last = herLast(history);
+  const site = shopSite();
+  const angle = rung >= rungs - 1 ? SALES_ANGLE[SALES_ANGLE.length - 1]! : SALES_ANGLE[Math.min(rung, SALES_ANGLE.length - 2)]!;
+  const rules = [
+    `أنت موظف في محل الذهب تكتب متابعة في رسائل ${PLATFORM[p].labelAr} الخاصة لشخص سكت بعد محادثته معنا.`,
+    SALES_VOICE,
+    `رابط الموقع (الوحيد المسموح، انسخه كما هو): ${site}`,
+    last.question ? `آخر سؤال سأله: «${last.question.slice(0, 200)}» — ابنِ المتابعة عليه. لا رقم ولا كلمة سعر، ولا وعد بتوفر أو توصيل («أتأكد لك وأرد عليك»).` : "",
+    `═══ زاوية هذه المتابعة (${rung + 1} من ${rungs}) ═══\n${angle}`,
+    earlier.length ? `ما قلناه له في المتابعات السابقة — اكتب شيئاً مختلفاً:\n${earlier.map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
+    langLine(lang), await guardrails(userId),
+    "اكتب الرسالة وحدها.",
+  ];
+  const convo = `المحادثة مع ${who} (الأقدم أولاً):\n${history.slice(-20).map((m) => `${m.fromMe ? "نحن" : who}: ${m.text}`).join("\n")}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const t = clean(await ask(userId, p, "followup", attempt ? [...rules, "المحاولة السابقة خالفت القواعد — بلا سعر ولا رقم ولا تحبّب ولا وعد ولا رابط غير الموقع."] : rules, convo), PLATFORM[p].firstContactMax);
+    if (t.length > 8 && !salesIssues(t, site, lang).length) return t;
+  }
+  return null;
+}
+
 /** A shop's first private message to someone who commented with interest: the site message. */
 async function shopFirstMessage(userId: number, p: SocialPlatform, t: TargetBrief, recent: string[]) {
   const site = shopSite();
