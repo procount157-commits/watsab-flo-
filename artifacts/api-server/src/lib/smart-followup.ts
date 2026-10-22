@@ -827,7 +827,8 @@ export async function correctSentFollowups(userId: number): Promise<number> {
     SELECT d.id, d.phone, d.draft,
       (SELECT t.message_id FROM wa_thread_messages t WHERE t.user_id = d.user_id AND t.phone = d.phone AND t.from_me AND t.text = d.draft ORDER BY t.created_at DESC LIMIT 1) AS message_id
     FROM followup_deliberations d
-    WHERE d.user_id = ${userId} AND d.executed AND d.created_at > now() - interval '50 hours' AND d.draft ~ 'هلا *و *غلا|حبيت *[أا]طم'`)).rows;
+    WHERE d.user_id = ${userId} AND d.executed AND d.created_at > now() - interval '50 hours' AND d.draft ~ 'هلا *و *غلا'`)).rows;
+  // Only the phrase the owner asked to correct in sent messages; «حبيت أطمّنك» is refused from now on, not recalled.
   if (!rows.length) return 0;
   const { deleteForEveryone } = await import("./whatsapp");
   let n = 0;
