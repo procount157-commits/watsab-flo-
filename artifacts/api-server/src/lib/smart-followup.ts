@@ -66,7 +66,8 @@ export const SHOP_LADDER = [1, 6, 24, 72, 168, 336, 720] as const;
 export const STEP_BASE = 100;
 const MAX_PER_RUN = 8;
 /** Between one follow-up and the next, whoever they go to: a minute or two, like a person (the owner, 2026-10-22). */
-export const FOLLOWUP_GAP_MS: [number, number] = [60_000, 120_000];
+// Two minutes, give or take ten seconds (the owner, 2026-10-22: «بينهم دقيقتين، ١٠ متابعات كل ساعة»).
+export const FOLLOWUP_GAP_MS: [number, number] = [110_000, 130_000];
 const followupPause = () => new Promise((r) => setTimeout(r, FOLLOWUP_GAP_MS[0] + Math.random() * (FOLLOWUP_GAP_MS[1] - FOLLOWUP_GAP_MS[0])));
 
 /** What each rung is for — so the four messages are four different messages. */
@@ -571,14 +572,17 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
     .where(and(eq(followupDeliberationsTable.userId, userId), inArray(followupDeliberationsTable.phone, phones), sql`${followupDeliberationsTable.step} >= ${STEP_BASE}`, gt(followupDeliberationsTable.createdAt, new Date(now - 60 * 86_400_000))));
 
   let ops: { ok: boolean; view: string } | null = null;
-  let left = mode === "live" ? Math.min(batch, await getDailyRemaining(userId).catch(() => 0)) : Infinity;
+  // The batch is an hourly ceiling: what went in the last hour counts against it, whichever round sent it.
+  const [{ n: lastHour } = { n: 0 }] = (await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM followup_deliberations WHERE user_id = ${userId} AND executed AND created_at > now() - interval '1 hour'`)).rows;
+  let left = mode === "live" ? Math.min(Math.max(0, batch - Number(lastHour)), await getDailyRemaining(userId).catch(() => 0)) : Infinity;
+  if (mode === "live" && left <= 0) return result;
   if (mode === "live") {
     const planOk = await assertCanSend(userId).then(() => true).catch(() => false);
     if (!planOk) return result;
   }
 
   for (const phone of phones) {
-    if (result.drafted >= batch) break;
+    if (result.drafted >= batch || (mode === "live" && left <= 0)) break;
     if (skip.has(phone) || waiting.has(phone)) continue;
     const turns = await thread(userId, phone);
     // A thread whose every word from them is a machine's is not a conversation.

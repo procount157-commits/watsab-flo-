@@ -33,7 +33,12 @@ import { logger } from "./logger";
  * feature is worse than useless. It is also outside ~/Documents, which the
  * launchd agent cannot read at all.
  */
-const PROFILE_ROOT = join(homedir(), "Library", "Application Support", "whatsapp-marketer", "browser");
+// On the server (2026-10-22) the profiles live on the data volume, so a redeploy does not sign everyone out.
+const PROFILE_ROOT = process.env["BROWSER_PROFILE_DIR"] || join(homedir(), "Library", "Application Support", "whatsapp-marketer", "browser");
+/** A server has no screen: a «visible» window is a headless one the owner sees as live pictures in the app. */
+const HAS_SCREEN = process.platform === "darwin" || process.platform === "win32" || !!process.env["DISPLAY"];
+/** Chromium in a container runs as root, and /dev/shm is small there. */
+const SERVER_ARGS = process.platform === "linux" ? ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"] : [];
 const profileDir = (userId: number, role: string) => {
   const dir = join(PROFILE_ROOT, String(userId), role.replace(/[^a-z0-9_-]/gi, ""));
   mkdirSync(dir, { recursive: true });
@@ -46,7 +51,33 @@ const CHROME_PATHS = [
   "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
   "/usr/bin/google-chrome",
   "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
 ];
+
+/** Whether this machine can show a window; on a server the sign-in is done through pictures. */
+export const hasScreen = () => HAS_SCREEN;
+
+/** The owner's own hand on a session with no window: a click at a point of the picture, keys, or a key. */
+export async function remoteClick(userId: number, role: string, x: number, y: number): Promise<void> {
+  const s = sessions.get(key(userId, role));
+  if (!s || s.page.isClosed()) throw new Error("لا توجد جلسة مفتوحة");
+  await s.page.mouse.click(Math.max(0, Math.min(1280, x)), Math.max(0, Math.min(820, y)));
+  s.lastUsedAt = new Date();
+}
+export async function remoteType(userId: number, role: string, text: string): Promise<void> {
+  const s = sessions.get(key(userId, role));
+  if (!s || s.page.isClosed()) throw new Error("لا توجد جلسة مفتوحة");
+  // Typed as keys and never stored or logged: what the owner types is theirs.
+  await s.page.keyboard.type(String(text).slice(0, 500), { delay: 40 });
+  s.lastUsedAt = new Date();
+}
+export async function remoteKey(userId: number, role: string, k: string): Promise<void> {
+  const s = sessions.get(key(userId, role));
+  if (!s || s.page.isClosed()) throw new Error("لا توجد جلسة مفتوحة");
+  if (!["Enter", "Backspace", "Tab", "Escape", "ArrowDown", "ArrowUp", "PageDown", "PageUp"].includes(k)) throw new Error("مفتاح غير مسموح");
+  await s.page.keyboard.press(k);
+  s.lastUsedAt = new Date();
+}
 
 function chromePath(): string | null {
   return process.env["CHROME_PATH"] ?? CHROME_PATHS.find((p) => existsSync(p)) ?? null;
@@ -87,7 +118,7 @@ async function getBrowser(): Promise<Browser> {
   browser = await chromium.launch({
     executablePath: exe,
     headless: true,
-    args: ["--disable-blink-features=AutomationControlled", "--no-first-run"],
+    args: ["--disable-blink-features=AutomationControlled", "--no-first-run", ...SERVER_ARGS],
   });
   logger.info({ exe }, "المتصفح الداخلي جاهز");
   return browser;
@@ -119,11 +150,11 @@ export async function openSession(
 
   const context = await chromium.launchPersistentContext(profileDir(userId, role), {
     executablePath: exe,
-    headless: !opts.visible,
+    headless: !(opts.visible && HAS_SCREEN),
     viewport: { width: 1280, height: 820 },
     locale: "ar-AE",
     timezoneId: "Asia/Dubai",
-    args: ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
+    args: ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check", ...SERVER_ARGS],
   });
 
   const page = context.pages()[0] ?? await context.newPage();

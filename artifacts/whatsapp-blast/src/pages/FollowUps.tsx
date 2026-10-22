@@ -190,12 +190,12 @@ function SmartFollowUps() {
           <p className="text-muted-foreground">كل متابعة تُحسب من الرسالة التي قبلها، والفاصل لا يتجاوز ٣ أيام.</p>
         </div>
         <div className="rounded-lg border border-border p-3 space-y-2">
-          <p className="font-medium">الحد في الجولة</p>
+          <p className="font-medium">الحد في الساعة</p>
           <div className="flex items-center gap-2">
             <input type="number" min={1} max={20} defaultValue={st?.batch ?? 8} key={st?.batch} onBlur={(e) => Number(e.target.value) !== st?.batch && patch.mutate({ batch: Number(e.target.value) })} className={cn(inputCls, "w-20")} />
-            <span className="text-muted-foreground">رسالة على الأكثر (حتى ٢٠)</span>
+            <span className="text-muted-foreground">متابعة في الساعة على الأكثر (حتى ٢٠)</span>
           </div>
-          <p className="text-muted-foreground">جولة كل ٢٠ دقيقة في ساعات الإرسال.</p>
+          <p className="text-muted-foreground">بين كل متابعة والتي بعدها دقيقتان، في ساعات الإرسال.</p>
         </div>
       </div>
 

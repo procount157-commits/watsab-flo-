@@ -55,6 +55,8 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-}
     volumes:
       - wam_media:/data
+    # Chromium's tabs share memory through /dev/shm; Docker's default 64 MB crashes them.
+    shm_size: "512mb"
     expose: ["8080"]
 
   web:

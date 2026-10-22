@@ -8,7 +8,7 @@ import {
   socialThreadsTable, socialMessagesTable, socialContentTable, socialActionsTable,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
-import { openSession, closeSession } from "../lib/browser-agent";
+import { openSession, closeSession, screenshot, remoteClick, remoteType, remoteKey, hasScreen } from "../lib/browser-agent";
 import { ACTION_KINDS, PLATFORM, isPlatform, postIdOf, type SocialPlatform } from "../lib/social/platforms";
 import { driverFor } from "../lib/social/drivers";
 import * as engine from "../lib/social/engine";
@@ -43,8 +43,29 @@ router.post("/:platform/login-window", async (req, res) => {
   try {
     const s = await openSession(uid(req), a.profile, { visible: true });
     await s.page.goto(p === "tiktok" ? `${PLATFORM[p].home}/login` : p === "instagram" ? `${PLATFORM[p].home}/accounts/login/` : `${PLATFORM[p].home}/login`, { waitUntil: "domcontentloaded", timeout: 40_000 });
-    res.json({ ok: true, note: "نافذة Chrome فُتحت على هذا الجهاز — سجّل دخولك بيدك ثم اضغط «افحص الحالة»" });
+    res.json({ ok: true, remote: !hasScreen(), profile: a.profile, note: hasScreen()
+      ? "نافذة Chrome فُتحت على هذا الجهاز — سجّل دخولك بيدك ثم اضغط «افحص الحالة»"
+      : "الصفحة مفتوحة على السيرفر وتظهر لك هنا — اختر تسجيل الدخول برمز QR وامسحه من تطبيق الجوال، ثم اضغط «افحص الحالة»" });
   } catch (e) { fail(res, e); }
+});
+// The sign-in on a server: the page as a picture, and the owner's clicks and keys sent to it.
+router.get("/:platform/remote/screen", async (req, res) => {
+  const a = await engine.account(uid(req), P(req));
+  const shot = a ? await screenshot(uid(req), a.profile) : null;
+  if (!shot) return res.status(404).json({ error: "لا توجد صفحة مفتوحة — اضغط «افتح نافذة تسجيل الدخول»" });
+  res.setHeader("Content-Type", "image/jpeg"); res.setHeader("Cache-Control", "no-store"); res.send(shot);
+});
+router.post("/:platform/remote/click", async (req, res) => {
+  const a = await engine.account(uid(req), P(req));
+  try { await remoteClick(uid(req), a!.profile, Number(req.body?.x), Number(req.body?.y)); res.json({ ok: true }); } catch (e) { fail(res, e); }
+});
+router.post("/:platform/remote/type", async (req, res) => {
+  const a = await engine.account(uid(req), P(req));
+  try { await remoteType(uid(req), a!.profile, String(req.body?.text ?? "")); res.json({ ok: true }); } catch (e) { fail(res, e); }
+});
+router.post("/:platform/remote/key", async (req, res) => {
+  const a = await engine.account(uid(req), P(req));
+  try { await remoteKey(uid(req), a!.profile, String(req.body?.key ?? "")); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });
 router.post("/:platform/check", async (req, res) => { try { res.json(await engine.guardCheck(uid(req), P(req))); } catch (e) { fail(res, e); } });
 router.delete("/:platform/window", async (req, res) => {

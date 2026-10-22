@@ -33,6 +33,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
+# The social team's browser (TikTok, Instagram) runs here on the server
+# (the owner, 2026-10-22), headless; the owner signs in through pictures of
+# the page in the app. Arabic and emoji fonts so the pages read right.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      chromium fonts-noto-core fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+ENV CHROME_PATH=/usr/bin/chromium
+ENV BROWSER_PROFILE_DIR=/data/browser
+
 ENV NODE_ENV=production
 ENV PORT=8080
 ENV MEDIA_DIR=/data/uploads
@@ -47,7 +56,7 @@ COPY --from=build /app/artifacts/api-server/node_modules ./artifacts/api-server/
 COPY --from=build /app/lib/db/migrations                ./migrations
 COPY --from=build /app/scripts/ops                      ./ops
 
-RUN mkdir -p /data/uploads
+RUN mkdir -p /data/uploads /data/browser
 VOLUME ["/data"]
 EXPOSE 8080
 
