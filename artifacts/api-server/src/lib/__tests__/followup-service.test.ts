@@ -112,3 +112,12 @@ console.log(`followup-service: ${n}/${n} ✅`);
   assert.ok(si("هلا، إذا تحتاجين شي إحنا موجودين").length === 0, "«هلا» alone is fine");
   console.log("followup-banned: 6/6 ✅");
 }
+// Correcting what went out (2026-10-22).
+{
+  const { withoutBanned, serviceIssues: si } = await import("../smart-followup");
+  const a = withoutBanned("هلا وغلا، عندنا قطع كثيرة على الموقع: https://floret-royal.io");
+  assert.ok(a === "هلا، عندنا قطع كثيرة على الموقع: https://floret-royal.io", a);
+  assert.ok(!si(withoutBanned("هلا و غلا، أتمنى تكونين بخير")).some((x) => x.includes("ممنوعة")), "the corrected text passes");
+  assert.ok(withoutBanned("مساء الخير، عندنا قطع") === "مساء الخير، عندنا قطع", "a clean text is unchanged");
+  console.log("followup-correct: 3/3 ✅");
+}

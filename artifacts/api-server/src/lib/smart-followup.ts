@@ -542,6 +542,8 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   const { ladder, scope, vertical, style, batch } = await ladderOf(userId);
   // A send claimed and never finished (a restart mid-send) goes back to the queue; alreadySent() stops a second copy.
   await db.execute(sql`UPDATE followup_deliberations SET verdict = 'approved' WHERE user_id = ${userId} AND verdict = 'sending' AND created_at < now() - interval '15 minutes'`).catch(() => {});
+  // A sent follow-up with a phrase the owner refused is corrected first.
+  if (getStatus(userId).connected) await correctSentFollowups(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "تصحيح المرسل تعذّر"));
   // A copy that reached someone twice is taken back first.
   if (getStatus(userId).connected) await recallDuplicateFollowups(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "فحص المكرر تعذّر"));
   // Approved drafts go first, through the firewall like any message.
@@ -801,6 +803,53 @@ export async function recallDuplicateFollowups(userId: number): Promise<number> 
       logger.info({ userId, phone: d.phone, messageId: d.message_id }, "حُذفت متابعة مكررة عند الطرفين");
       await new Promise((r) => setTimeout(r, 4_000));
     } catch (err: any) { logger.warn({ userId, phone: d.phone, err: String(err?.message ?? err).slice(0, 160) }, "حذف المكرر تعذّر"); }
+  }
+  return n;
+}
+
+/** The same words without a phrase the owner refused: «هلا وغلا» becomes «هلا». Pure. */
+export function withoutBanned(text: string): string {
+  return String(text ?? "")
+    .replace(/هلا\s*و\s*غلا/g, "هلا")
+    .replace(/حبيت\s*[أا]طم[ّ]?ن(ك|ج)?\s*(إن|ان)?\s*/g, "")
+    .replace(/^\s*[،,]\s*/, "").trim();
+}
+
+/**
+ * A follow-up that went out with a phrase the owner later refused (the owner,
+ * 2026-10-22: «عدّل الرسائل التي تم إرسالها»): WhatsApp edits only within
+ * fifteen minutes, so the old one is taken back for everyone and the same
+ * words, corrected, go in its place. Inside WhatsApp's recall window only,
+ * once per message.
+ */
+export async function correctSentFollowups(userId: number): Promise<number> {
+  const rows = (await db.execute<{ id: number; phone: string; draft: string; message_id: string | null }>(sql`
+    SELECT d.id, d.phone, d.draft,
+      (SELECT t.message_id FROM wa_thread_messages t WHERE t.user_id = d.user_id AND t.phone = d.phone AND t.from_me AND t.text = d.draft ORDER BY t.created_at DESC LIMIT 1) AS message_id
+    FROM followup_deliberations d
+    WHERE d.user_id = ${userId} AND d.executed AND d.created_at > now() - interval '50 hours' AND d.draft ~ 'هلا *و *غلا|حبيت *[أا]طم'`)).rows;
+  if (!rows.length) return 0;
+  const { deleteForEveryone } = await import("./whatsapp");
+  let n = 0;
+  for (const r of rows) {
+    const fixed = withoutBanned(r.draft);
+    if (!fixed || BANNED_PHRASES.test(fixed) || fixed === r.draft) continue;
+    try {
+      if (r.message_id) {
+        await deleteForEveryone(userId, r.phone, r.message_id);
+        await db.execute(sql`UPDATE wa_thread_messages SET text = ${"🚫 حُذفت: صُحّحت وأُعيد إرسالها"} WHERE user_id = ${userId} AND message_id = ${r.message_id}`);
+      }
+      await sendMessage(userId, r.phone, fixed, undefined, undefined, undefined, undefined, { kind: "followup" });
+      await db.execute(sql`UPDATE followup_deliberations SET draft = ${fixed}, reason = left(coalesce(reason, '') || ' — صُحّحت بعد إرسالها: حُذفت عبارة ممنوعة وأُعيدت', 1000) WHERE id = ${r.id}`);
+      receipt({ userId, node: FOLLOWUP_ROLE, graph: "whatsapp", action: "followup.corrected", status: "ok", subject: r.phone, why: "حُذفت عبارة رفضها صاحب العمل، وأُعيد إرسال النص مصحّحاً" });
+      logger.info({ userId, phone: r.phone }, "صُحّحت متابعة مرسلة");
+      n++;
+      await followupPause();
+    } catch (err: any) {
+      const m = String(err?.message ?? err);
+      logger.warn({ userId, phone: r.phone, err: m.slice(0, 160) }, "تصحيح متابعة مرسلة تعذّر");
+      if (m.startsWith("FIREWALL:")) break;
+    }
   }
   return n;
 }
