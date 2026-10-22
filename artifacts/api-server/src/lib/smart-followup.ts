@@ -218,6 +218,19 @@ export const textOverlap = (a: string, b: string) => {
   return overlap(strip(a), strip(b));
 };
 
+/**
+ * Her last words, and her last question (the owner, 2026-10-22: «يركز على
+ * آخر رد دائماً، وعلى آخر أسئلة الزبون»). The ad's prefilled text is not
+ * hers. Pure.
+ */
+const QUESTION = /[؟?]|^(كم|ممكن|هل|وين|فين|شو|ايش|إيش|متى|عندكم|عندك|في\s|فيه|بكم|كيف|ليش|أي|اي|how|what|where|when|is|do|can|price)/i;
+export function herLast(turns: Array<{ fromMe: boolean; text: string }>): { words: string | null; question: string | null } {
+  const hers = turns.filter((t) => !t.fromMe).map((t) => t.text.replace(AD_PREFILL, "").trim()).filter((t) => t.length > 1);
+  const words = hers.length ? hers.slice(-3).join(" / ") : null;
+  const question = [...hers].reverse().find((t) => QUESTION.test(t)) ?? null;
+  return { words, question };
+}
+
 /** The shop's site, the one link the sales style may carry. */
 export const shopSite = () => (process.env["FLORET_SITE_URL"] || "https://floret-royal.io").replace(/\/+$/, "");
 
@@ -423,6 +436,30 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
     db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
   ]);
   const customerDialect = dialectOf(turns.filter((t) => !t.fromMe).map((t) => t.text).join(" "), profile?.dialect ?? null);
+  // The whole conversation, not its tail: what she asked first can be what she still wants.
+  const whole = await thread(userId, phone, 40).catch(() => turns);
+  const last = herLast(whole);
+  // What the team learned from every chat this week (لطيفة's handbook), and ريم's reading of this one.
+  const [book] = (await db.execute<{ content: string }>(sql`SELECT content FROM agent_memory WHERE user_id = ${userId} AND role = ${FOLLOWUP_ROLE} AND kind = 'playbook' ORDER BY created_at DESC LIMIT 1`).catch(() => ({ rows: [] as Array<{ content: string }> }))).rows;
+  const [rv] = (await db.execute<any>(sql`SELECT label, summary, next_action, piece FROM conversation_reviews WHERE user_id = ${userId} AND phone = ${phone}`).catch(() => ({ rows: [] }))).rows;
+  const fullText = whole.map((t) => `${t.fromMe ? "نحن" : "الزبونة"}: ${t.text.slice(0, 300)}`).join("\n");
+  // First understand, then write: what she asked last, whether we answered it, what holds her back, what would help now.
+  const analysisOut = await complete([
+    { role: "system", content: [
+      "أنت محللة مبيعات في محل ذهب. تقرئين محادثة واتساب كاملة وتحللين الزبونة قبل أن نكتب لها متابعة.",
+      "ركّزي على آخر ما قالته هي وآخر سؤال سألته. رسالة الإعلان الجاهزة («Hello! Can I get more info on this?» أو «مرحبًا! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟») ليست كلامها.",
+      'أجيبي بـ JSON واحد فقط: {"last_question": "<آخر سؤال سألته بكلماتها، أو null>", "answered": <true|false: هل أجبناها عليه فعلاً>, "wants": "<ماذا تريد في سطر: القطعة/النوع/المناسبة>", "holding_back": "<ما الذي أوقفها على الأرجح: السعر، التردد، لم نرد، تبحث عن غيره… في سطر>", "best_next": "<أنسب شيء تقوله المتابعة لها الآن ليقربها من الشراء، دون سعر ولا وزن>"}',
+    ].join("\n") },
+    { role: "user", content: `${rv?.summary ? `قراءة ريم: ${rv.summary} — ${rv.next_action ?? ""}\n\n` : ""}المحادثة كاملة:\n${fullText}` },
+  ], 30_000).catch(() => null);
+  const { parseLoose } = await import("./loose-json");
+  const a: any = analysisOut?.text ? parseLoose(analysisOut.text) : null;
+  const analysis = a ? [
+    a.last_question ? `آخر سؤال سألته: «${String(a.last_question).slice(0, 200)}»${a.answered === false ? " — ولم نجبها عليه بعد" : ""}` : (last.question ? `آخر سؤال سألته: «${last.question.slice(0, 200)}»` : ""),
+    a.wants ? `ما تريده: ${String(a.wants).slice(0, 200)}` : "",
+    a.holding_back ? `ما أوقفها على الأرجح: ${String(a.holding_back).slice(0, 200)}` : "",
+    a.best_next ? `الأنسب الآن: ${String(a.best_next).slice(0, 240)}` : "",
+  ].filter(Boolean).join("\n") : (last.question ? `آخر سؤال سألته: «${last.question.slice(0, 200)}»` : "");
   // What went, or waits, to other customers in the last two days: this one must not read like them.
   const others = (await db.execute<{ draft: string }>(sql`SELECT draft FROM followup_deliberations WHERE user_id = ${userId} AND phone <> ${phone}
     AND verdict IN ('pending', 'approved', 'send') AND coalesce(draft, '') <> '' AND created_at > now() - interval '48 hours' ORDER BY created_at DESC LIMIT 25`)).rows.map((r) => r.draft);
@@ -430,7 +467,9 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
     `اسمك ${me?.name ?? "خالد"}، تعمل في ${profile?.name ?? "المحل"}. تكتب رسالة متابعة واحدة لزبونة سكتت بعد محادثتها معنا.`,
     others.length ? `═══ رسائل كُتبت لزبونات أخريات — لا تشبهها في الكلمات ولا في البناء ═══\n${others.slice(0, 8).map((e) => `- ${e}`).join("\n")}` : "",
     sales ? SALES_VOICE : SERVICE_VOICE,
-    `═══ زاوية هذه الرسالة ═══\n${angle}`,
+    analysis || last.words ? `═══ تحليل محادثتها — ابنِ رسالتك عليه أولاً ═══\n${analysis}${last.words ? `\nآخر ما كتبته هي: «${last.words.slice(0, 300)}»` : ""}\nرسالتك ترد على آخر ما قالته وآخر سؤال سألته، بطريقة تخصها هي — لا كلاماً عاماً يصلح لأي زبونة. إن كان سؤالها عن السعر أو الوزن فلا تذكر أي رقم ولا كلمة سعر: قل إن تفاصيل القطعة وصورها كلها في الموقع، أو اعرض أن تساعدها تختار.` : "",
+    book?.content ? `═══ ما تعلّمه الفريق من كل محادثات المحل هذا الأسبوع ═══\n${book.content.slice(0, 1500)}` : "",
+    `═══ زاوية احتياطية لهذه الدرجة (إن لم يكن عندها سؤال مفتوح) ═══\n${angle}`,
     sales ? `رابط الموقع (الوحيد المسموح، انسخه كما هو): ${site}` : "",
     (() => { const v = variety(phone, rung, Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Dubai", hour: "2-digit", hour12: false }).format(new Date()))); return lang === "ar" ? `═══ شكل هذه الرسالة بالذات ═══\nابدأ بـ«${v.opener}» (لا بغيرها). ${v.shape}\nلا تستعمل «حبيت أطمّنك» ولا «حبيت أطمّن».` : ""; })(),
     lang === "ar"
@@ -440,7 +479,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
     earlier.length ? `═══ ما قلناه لها في المتابعات السابقة — اكتب شيئاً مختلفاً ═══\n${earlier.map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
     "أعد نص الرسالة وحده، بلا علامات اقتباس ولا شرح.",
   ].filter(Boolean).join("\n\n");
-  const transcript = turns.slice(-8).map((t) => `${t.fromMe ? "نحن" : "الزبونة"}: ${t.text.slice(0, 300)}`).join("\n");
+  const transcript = whole.slice(-14).map((t) => `${t.fromMe ? "نحن" : "الزبونة"}: ${t.text.slice(0, 300)}`).join("\n");
   const clean = (x?: string | null) => (x ?? "").trim().replace(/^["«“]+|["»”]+$/g, "").trim();
   const out = await complete([{ role: "system", content: system }, { role: "user", content: `${timeNote()}\n\nآخر المحادثة:\n${transcript}\n\nاكتب ${angle.split(" — ")[0]}.` }], 30_000);
   let text = clean(out?.text);
@@ -459,7 +498,8 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   if (issues.length) return { send: false, text, reason: `أُوقفت: ${issues[0]}`, retry: true };
   if (earlier.find((e) => overlap(e, text) > 0.6)) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة", retry: true };
   if (others.find((e) => textOverlap(e, text) > 0.75)) return { send: false, text, reason: "تشبه رسالة كُتبت لزبونة أخرى — تُكتب من جديد في الجولة القادمة", retry: true };
-  return { send: true, text, reason: sales ? `جاهزة — أسلوب بيعي (${lang === "ar" ? "بالعربية" : "بالإنجليزية لأنها كتبت بها"})` : "جاهزة — أسلوب الخدمة فقط", photo: null };
+  const focus = a?.last_question ? ` — ترد على: «${String(a.last_question).slice(0, 80)}»` : last.question ? ` — ترد على: «${last.question.slice(0, 80)}»` : "";
+  return { send: true, text, reason: (sales ? `جاهزة — أسلوب بيعي (${lang === "ar" ? "بالعربية" : "بالإنجليزية لأنها كتبت بها"})` : "جاهزة — أسلوب الخدمة فقط") + focus, photo: null };
 }
 
 async function record(userId: number, phone: string, rung: number, verdict: "send" | "hold" | "drop" | "pending", reason: string, draft: string | null, executed: boolean, opsView: string) {

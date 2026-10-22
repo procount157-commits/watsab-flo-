@@ -79,3 +79,16 @@ console.log(`followup-service: ${n}/${n} ✅`);
   assert.ok(textOverlap(a, b) < 0.75, "the shared link does not make two texts one");
   console.log("followup-variety: 5/5 ✅");
 }
+// Her last words and her last question (2026-10-22).
+{
+  const { herLast } = await import("../smart-followup");
+  const t = (fromMe: boolean, text: string) => ({ fromMe, text });
+  const a = herLast([t(false, "Hello! Can I get more info on this?"), t(true, "هلا، نعم"), t(false, "كم وزن الطقم؟"), t(true, "تفاصيله في الموقع"), t(false, "طيب")]);
+  assert.ok(a.question === "كم وزن الطقم؟", `her last question: ${a.question}`);
+  assert.ok(a.words?.includes("طيب") && !a.words?.includes("Can I get"), "her last words, without the ad's prefill");
+  const b = herLast([t(false, "Hello! Can I get more info on this?")]);
+  assert.ok(b.question === null && b.words === null, "the ad's prefill alone is not a question of hers");
+  const c = herLast([t(false, "عندكم خواتم بنات")]);
+  assert.ok(c.question === "عندكم خواتم بنات", "«عندكم…» without a question mark is still a question");
+  console.log("followup-last: 4/4 ✅");
+}
