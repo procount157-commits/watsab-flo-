@@ -14,7 +14,7 @@ import { enrolLead, enrolGroup, cancelPendingFollowUps } from "../lib/follow-up-
 import { classify, classifyIntent, INTENT_LABELS_AR, type Intent } from "../lib/intent";
 import { logger } from "../lib/logger";
 import { receipt } from "../lib/graph/receipts";
-import { modeOf, runSmartFollowUps, STEP_BASE, pendingDrafts, approveDraft, rejectDraft, sendApprovedSoon, followupPlan } from "../lib/smart-followup";
+import { modeOf, runSmartFollowUps, STEP_BASE, pendingDrafts, approveDraft, rejectDraft, sendApprovedSoon, followupPlan, requestFollowNow } from "../lib/smart-followup";
 import { reviewAll } from "../lib/graph/review";
 
 const router = Router();
@@ -344,6 +344,13 @@ router.post("/smart/run", async (req, res) => res.json(await runSmartFollowUps(r
 
 // ريم's listing: every conversation, and who is to be followed when.
 router.get("/smart/plan", async (req, res) => res.json(await followupPlan(req.session.userId!)));
+
+// «تابع هذا الرقم الآن»: the next rung for one person, written and sent now through every rule.
+router.post("/smart/now", async (req, res) => {
+  const r = await requestFollowNow(req.session.userId!, String((req.body as any)?.phone ?? ""));
+  if (!r.ok) return res.status(400).json({ error: r.why });
+  res.json(r);
+});
 
 // The owner's approval: one at a time (as written or edited), all at once, or no.
 router.post("/smart/:id/approve", async (req, res) => {

@@ -113,6 +113,8 @@ function PlanList() {
               <span className="w-28 shrink-0 truncate">{p.name || "—"}</span>
               <span dir="ltr" className="w-28 shrink-0 text-muted-foreground">+{String(p.phone).split(":")[0]}</span>
               <span className="w-24 shrink-0">{p.label ? (LABEL_AR[p.label] ?? p.label) : "لم تُصنَّف"}</span>
+              <button onClick={() => confirm(`إرسال متابعة الآن لـ ${p.name || p.phone.split(":")[0]}؟`) && api("/api/follow-ups/smart/now", { method: "POST", body: JSON.stringify({ phone: p.phone }) }).then(() => toast.success("خالد يكتبها الآن")).catch((e: any) => toast.error(e.message))}
+                className="shrink-0 px-2 py-0.5 rounded border border-border hover:border-primary/40 text-[11px]">تابع الآن</button>
               <span className="flex-1 text-muted-foreground">{p.status}{p.next ? ` · ${new Date(p.next).getTime() <= Date.now() ? "مستحقة الآن" : when(p.next)}` : ""}{p.summary ? ` — ${p.summary}` : ""}</span>
             </div>
           ))}

@@ -545,6 +545,8 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   await db.execute(sql`UPDATE followup_deliberations SET verdict = 'approved' WHERE user_id = ${userId} AND verdict = 'sending' AND created_at < now() - interval '15 minutes'`).catch(() => {});
   // A sent follow-up with a phrase the owner refused is corrected first.
   if (getStatus(userId).connected) await correctSentFollowups(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "تصحيح المرسل تعذّر"));
+  // «Follow this one now» from the owner, before anything else this round.
+  await followNowRequests(userId, mode).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "متابعة «الآن» تعذّرت"));
   // A copy that reached someone twice is taken back first.
   if (getStatus(userId).connected) await recallDuplicateFollowups(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "فحص المكرر تعذّر"));
   // Approved drafts go first, through the firewall like any message.
@@ -857,6 +859,52 @@ export async function correctSentFollowups(userId: number): Promise<number> {
     }
   }
   return n;
+}
+
+/**
+ * «تابع هذا الرقم الآن» (the owner, 2026-10-22): the next rung for one
+ * person, written now whatever the ladder's clock says, with every other
+ * rule as it is — the writer, the checks, the gate, the stop list. In
+ * «approve» it waits for the owner like any draft.
+ */
+export async function requestFollowNow(userId: number, phone: string): Promise<{ ok: boolean; phone?: string; why?: string }> {
+  const key = String(phone).replace(/\D/g, "").slice(-9);
+  if (key.length < 9) return { ok: false, why: "رقم غير صحيح" };
+  const [t] = (await db.execute<{ phone: string }>(sql`SELECT phone FROM wa_thread_messages WHERE user_id = ${userId}
+    AND right(regexp_replace(split_part(phone, ':', 1), '[^0-9]', '', 'g'), 9) = ${key} ORDER BY created_at DESC LIMIT 1`)).rows;
+  if (!t) return { ok: false, why: "لا محادثة مع هذا الرقم" };
+  await db.execute(sql`DELETE FROM followup_deliberations WHERE user_id = ${userId} AND phone = ${t.phone} AND verdict = 'force'`);
+  await db.insert(followupDeliberationsTable).values({ userId, phone: t.phone, step: STEP_BASE, verdict: "force", reason: "طلبها صاحب العمل الآن", managerView: "صاحب العمل", opsView: "", draft: null, executed: false });
+  void runSmartFollowUps(userId).catch(() => {});
+  return { ok: true, phone: t.phone };
+}
+
+async function followNowRequests(userId: number, mode: Mode) {
+  const rows = (await db.execute<{ id: number; phone: string }>(sql`SELECT id, phone FROM followup_deliberations WHERE user_id = ${userId} AND verdict = 'force' ORDER BY created_at LIMIT 5`)).rows;
+  if (!rows.length) return;
+  const { ladder, vertical, style } = await ladderOf(userId);
+  const rungs = (ladder ?? LADDER.cold).length;
+  for (const r of rows) {
+    const turns = await thread(userId, r.phone, 40);
+    const lastIn = [...turns].reverse().find((t) => !t.fromMe)?.at.getTime() ?? 0;
+    const sentSince = (await db.execute<{ draft: string | null }>(sql`SELECT draft FROM followup_deliberations WHERE user_id = ${userId} AND phone = ${r.phone}
+      AND executed AND created_at > ${new Date(lastIn)} ORDER BY created_at`)).rows.map((x) => x.draft ?? "").filter(Boolean);
+    const rung = Math.min(sentSince.length, rungs - 1);
+    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, r.phone, turns, rung, sentSince, rungs, vertical, style));
+    const done = async (verdict: string, reason: string, draft: string | null, executed: boolean) =>
+      db.execute(sql`UPDATE followup_deliberations SET verdict = ${verdict}, step = ${STEP_BASE + rung}, reason = ${reason.slice(0, 1000)}, draft = ${draft}, executed = ${executed}, created_at = now() WHERE id = ${r.id}`);
+    if (!d.send || !d.text) { await done("drop", `«تابع الآن»: ${d.reason}`, d.text, false); continue; }
+    if (mode !== "live") { await done("pending", `«تابع الآن» — ${d.reason} — بانتظار موافقتك`, d.text, false); continue; }
+    if (await alreadySent(userId, r.phone, d.text)) { await done("drop", "«تابع الآن»: النص نفسه وصلها من قبل", d.text, false); continue; }
+    try {
+      await sendMessage(userId, r.phone, d.text, undefined, undefined, undefined, undefined, { kind: "followup" });
+      await done("send", `«تابع الآن» — ${d.reason}`, d.text, true);
+      receipt({ userId, node: FOLLOWUP_ROLE, graph: "whatsapp", action: "followup.sent", status: "ok", subject: r.phone, why: "متابعة طلبها صاحب العمل الآن" });
+      logger.info({ userId, phone: r.phone, rung: rung + 1 }, "متابعة «الآن» أُرسلت");
+    } catch (err: any) {
+      await done("drop", `«تابع الآن» لم تُرسل: ${String(err?.message ?? err).slice(0, 200)}`, d.text, false);
+    }
+  }
 }
 
 /** Sending what the owner just approved, without holding the request open. */
