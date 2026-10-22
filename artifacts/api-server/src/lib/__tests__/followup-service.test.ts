@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 const { serviceIssues, SERVICE_ANGLE, angleFor, dueRung } = await import("../smart-followup");
 let n = 0; const ok = (c: boolean, m: string) => { assert.ok(c, m); n++; };
 
-for (const t of ["مساء الخير، إذا احتجتي أي شي أو عندك سؤال، إحنا موجودين 🌸", "هلا، حبيت أطمّن إذا كل شي واضح عندك، وإذا تحتاجين مساعدة قوليلي"])
+for (const t of ["مساء الخير، إذا احتجتي أي شي أو عندك سؤال، إحنا موجودين 🌸", "هلا، إذا كل شي واضح عندك تمام، وإذا تحتاجين مساعدة قوليلي"])
   ok(serviceIssues(t).length === 0, `«${t.slice(0, 30)}…» passes`);
 ok(serviceIssues("هلا حبيبتي، نحن في الخدمة").includes("فيها كلمة تحبّب"), "حبيبتي is refused");
 ok(serviceIssues("هلا يا قلبي").length > 0 && serviceIssues("هلا صاحبتي").length > 0, "قلبي and صاحبتي are refused");
@@ -102,4 +102,13 @@ console.log(`followup-service: ${n}/${n} ✅`);
   assert.ok(hl([{ fromMe: false, text: "مرحبًا! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟" }]).question === null, "the Arabic prefill with tanween is not her question");
   assert.ok(fl(["مرحبًا! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟"]) === "ar", "and not a language change");
   console.log("followup-promises: 7/7 ✅");
+}
+// «هلا وغلا» refused by the owner (2026-10-22).
+{
+  const { serviceIssues: si, salesIssues: sa, OPENERS: op } = await import("../smart-followup");
+  assert.ok(!op.some((o) => /هلا\s*و\s*غلا/.test(o)), "no longer an opener");
+  for (const t of ["هلا وغلا، عندنا قطع كثيرة", "هلا و غلا 🌸", "حبيت أطمنك إذا تحتاجين شي"]) assert.ok(si(t).some((x) => x.includes("ممنوعة")), `«${t}» refused`);
+  assert.ok(sa("هلا وغلا https://floret-royal.io", "https://floret-royal.io").some((x) => x.includes("ممنوعة")), "refused in the sales style too");
+  assert.ok(si("هلا، إذا تحتاجين شي إحنا موجودين").length === 0, "«هلا» alone is fine");
+  console.log("followup-banned: 6/6 ✅");
 }
