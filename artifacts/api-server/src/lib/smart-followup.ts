@@ -180,7 +180,7 @@ export const SALES_VOICE = [
 ].join("\n");
 
 /** The prefilled text a Meta click-to-WhatsApp ad puts in the customer's mouth, in any of its languages. */
-const AD_PREFILL = /^\s*(hello!?\s*can\s+i\s+get\s+more\s+info(rmation)?\s+on\s+this\??|مرحب[اًٌٍ]*!?\s*هل\s*يمكنني\s*الحصول\s*على\s*مزيد\s*من\s*ال?\s*معلومات\s*حول\s*هذا\s*[؟?]?|سلام!?\s*می.?\s*توانم[^؟?]*[؟?]?)/i;
+const AD_PREFILL = /^\s*(hello!?\s*can\s+i\s+get\s+more\s+info(rmation)?\s+on\s+this\??|مرحب[اًٌٍ]*!?\s*هل\s*يمكنني\s*الحصول\s*على\s*مزيد\s*من\s*ال?\s*معلومات\s*حول\s*هذا\s*[؟?]?|سلام!?\s*می.?\s*توانم[^؟?]*[؟?]?|bonjour\s*!?\s*puis-je\s+en\s+savoir\s+plus[^?]*\??|hola!?\s*¿?puedo\s+obtener\s+m[áa]s\s+informaci[óo]n[^?]*\??)/i;
 
 /**
  * The language to write in (the owner, 2026-10-21): Arabic always — unless
@@ -433,9 +433,9 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
  * nothing to add, so nothing can be invented — and the code check refuses
  * an endearment, a number, a price word or a link even if he writes one.
  */
-async function composeService(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs: number, style = "service"): Promise<Draft> {
+async function composeService(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs: number, style = "service", angleOverride?: string): Promise<Draft> {
   const sales = style === "sales";
-  const angle = angleFor(rung, rungs, null, style);
+  const angle = angleOverride ?? angleFor(rung, rungs, null, style);
   const lang = followupLanguage(turns.filter((t) => !t.fromMe).map((t) => t.text));
   const site = shopSite();
   const check = (x: string) => sales ? salesIssues(x, site, lang) : [...serviceIssues(x), ...(lang === "ar" && /[A-Za-z]{3,}/.test(x) ? ["فيها كلام بالإنجليزية والزبونة تُكتب لها بالعربية"] : [])];
@@ -545,6 +545,8 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   await db.execute(sql`UPDATE followup_deliberations SET verdict = 'approved' WHERE user_id = ${userId} AND verdict = 'sending' AND created_at < now() - interval '15 minutes'`).catch(() => {});
   // A sent follow-up with a phrase the owner refused is corrected first.
   if (getStatus(userId).connected) await correctSentFollowups(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "تصحيح المرسل تعذّر"));
+  // Whoever wrote and was never answered — the ad's first message above all (the owner, 2026-10-26).
+  if (mode === "live" && (style === "sales" || style === "service")) await firstReplies(userId, style).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "الرد الأول تعذّر"));
   // «Follow this one now» from the owner, before anything else this round.
   await followNowRequests(userId, mode).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "متابعة «الآن» تعذّرت"));
   // A copy that reached someone twice is taken back first.
@@ -554,7 +556,7 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   // The shop's styles follow every customer of the last two months, a few at a time (the owner, 2026-10-22).
   const wide = style === "sales" || style === "service";
   // ريم keeps the listing current: up to ten conversations that moved since her last reading, every round.
-  if (wide) { const { reviewAll } = await import("./graph/review"); await reviewAll(userId, { onlyStale: true, limit: 10 }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "قراءة ريم تعذّرت")); }
+  if (wide) { const { reviewAll } = await import("./graph/review"); await reviewAll(userId, { onlyStale: true, limit: 30 }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "قراءة ريم تعذّرت")); }
   const phones = await candidates(userId, scope, wide ? 60 : 30);
   if (!phones.length) return result;
 
@@ -905,6 +907,48 @@ async function followNowRequests(userId: number, mode: Mode) {
       await done("drop", `«تابع الآن» لم تُرسل: ${String(err?.message ?? err).slice(0, 200)}`, d.text, false);
     }
   }
+}
+
+/**
+ * The first answer (the owner, 2026-10-26: «رسائل بتجي أول مرة من الإعلان وهو
+ * ما قاعد يرد عليها — لازم يرد»): a conversation where she wrote and nobody
+ * from the shop ever did. A welcome, a question about the piece she saw in
+ * the ad, and the site — the follow-up's voice, checks and gate; ten a round
+ * at most, two minutes apart, newest first; a person who picks the thread up
+ * first wins.
+ */
+export const FIRST_ANGLE = "الرد الأول — هي كتبت لنا (غالباً من الإعلان) ولم يرد عليها أحد بعد: ترحيب قصير، ثم سؤال لطيف عن القطعة أو التصميم اللي عجبها في الإعلان، ثم رابط الموقع لتشوف كل القطع بصورها، واطلب ترسل صورة اللي يعجبها.";
+async function firstReplies(userId: number, style: string, max = 10) {
+  const rows = (await db.execute<{ phone: string }>(sql`
+    SELECT phone FROM wa_thread_messages WHERE user_id = ${userId} GROUP BY phone
+    HAVING count(*) FILTER (WHERE from_me) = 0 AND max(created_at) FILTER (WHERE NOT from_me) > now() - interval '7 days'
+      AND max(created_at) < now() - interval '3 minutes'
+    ORDER BY max(created_at) DESC LIMIT ${max}`)).rows;
+  let n = 0;
+  for (const r of rows) {
+    if (await isHumanHeld(userId, r.phone).catch(() => false)) continue;
+    const [already] = (await db.execute(sql`SELECT 1 FROM followup_deliberations WHERE user_id = ${userId} AND phone = ${r.phone} AND step = ${STEP_BASE - 1} AND verdict = 'send' LIMIT 1`)).rows;
+    if (already) continue;
+    const turns = await thread(userId, r.phone, 20);
+    if (!turns.length || turns.some((t) => t.fromMe)) continue;
+    const d = await asAgent(userId, FOLLOWUP_ROLE, () => composeService(userId, r.phone, turns, 0, [], 7, style, FIRST_ANGLE));
+    const record1 = (verdict: string, reason: string, draft: string | null, executed: boolean) =>
+      db.insert(followupDeliberationsTable).values({ userId, phone: r.phone, step: STEP_BASE - 1, verdict, reason: reason.slice(0, 1000), managerView: "الرد الأول", opsView: "", draft, executed });
+    if (!d.send || !d.text) { await record1("hold", `الرد الأول: ${d.reason}`, d.text, false); continue; }
+    try {
+      await sendMessage(userId, r.phone, d.text, undefined, undefined, undefined, undefined, { kind: "reply" });
+      await record1("send", `الرد الأول — ${d.reason}`, d.text, true);
+      receipt({ userId, node: FOLLOWUP_ROLE, graph: "whatsapp", action: "followup.first_reply", status: "ok", subject: r.phone, why: "رد أول على من كتب ولم يُرد عليه" });
+      n++;
+      await followupPause();
+    } catch (err: any) {
+      const m = String(err?.message ?? err);
+      logger.warn({ userId, phone: r.phone, err: m.slice(0, 160) }, "الرد الأول لم يُرسل");
+      if (m.startsWith("FIREWALL:")) break;
+    }
+  }
+  if (n) logger.info({ userId, n }, "خالد رد على رسائل أول مرة");
+  return n;
 }
 
 /** Sending what the owner just approved, without holding the request open. */

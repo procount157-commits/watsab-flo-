@@ -121,3 +121,11 @@ console.log(`followup-service: ${n}/${n} ✅`);
   assert.ok(withoutBanned("مساء الخير، عندنا قطع") === "مساء الخير، عندنا قطع", "a clean text is unchanged");
   console.log("followup-correct: 3/3 ✅");
 }
+// The ad's prefill in French or Spanish is not her language (2026-10-26).
+{
+  const { followupLanguage: fl2, herLast: hl2 } = await import("../smart-followup");
+  assert.ok(fl2(["Bonjour ! Puis-je en savoir plus à ce sujet ?"]) === "ar", "French prefill → Arabic");
+  assert.ok(fl2(["Hola! ¿Puedo obtener más información sobre esto?"]) === "ar", "Spanish prefill → Arabic");
+  assert.ok(hl2([{ fromMe: false, text: "Bonjour ! Puis-je en savoir plus à ce sujet ?" }]).question === null, "and not her question");
+  console.log("followup-prefill: 3/3 ✅");
+}
