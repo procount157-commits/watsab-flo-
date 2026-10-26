@@ -206,13 +206,16 @@ export async function vetList(userId: number, groupId: number, trigger: Trigger,
   const hist = await history(userId, targets.map((c) => key9(c.phone)).filter(Boolean));
 
   // Who still needs WhatsApp's word: a valid mobile with no hard no, never answered or answered long ago.
+  // What the earlier list check already learned from WhatsApp: «active» was confirmed, «invalid» was not on it.
+  const known = (c: typeof all[number]): boolean | null => c.waExists ?? (c.status === "active" ? true : c.status === "invalid" ? false : null);
   const ask = targets.filter((c) => {
     const p = norm.get(c.id); const h = hist.get(key9(c.phone));
     if (!p || p.mobile === false || looksFake(p.e164) || dupIds.has(c.id) || h?.blacklisted || h?.previouslyNotOnWa) return false;
-    return c.waExists === null || c.waExists === undefined || !c.vettedAt || Date.now() - c.vettedAt.getTime() > RECHECK_DAYS * 86_400_000;
+    return known(c) === null || (c.vettedAt && Date.now() - c.vettedAt.getTime() > RECHECK_DAYS * 86_400_000 && c.waExists !== null && c.waExists !== undefined);
   });
   const answers = new Map<string, boolean | null>();
   let checked = 0, unknown = 0;
+  if (ask.length && !getStatus(userId)?.connected) logger.info({ userId, groupId, waiting: ask.length }, "سيف: واتساب غير متصل الآن — الأرقام غير المفحوصة تنتظر");
   if (ask.length && getStatus(userId)?.connected) {
     const room = Math.min(ask.length, lookupRoom(userId));
     const phones = [...new Set(ask.slice(0, room).map((c) => c.phone))];
@@ -228,7 +231,7 @@ export async function vetList(userId: number, groupId: number, trigger: Trigger,
   for (const c of targets) {
     if (opts.info && opts.info.running === false) break;
     const p = norm.get(c.id); const h = hist.get(key9(c.phone));
-    const waExists = answers.has(c.phone) ? answers.get(c.phone)! : (c.waExists ?? null);
+    const waExists = answers.has(c.phone) ? answers.get(c.phone)! : known(c);
     const f: Facts = {
       phone: c.phone, valid: !!p, mobile: p?.mobile ?? null, iso: p?.iso ?? null, listIso, foreignAllowed: !!opts.foreignAllowed,
       fake: p ? looksFake(p.e164) : false, duplicate: dupIds.has(c.id), blacklisted: !!h?.blacklisted,
