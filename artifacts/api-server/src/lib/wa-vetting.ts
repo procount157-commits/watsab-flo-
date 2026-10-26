@@ -132,7 +132,7 @@ async function history(userId: number, keys: string[]): Promise<Map<string, Hist
   for (let i = 0; i < keys.length; i += 500) {
     const chunk = [...new Set(keys.slice(i, i + 500))];
     const rows = (await db.execute<any>(sql`
-      WITH k AS (SELECT DISTINCT unnest(${chunk}::text[]) AS key),
+      WITH k AS (SELECT DISTINCT unnest(ARRAY[${sql.join(chunk.map((c) => sql`${c}`), sql`, `)}]::text[]) AS key),
       ml AS (SELECT right(regexp_replace(split_part(m.phone, ':', 1), '[^0-9]', '', 'g'), 9) AS key, m.status, m.error, m.sent_at, m.delivered_at, m.read_at
              FROM message_logs m JOIN campaigns c ON c.id = m.campaign_id WHERE c.user_id = ${userId}
              AND right(regexp_replace(split_part(m.phone, ':', 1), '[^0-9]', '', 'g'), 9) IN (SELECT key FROM k))

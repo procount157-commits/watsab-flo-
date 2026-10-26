@@ -11,6 +11,8 @@ if (!process.env.DATABASE_URL) {
 }
 
 export const pool = new Pool({
+  // A query that runs past two minutes is stuck, not working: it is cut so it cannot hold a connection the whole app needs.
+  statement_timeout: 120_000,
   connectionString: process.env.DATABASE_URL,
   // Resilience settings — survive host blips and maintenance windows.
   max:                    10,

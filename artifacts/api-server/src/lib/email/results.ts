@@ -92,10 +92,17 @@ const BASE = (userId: number, days: number) => sql`
     SELECT ms.id AS mission_id, ms.track, ms.angle, ms.name AS mission_name, ms.created_at AS mission_at,
            m.contact_id, m.to_email, m.sent_at, m.bounced_at, m.opened_at, m.clicked_at, m.replied_at, m.error
     FROM email_missions ms
-    JOIN email_messages m ON m.user_id = ms.user_id AND (
-         m.campaign_id = ms.campaign_id
-      OR m.sequence_job_id IN (SELECT j.id FROM email_sequence_jobs j
-                               WHERE j.sequence_id IN (ms.warm_sequence_id, ms.cold_sequence_id)))
+    -- Two plain joins, not one OR: «campaign OR sequence» made Postgres compare
+    -- every message with every mission — ten minutes a query, eight at once,
+    -- and the whole app waiting for a connection (2026-10-26).
+    JOIN LATERAL (
+      SELECT m1.id, m1.contact_id, m1.to_email, m1.sent_at, m1.bounced_at, m1.opened_at, m1.clicked_at, m1.replied_at, m1.error
+      FROM email_messages m1 WHERE m1.user_id = ms.user_id AND m1.campaign_id = ms.campaign_id
+      UNION
+      SELECT m2.id, m2.contact_id, m2.to_email, m2.sent_at, m2.bounced_at, m2.opened_at, m2.clicked_at, m2.replied_at, m2.error
+      FROM email_sequence_jobs j JOIN email_messages m2 ON m2.sequence_job_id = j.id
+      WHERE m2.user_id = ms.user_id AND j.sequence_id IN (ms.warm_sequence_id, ms.cold_sequence_id)
+    ) m ON true
     WHERE ms.user_id = ${userId} AND ms.track IS NOT NULL
       AND ms.created_at > now() - (${days} || ' days')::interval
   ),
