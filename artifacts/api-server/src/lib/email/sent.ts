@@ -98,6 +98,9 @@ export async function sentSummary(userId: number) {
 }
 
 export interface SentPreview {
+  contact?: Record<string, unknown> | null;
+  realClicks?: number;
+  scans?: number;
   id: number;
   toEmail: string;
   subject: string;
@@ -162,5 +165,9 @@ export async function sentPreview(userId: number, messageId: number): Promise<Se
       : !tracking ? "التتبّع مُطفأ في إعدادات البريد — فلا بكسل ولا روابط متتبَّعة في هذه الرسالة."
       : "لا عنوان عام مضبوط: خرجت هذه الرسالة بلا بكسل فتحٍ وبلا روابط متتبَّعة، ولا سبيل لمعرفة إن فُتحت.",
     events: ev as never, source,
+    // Who it went to (the owner, 2026-10-26: «أعرف الشركة واسمها وتفاصيلها»).
+    contact: contact ? { id: contact.id, email: contact.email, name: contact.name, company: contact.company, phone: contact.phone, industry: contact.industry,
+      city: contact.city, sector: contact.sector, status: contact.status, source: contact.source, lastOpenedAt: contact.lastOpenedAt, lastRepliedAt: contact.lastRepliedAt } : null,
+    realClicks: ev.filter((e: any) => e.type === "click").length, scans: ev.filter((e: any) => e.type === "scan").length,
   };
 }

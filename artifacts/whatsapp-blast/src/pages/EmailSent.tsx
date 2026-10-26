@@ -35,7 +35,7 @@ const when = (d?: string | null) => d
   : "—";
 
 const EVENT_AR: Record<string, string> = {
-  sent: "خرجت", open: "فُتحت", click: "نقر رابطاً", reply: "ردّ",
+  sent: "خرجت", open: "فُتحت", click: "ضغطة حقيقية", scan: "فحص آلي من بريدهم (لا يُحسب)", reply: "ردّ",
   bounce: "ارتدّت", unsubscribe: "ألغى الاشتراك", failed: "فشلت", complaint: "بلاغ إزعاج",
 };
 
@@ -194,6 +194,20 @@ function SentPreview({ id, onClose }: { id: number; onClose: () => void }) {
           <button onClick={onClose} className={ghost}><X className="w-3.5 h-3.5" /></button>
         </div>
 
+        {data?.contact && (
+          <div className="px-3 py-2.5 border-b border-card-border grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1 text-[11px]">
+            {[
+              ["الشركة", data.contact.company], ["الاسم", data.contact.name], ["البريد", data.contact.email], ["الهاتف", data.contact.phone],
+              ["القطاع", data.contact.sector ?? data.contact.industry], ["المدينة", data.contact.city], ["المصدر", data.contact.source], ["حالته", data.contact.status],
+            ].filter(([, v]) => v).map(([k, v]) => (
+              <p key={String(k)} className="truncate"><span className="text-muted-foreground">{k}: </span><span dir="auto" className="font-medium">{String(v)}</span></p>
+            ))}
+            <p className="col-span-2 md:col-span-4 text-muted-foreground">
+              ضغطات حقيقية: <b className="text-foreground">{data.realClicks ?? 0}</b> · فحص آلي من خادم بريدهم: {data.scans ?? 0}
+              {data.contact.phone && <> · <a href={`https://wa.me/${String(data.contact.phone).replace(/\D/g, "")}`} target="_blank" rel="noreferrer" className="text-primary underline">راسلهم على واتساب</a></>}
+            </p>
+          </div>
+        )}
         {data?.trackingNote && (
           <p className="px-3 py-2 text-[11px] text-yellow-400 bg-yellow-500/5 border-b border-yellow-500/20 flex items-start gap-1.5">
             <EyeOff className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {data.trackingNote}

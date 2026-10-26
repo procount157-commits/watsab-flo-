@@ -126,6 +126,12 @@ export function htmlToText(html: string): string {
 
 /** The whole outgoing body: personalised, tracked, footed — in the firm's branded layout unless it chose plain. */
 export function renderEmail(html: string, vars: Record<string, string | null | undefined>, track: TrackOptions, footer: Parameters<typeof unsubscribeFooter>[0], brand?: Brand): { html: string; text: string } {
+  // Every branded email carries a WhatsApp button (the owner, 2026-10-26): when the message has no WhatsApp link, one is added after it.
+  if (brand && brand.layout === "branded" && brand.phone && !/wa\.me\/|api\.whatsapp\.com/i.test(html)) {
+    const wa = brand.phone.replace(/\D/g, "");
+    const ar = /[\u0600-\u06FF]/.test(html.replace(/<[^>]+>/g, ""));
+    if (wa.length >= 9) html += `<p class="cta"><a href="https://wa.me/${wa}">${ar ? "تواصل معنا على واتساب" : "Chat with us on WhatsApp"}</a></p>`;
+  }
   const body = rewriteLinks(personalize(html, vars), track);
   if (brand && brand.layout === "branded" && brand.name) {
     const dir = directionOf(body);

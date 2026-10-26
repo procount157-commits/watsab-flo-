@@ -84,6 +84,28 @@ export function tint(hex: string, toWhite: number): string {
   return `#${mix(n >> 16)}${mix((n >> 8) & 255)}${mix(n & 255)}`;
 }
 
+/** Whether a (possibly tracked) link goes to WhatsApp. Pure. */
+export function isWhatsAppHref(href: string): boolean {
+  let h = href;
+  try { h = decodeURIComponent(href); } catch { /* as written */ }
+  return /\/\/(wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\//i.test(h);
+}
+
+/**
+ * The WhatsApp button (the owner, 2026-10-26: «زر الواتساب يكون واضح، Call to
+ * action كبيرة»): full width, WhatsApp green, large type, the number under it
+ * — and a table cell, so it stays a button in Outlook.
+ */
+export function whatsappButton(href: string, label: string, dir: "rtl" | "ltr", phone: string | null): string {
+  const font = dir === "rtl" ? FONT_AR : FONT;
+  const text = label.trim() || (dir === "rtl" ? "تواصل معنا على واتساب" : "Chat with us on WhatsApp");
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 8px"><tr>` +
+    `<td align="center" style="border-radius:10px;background:#25D366">` +
+    `<a href="${href}" style="display:block;padding:18px 24px;font:700 19px/1.3 ${font};color:#ffffff;text-decoration:none;border-radius:10px;text-align:center">` +
+    `&#128172;&nbsp; ${text}</a></td></tr></table>` +
+    (phone ? `<p style="margin:0 0 18px;font:13px/1.5 ${font};color:#64748b;text-align:center">${dir === "rtl" ? "واتساب" : "WhatsApp"}: <span dir="ltr">${phone.replace(/[<>&]/g, "")}</span></p>` : "");
+}
+
 export function styleBody(html: string, brand: Brand, dir: "rtl" | "ltr"): string {
   const align = dir === "rtl" ? "right" : "left";
   html = skimFirst(html);
@@ -92,6 +114,7 @@ export function styleBody(html: string, brand: Brand, dir: "rtl" | "ltr"): strin
   let out = html;
   // The button: a table cell, so it stays a button in Outlook.
   out = out.replace(/<p[^>]*class="cta"[^>]*>\s*<a\s+([^>]*?)href="([^"]+)"([^>]*)>([\s\S]*?)<\/a>\s*<\/p>/gi, (_m, _a, href, _b, label) =>
+    isWhatsAppHref(href) ? whatsappButton(href, label.replace(/<[^>]+>/g, ""), dir, brand.phone ?? null) :
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0"><tr><td style="border-radius:8px;background:${brand.accent}">` +
     `<a href="${href}" style="display:inline-block;padding:13px 26px;font:600 15px/1 ${FONT};color:#ffffff;text-decoration:none;border-radius:8px">${label.replace(/<[^>]+>/g, "")}</a></td></tr></table>`);
   // The summary: larger, darker — it is the message for most readers.

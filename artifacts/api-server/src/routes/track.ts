@@ -6,7 +6,7 @@
 import { Router } from "express";
 import { createHmac } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import { db, emailSettingsTable, emailContactsTable, emailMessagesTable } from "@workspace/db";
+import { db, emailSettingsTable, emailContactsTable, emailMessagesTable, emailEventsTable } from "@workspace/db";
 import { messageByToken, recordEvent } from "../lib/email/service";
 import { handleInbound, normalizeWebhook } from "../lib/email/inbound";
 import { logger } from "../lib/logger";
@@ -36,6 +36,13 @@ router.get("/t/e/:token.gif", async (req, res) => {
   res.end(GIF);
 });
 
+/** A link opened by a machine, not a person: a scanner's agent, or within ninety seconds of sending. Pure. */
+export function isScannerClick(ua: string, msSinceSent: number | null): boolean {
+  if (/python|curl|wget|go-http|java\/|okhttp|headless|bot|crawler|spider|scan|preview|proofpoint|mimecast|barracuda|safelinks|urldefense|fireeye|symantec|trendmicro|sophos|zscaler/i.test(ua)) return true;
+  if (!ua.trim()) return true;
+  return msSinceSent !== null && msSinceSent >= 0 && msSinceSent < 90_000;
+}
+
 router.get("/t/e/:token/c", async (req, res) => {
   noStore(res);
   const url = String(req.query["u"] ?? "");
@@ -44,7 +51,12 @@ router.get("/t/e/:token/c", async (req, res) => {
   const expected = createHmac("sha256", SECRET()).update(`${req.params.token}|${url}`).digest("base64url").slice(0, 16);
   if (sig !== expected) return res.status(400).send("bad link");
   const m = await messageByToken(req.params.token).catch(() => null);
-  if (m) void recordEvent(m.userId, m.id, "click", { url, meta: { ua: String(req.headers["user-agent"] ?? "").slice(0, 120) } }).catch(() => {});
+  const ua = String(req.headers["user-agent"] ?? "").slice(0, 120);
+  // A mail gateway opens every link the moment the email lands (Defender, Mimecast, Proofpoint…):
+  // 220 of 338 «clicks» came in the minute of sending. Those are kept as a scan, not counted as a person.
+  if (m && isScannerClick(ua, m.sentAt ? Date.now() - new Date(m.sentAt).getTime() : null)) {
+    void db.insert(emailEventsTable).values({ userId: m.userId, messageId: m.id, type: "scan", url, meta: { ua } }).catch(() => {});
+  } else if (m) void recordEvent(m.userId, m.id, "click", { url, meta: { ua } }).catch(() => {});
   res.redirect(302, url);
 });
 

@@ -1,0 +1,20 @@
+// The email's WhatsApp button and the scanner clicks (2026-10-26). Pure.
+import assert from "node:assert/strict";
+const { isWhatsAppHref, whatsappButton, styleBody, brandOf } = await import("../email/layout");
+const { isScannerClick } = await import("../../routes/track");
+let n = 0; const ok = (c: boolean, m: string) => { assert.ok(c, m); n++; };
+ok(isWhatsAppHref("https://wa.me/971542328336"), "a wa.me link");
+ok(isWhatsAppHref("https://flow.getmihwar.com/t/e/abc/c?u=https%3A%2F%2Fwa.me%2F971542328336&s=x"), "a tracked wa.me link");
+ok(!isWhatsAppHref("https://www.pro-count.ae"), "the website is not WhatsApp");
+const b = whatsappButton("https://wa.me/971542328336", "Book an AML review", "ltr", "+971 54 232 8336");
+ok(b.includes("#25D366") && b.includes("19px") && b.includes("width=\"100%\"") && b.includes("+971 54 232 8336"), "big, green, full width, the number under it");
+const brand = brandOf({ layout: "branded", brandName: "Pro Count", phone: "+971 54 232 8336" });
+const out = styleBody('<p class="cta"><a href="https://wa.me/971542328336">Talk to us</a></p>', brand, "ltr");
+ok(out.includes("#25D366"), "a WhatsApp cta is rendered as the WhatsApp button");
+const other = styleBody('<p class="cta"><a href="https://www.pro-count.ae">See more</a></p>', brand, "ltr");
+ok(!other.includes("#25D366"), "another cta keeps the brand's button");
+ok(isScannerClick("python-requests/2.32.3", 3_600_000), "a script is a scanner");
+ok(isScannerClick("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120", 20_000), "twenty seconds after sending is a scanner");
+ok(!isScannerClick("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)", 3 * 3_600_000), "a phone three hours later is a person");
+ok(isScannerClick("", 3_600_000), "no agent at all is a machine");
+console.log(`email-whatsapp-cta: ${n}/${n} ✅`);
