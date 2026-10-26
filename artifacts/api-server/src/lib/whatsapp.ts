@@ -1484,6 +1484,21 @@ class WhatsAppInstance {
 
     this.state.socket = sock;
 
+    // A socket can hang in "connecting" for good — no open, no close — and
+    // init() and the watchdog both treat "connecting" as "leave it alone".
+    // Floret sat like that for an hour after a 408 on 2026-10-26. Give the
+    // handshake two minutes, then drop this generation and start over.
+    setTimeout(() => {
+      if (myGen !== this.socketGeneration || this.state.status !== "connecting") return;
+      this.log.warn({ gen: myGen }, "connect stalled for 2 min — dropping socket and reconnecting");
+      this.socketGeneration++;               // events from the stalled socket are now stale
+      try { (sock as any).ws?.close(); } catch {}
+      if (this.state.socket === sock) this.state.socket = null;
+      this.state.status = "disconnected";
+      this.logEvent("reconnecting", `connect_stalled gen=${myGen}`).catch(() => {});
+      this.scheduleReconnect(5_000);
+    }, 120_000).unref?.();
+
     // Keep the idle clock honest. Without this, lastEventReceivedAt stays at
     // construction time and the deep-idle check never fires however long the
     // socket has been silent — which is how a zombie survived unnoticed.
