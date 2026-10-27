@@ -29,6 +29,7 @@
 // every draft and decision is recorded for the owner to read, and nothing is
 // sent until they switch it to live.
 
+import { AD_PREFILL } from "./ad-prefill";
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { FOLLOWUP_CRAFT, FOLLOWUP_CHECK, followupIssues } from "./followup-doctrine";
 import {
@@ -178,9 +179,6 @@ export const SALES_VOICE = [
   "✓ «هلا، الخلخال اللي سألتي عنه في الموقع تصاميم قريبة منه تقدرين تشوفينها https://floret-royal.io»",
   "✗ «هلا حبيبتي، الطقم سعره…» — تحبّب وسعر.",
 ].join("\n");
-
-/** The prefilled text a Meta click-to-WhatsApp ad puts in the customer's mouth, in any of its languages. */
-const AD_PREFILL = /^\s*(hello!?\s*can\s+i\s+get\s+more\s+info(rmation)?\s+on\s+this\??|مرحب[اًٌٍ]*!?\s*هل\s*يمكنني\s*الحصول\s*على\s*مزيد\s*من\s*ال?\s*معلومات\s*حول\s*هذا\s*[؟?]?|سلام!?\s*می.?\s*توانم[^؟?]*[؟?]?|bonjour\s*!?\s*puis-je\s+en\s+savoir\s+plus[^?]*\??|hola!?\s*¿?puedo\s+obtener\s+m[áa]s\s+informaci[óo]n[^?]*\??)/i;
 
 /**
  * The language to write in (the owner, 2026-10-21): Arabic always — unless
@@ -560,8 +558,8 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   if (mode === "approve" || mode === "live") await sendApproved(userId, batch).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "إرسال المعتمد تعذّر"));
   // The shop's styles follow every customer of the last two months, a few at a time (the owner, 2026-10-22).
   const wide = style === "sales" || style === "service";
-  // ريم keeps the listing current: up to ten conversations that moved since her last reading, every round.
-  if (wide) { const { reviewAll } = await import("./graph/review"); await reviewAll(userId, { onlyStale: true, limit: 30 }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "قراءة ريم تعذّرت")); }
+  // ريم keeps the listing current: up to sixty conversations that moved since her last reading, every round.
+  if (wide) { const { reviewAll } = await import("./graph/review"); await reviewAll(userId, { onlyStale: true, limit: 60 }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "قراءة ريم تعذّرت")); }
   const phones = await candidates(userId, scope, wide ? 60 : 30);
   if (!phones.length) return result;
 

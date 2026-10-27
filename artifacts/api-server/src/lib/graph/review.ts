@@ -20,17 +20,23 @@ import { detectAutoresponder } from "../autoresponder";
 import { dialectOf } from "../reply-brain";
 import { receipt } from "./receipts";
 import { logger } from "../logger";
+import { AD_PREFILL } from "../ad-prefill";
 
 export const REVIEW_ROLE = "collector";
+const REVIEW_CONCURRENCY = 3;
 export const LABELS = {
   hot: "مهتم جداً — قريب من الشراء", order: "طلب أو يريد أن يطلب", price: "سأل عن السعر", photo: "أرسل صورة قطعة", question: "استفسار عام",
   cold: "فاتر — رد ولم يُكمل", refused: "رفض أو لا يريد", machine: "رد آلي لشركة", not_customer: "ليس عميلاً (عرض خدماته / خطأ)", silent: "وصلته رسالتنا ولم يرد",
+  ad_click: "ضغط الإعلان ولم يكتب شيئاً",
 } as const;
 export type Label = keyof typeof LABELS;
 
 export type Review = { label: Label; score: number; piece: string | null; summary: string; nextAction: string; dialect: string };
 
-type Turn = { fromMe: boolean; text: string; at: Date };
+type Turn = { fromMe: boolean; text: string; at: Date; media?: string };
+
+/** What a media message reads as in the transcript — the model cannot see it, but it can know it was sent. */
+const MEDIA_AR: Record<string, string> = { image: "صورة", video: "فيديو", audio: "رسالة صوتية", ptt: "رسالة صوتية", voice: "رسالة صوتية", document: "ملف", sticker: "ملصق", location: "موقع" };
 
 /** The strict reading of the model's answer. Pure. */
 export function parseReview(text: string): Omit<Review, "dialect"> | null {
@@ -44,16 +50,36 @@ export function parseReview(text: string): Omit<Review, "dialect"> | null {
 
 /** What needs no model: nobody wrote, or only a machine did. Pure. */
 export function quickLabel(turns: Turn[]): Label | null {
-  const theirs = turns.filter((t) => !t.fromMe && t.text.trim());
+  const theirs = turns.filter((t) => !t.fromMe && (t.text.trim() || t.media));
   if (!theirs.length) return "silent";
-  if (theirs.every((t) => detectAutoresponder(t.text).isAuto)) return "machine";
+  const words = theirs.filter((t) => t.text.trim().replace(AD_PREFILL, "").trim().length > 1);
+  if (!words.length) {
+    // Only the ad's own line, or only pictures: no words of hers to weigh.
+    if (theirs.some((t) => t.media === "image" || t.media === "video")) return "photo";
+    if (theirs.some((t) => t.media)) return null;            // a voice note says something — let the model hear the rest
+    return "ad_click";
+  }
+  if (words.every((t) => detectAutoresponder(t.text).isAuto)) return "machine";
   return null;
 }
 
+const QUICK: Partial<Record<Label, Omit<Review, "label" | "dialect">>> = {
+  silent:   { score: 5,  piece: null, summary: "لم يرد على رسالتنا.", nextAction: "متابعة بفائدة" },
+  machine:  { score: 0,  piece: null, summary: "رد آلي من شركة، لا شخص.", nextAction: "لا شيء — ليس عميلاً" },
+  ad_click: { score: 25, piece: null, summary: "فتح المحادثة من الإعلان بالرسالة الجاهزة ولم يكتب شيئاً بعدها.", nextAction: "رد أول يرحّب ويرسل رابط الموقع ويسأل عن القطعة التي لفتته" },
+  photo:    { score: 45, piece: null, summary: "أرسل صورة بلا كلام — غالباً صورة قطعة يسأل عنها.", nextAction: "رد يسأل عن القطعة في الصورة ويرسل رابط الموقع" },
+};
+
 async function threadOf(userId: number, phone: string): Promise<Turn[]> {
-  const r = await db.execute<{ from_me: boolean; text: string; created_at: Date }>(sql`
-    SELECT from_me, coalesce(text, '') AS text, created_at FROM wa_thread_messages WHERE user_id = ${userId} AND phone = ${phone} AND coalesce(text, '') <> '' ORDER BY created_at LIMIT 60`);
-  return r.rows.map((x) => ({ fromMe: !!x.from_me, text: x.text, at: new Date(x.created_at) }));
+  // The last 60, not the first: what she said lately is what she wants now.
+  const r = await db.execute<{ from_me: boolean; text: string; msg_type: string | null; created_at: Date }>(sql`
+    SELECT * FROM (SELECT from_me, coalesce(text, '') AS text, msg_type, created_at FROM wa_thread_messages
+      WHERE user_id = ${userId} AND phone = ${phone} AND (coalesce(text, '') <> '' OR coalesce(msg_type, 'text') <> 'text')
+      ORDER BY created_at DESC LIMIT 60) t ORDER BY created_at`);
+  return r.rows.map((x) => {
+    const type = String(x.msg_type ?? "text");
+    return { fromMe: !!x.from_me, text: x.text, at: new Date(x.created_at), media: type !== "text" ? type : undefined };
+  });
 }
 
 export async function reviewOne(userId: number, phone: string, vertical: string | null): Promise<Review | null> {
@@ -62,15 +88,21 @@ export async function reviewOne(userId: number, phone: string, vertical: string 
   const theirs = turns.filter((t) => !t.fromMe).map((t) => t.text).join(" ");
   const dialect = dialectOf(theirs);
   const quick = quickLabel(turns);
-  if (quick) return { label: quick, score: quick === "silent" ? 5 : 0, piece: null, summary: quick === "silent" ? "لم يرد على رسالتنا." : "رد آلي من شركة، لا شخص.", nextAction: quick === "silent" ? "متابعة بفائدة" : "لا شيء — ليس عميلاً", dialect };
+  if (quick) return { label: quick, ...QUICK[quick]!, dialect };
 
-  const transcript = turns.map((t) => `${t.fromMe ? "نحن" : "هو/هي"}: ${t.text.slice(0, 400)}`).join("\n");
+  const line = (t: Turn) => {
+    const media = t.media ? `[${MEDIA_AR[t.media] ?? "مرفق"}]` : "";
+    const words = (t.fromMe ? t.text : t.text.replace(AD_PREFILL, "[فتح المحادثة من الإعلان]")).slice(0, 400);
+    return `${t.fromMe ? "نحن" : "هو/هي"}: ${[media, words].filter(Boolean).join(" ")}`;
+  };
+  const transcript = turns.map(line).join("\n");
   const out = await asAgent(userId, REVIEW_ROLE, () => complete([
     { role: "system", content: [
       `أنت ريم، محللة بيانات ${vertical === "jewelry" ? "في محل ذهب ومجوهرات" : "في شركة خدمات"}. تقرئين محادثة واتساب كاملة وتصنّفين العميل من كلامه هو، لا من كلامنا.`,
       "أجيبي بـ JSON واحد فقط بلا أي نص خارجه:",
       `{"label": "<${Object.keys(LABELS).join("|")}>", "score": <0-100 قربه من الشراء>, "piece": "<القطعة أو الخدمة التي يريدها إن ذُكرت، وإلا null>", "summary": "<سطر واحد كما تكتبه موظفة لزميلتها: من هو وماذا يريد>", "next": "<الخطوة التالية في سطر: ماذا نرسل له ومتى>"}`,
-      "القواعد: hot = طلب سعراً وتفاعل أو قال مهتم بوضوح؛ order = قال أبغى أطلب/أحجز أو سأل عن التوصيل والدفع؛ price = سأل عن السعر ولم يُكمل؛ photo = أرسل صورة؛ question = سؤال عام؛ cold = رد بكلمة ولم يُكمل؛ refused = لا/غير مهتم/عندنا؛ machine = رسالة ترحيب آلية لشركة؛ not_customer = يعرض خدماته علينا أو رقم خاطئ؛ silent = لم يكتب شيئاً.",
+      "القواعد: hot = طلب سعراً وتفاعل أو قال مهتم بوضوح؛ order = قال أبغى أطلب/أحجز أو سأل عن التوصيل والدفع؛ price = سأل عن السعر ولم يُكمل؛ photo = أرسل صورة؛ question = سؤال حقيقي كتبه بنفسه لا يدخل في غيره؛ cold = رد بكلمة ولم يُكمل؛ refused = لا/غير مهتم/عندنا؛ machine = رسالة ترحيب آلية لشركة؛ not_customer = يعرض خدماته علينا أو رقم خاطئ؛ silent = لم يكتب شيئاً.",
+      "«[فتح المحادثة من الإعلان]» ضغطة على إعلان وليست سؤالاً — لا تحسبيها، صنّفي من كلامه الذي بعدها فقط.",
       "لا تخترعي قطعة لم تُذكر. الدرجة من كلامه لا من أمنياتنا.",
     ].join("\n") },
     { role: "user", content: transcript },
@@ -96,25 +128,53 @@ export async function reviewAndSave(userId: number, phone: string, vertical: str
   return r;
 }
 
+/**
+ * The conversations a model already filed as «استفسار» or «فاتر» that hold no
+ * words of the customer's — only the ad's line or a picture — refiled by rule.
+ * No model call; cheap enough to run before every reading.
+ */
+export async function refileQuick(userId: number): Promise<number> {
+  const rows = (await db.execute<{ phone: string; label: string }>(sql`
+    SELECT phone, label FROM conversation_reviews WHERE user_id = ${userId} AND label IN ('question','cold','silent')`)).rows;
+  let moved = 0;
+  for (const r of rows) {
+    const quick = quickLabel(await threadOf(userId, r.phone));
+    if (!quick || quick === r.label || quick === "machine") continue;
+    const q = QUICK[quick]!;
+    await db.execute(sql`UPDATE conversation_reviews SET label = ${quick}, score = ${q.score}, summary = ${q.summary}, next_action = ${q.nextAction}, reviewed_at = now()
+      WHERE user_id = ${userId} AND phone = ${r.phone}`);
+    moved++;
+  }
+  if (moved) logger.info({ userId, moved }, "ريم أعادت تصنيف محادثات بلا كلام من الزبون");
+  return moved;
+}
+
 export async function reviewAll(userId: number, opts: { limit?: number; onlyStale?: boolean } = {}): Promise<{ reviewed: number; byLabel: Record<string, number>; failed: number }> {
   const [p] = (await db.execute<{ vertical: string | null }>(sql`SELECT vertical FROM business_profile WHERE user_id = ${userId}`)).rows;
+  await refileQuick(userId).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "إعادة التصنيف السريع تعذّرت"));
   const phones = (await db.execute<{ phone: string; n: number; last: Date }>(sql`
     SELECT m.phone, count(*)::int AS n, max(m.created_at) AS last FROM wa_thread_messages m
     ${opts.onlyStale ? sql`LEFT JOIN conversation_reviews r ON r.user_id = m.user_id AND r.phone = m.phone` : sql``}
     WHERE m.user_id = ${userId} ${opts.onlyStale ? sql`AND (r.phone IS NULL OR r.reviewed_at < (SELECT max(created_at) FROM wa_thread_messages x WHERE x.user_id = m.user_id AND x.phone = m.phone))` : sql``}
     GROUP BY m.phone ORDER BY max(m.created_at) DESC LIMIT ${opts.limit ?? 300}`)).rows;
   const byLabel: Record<string, number> = {}; let reviewed = 0, failed = 0;
-  for (const ph of phones) {
+  // Three at a time: the ads bring conversations faster than one-by-one reads
+  // them, and the model chain spreads the calls over several providers.
+  const queue = [...phones];
+  const one = async (ph: (typeof phones)[number]) => {
     try {
       const r = await reviewOne(userId, ph.phone, p?.vertical ?? null);
-      if (!r) { failed++; continue; }
+      if (!r) { failed++; return; }
       await db.execute(sql`INSERT INTO conversation_reviews (user_id, phone, label, score, piece, summary, next_action, dialect, msg_count, last_at, reviewed_at)
         VALUES (${userId}, ${ph.phone}, ${r.label}, ${r.score}, ${r.piece}, ${r.summary}, ${r.nextAction}, ${r.dialect}, ${Number(ph.n)}, ${ph.last}, now())
         ON CONFLICT (user_id, phone) DO UPDATE SET label = EXCLUDED.label, score = EXCLUDED.score, piece = EXCLUDED.piece, summary = EXCLUDED.summary, next_action = EXCLUDED.next_action, dialect = EXCLUDED.dialect, msg_count = EXCLUDED.msg_count, last_at = EXCLUDED.last_at, reviewed_at = now()`);
       byLabel[r.label] = (byLabel[r.label] ?? 0) + 1; reviewed++;
       receipt({ userId, node: REVIEW_ROLE, action: "review.conversation", subject: ph.phone, evidence: { label: r.label, score: r.score, piece: r.piece }, why: r.summary });
     } catch (err: any) { failed++; logger.warn({ userId, phone: ph.phone, err: String(err?.message ?? err).slice(0, 160) }, "تصنيف محادثة فشل"); }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(REVIEW_CONCURRENCY, queue.length) }, async () => {
+    for (let ph = queue.shift(); ph; ph = queue.shift()) await one(ph);
+  }));
   logger.info({ userId, reviewed, failed, byLabel }, "ريم أنهت قراءة المحادثات");
   return { reviewed, byLabel, failed };
 }

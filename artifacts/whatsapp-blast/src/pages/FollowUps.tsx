@@ -48,7 +48,7 @@ const MODES: { val: Mode; label: string; desc: string; cls: string }[] = [
 ];
 const LABEL_AR: Record<string, string> = {
   hot: "مهتمة جداً", order: "تريد أن تطلب", price: "سألت عن السعر", photo: "أرسلت صورة", question: "استفسار",
-  cold: "فاترة", refused: "رفضت", machine: "رد آلي", not_customer: "ليست عميلة", silent: "لم ترد",
+  cold: "فاترة", refused: "رفضت", machine: "رد آلي", not_customer: "ليست عميلة", silent: "لم ترد", ad_click: "ضغطت الإعلان فقط",
 };
 const hoursText = (h: number) => (h < 24 ? `${h} ساعات` : h === 24 ? "يوم" : h === 48 ? "يومين" : `${Math.round(h / 24)} أيام`);
 const when = (d: string) => new Date(d).toLocaleString("ar-AE", { dateStyle: "short", timeStyle: "short" });

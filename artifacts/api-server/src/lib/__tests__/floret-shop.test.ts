@@ -99,6 +99,12 @@ check("a kind alone («طقم») names nothing and passes", !checkReply("عند�
 // ── ريم's reading ─────────────────────────────────────────────────
 check("a machine-only thread is filed without a model", quickLabel([{ fromMe: true, text: "x", at: new Date() }, { fromMe: false, text: "Thank you for contacting us! Please let us know how we can help you.", at: new Date() }]) === "machine");
 check("a silent recipient is silent", quickLabel([{ fromMe: true, text: "x", at: new Date() }]) === "silent");
+const at0 = new Date(), us = { fromMe: true, text: "x", at: at0 };
+check("only the ad's line is a click, not a question", quickLabel([{ fromMe: false, text: "مرحباً! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟", at: at0 }, us]) === "ad_click");
+check("the ad's line in English is a click too", quickLabel([{ fromMe: false, text: "Hello! Can I get more info on this?", at: at0 }]) === "ad_click");
+check("a picture with no words is a photo", quickLabel([{ fromMe: false, text: "", at: at0, media: "image" }, us]) === "photo");
+check("a voice note goes to the model", quickLabel([{ fromMe: false, text: "", at: at0, media: "audio" }]) === null);
+check("the ad's line then her own words goes to the model", quickLabel([{ fromMe: false, text: "Hello! Can I get more info on this?", at: at0 }, { fromMe: false, text: "كم سعر الطقم؟", at: at0 }]) === null);
 const pr = parseReview('كلام قبل {"label":"hot","score":"85","piece":"طقم الكلوفر","summary":"تبي الطقم هدية","next":"صورة أوضح اليوم"} كلام بعد');
 check("the model's answer is read strictly", pr?.label === "hot" && pr.score === 85 && pr.piece === "طقم الكلوفر");
 check("an unknown label becomes a question, a wild score is clamped", parseReview('{"label":"whatever","score":250}')?.label === "question" && parseReview('{"label":"whatever","score":250}')?.score === 100);
