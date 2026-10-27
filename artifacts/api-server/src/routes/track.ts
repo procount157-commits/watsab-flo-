@@ -31,10 +31,27 @@ router.get("/t/e/:token.gif", async (req, res) => {
   if (m && m.status !== "queued") {
     const ua = String(req.headers["user-agent"] ?? "");
     const proxied = /GoogleImageProxy|Apple Mail|MailPrivacyProtection/i.test(ua);
-    void recordEvent(m.userId, m.id, "open", { meta: { ua: ua.slice(0, 120), proxied } }).catch(() => {});
+    // Of 699 «opened» mails in a month, 317 were fetched within two minutes of
+    // sending and 250 by Apple's bare «Mozilla/5.0» — machines. They are kept
+    // as a machine open and move nobody onto the «opened» ladder.
+    if (isMachineOpen(ua, m.sentAt ? Date.now() - new Date(m.sentAt).getTime() : null)) {
+      void db.insert(emailEventsTable).values({ userId: m.userId, messageId: m.id, type: "machine_open", meta: { ua: ua.slice(0, 120) } }).catch(() => {});
+    } else void recordEvent(m.userId, m.id, "open", { meta: { ua: ua.slice(0, 120), proxied } }).catch(() => {});
   }
   res.end(GIF);
 });
+
+/**
+ * A pixel fetched by a machine: Apple's privacy proxy (a bare «Mozilla/5.0»
+ * that loads every mail on arrival), a mail gateway in the first two minutes,
+ * or no agent at all. Gmail's proxy is kept: it fetches when she opens. Pure.
+ */
+export function isMachineOpen(ua: string, msSinceSent: number | null): boolean {
+  const u = ua.trim();
+  if (!u || u === "Mozilla/5.0" || /MailPrivacyProtection/i.test(u)) return true;
+  if (/python|curl|wget|go-http|headless|bot|crawler|spider|scan|proofpoint|mimecast|barracuda|symantec|trendmicro|sophos|zscaler/i.test(u)) return true;
+  return msSinceSent !== null && msSinceSent >= 0 && msSinceSent < 120_000;
+}
 
 /** A link opened by a machine, not a person: a scanner's agent, or within ninety seconds of sending. Pure. */
 export function isScannerClick(ua: string, msSinceSent: number | null): boolean {

@@ -36,7 +36,7 @@ export type Review = { label: Label; score: number; piece: string | null; summar
 type Turn = { fromMe: boolean; text: string; at: Date; media?: string };
 
 /** What a media message reads as in the transcript — the model cannot see it, but it can know it was sent. */
-const MEDIA_AR: Record<string, string> = { image: "صورة", video: "فيديو", audio: "رسالة صوتية", ptt: "رسالة صوتية", voice: "رسالة صوتية", document: "ملف", sticker: "ملصق", location: "موقع" };
+const MEDIA_AR: Record<string, string> = { image: "صورة", video: "فيديو", audio: "رسالة صوتية", ptt: "رسالة صوتية", voice: "رسالة صوتية", document: "ملف", sticker: "ملصق", location: "موقع", attachment: "مرفق" };
 
 /** The strict reading of the model's answer. Pure. */
 export function parseReview(text: string): Omit<Review, "dialect"> | null {
@@ -55,7 +55,7 @@ export function quickLabel(turns: Turn[]): Label | null {
   const words = theirs.filter((t) => t.text.trim().replace(AD_PREFILL, "").trim().length > 1);
   if (!words.length) {
     // Only the ad's own line, or only pictures: no words of hers to weigh.
-    if (theirs.some((t) => t.media === "image" || t.media === "video")) return "photo";
+    if (theirs.some((t) => t.media === "image" || t.media === "video" || t.media === "attachment")) return "photo";
     if (theirs.some((t) => t.media)) return null;            // a voice note says something — let the model hear the rest
     return "ad_click";
   }
@@ -74,10 +74,11 @@ async function threadOf(userId: number, phone: string): Promise<Turn[]> {
   // The last 60, not the first: what she said lately is what she wants now.
   const r = await db.execute<{ from_me: boolean; text: string; msg_type: string | null; created_at: Date }>(sql`
     SELECT * FROM (SELECT from_me, coalesce(text, '') AS text, msg_type, created_at FROM wa_thread_messages
-      WHERE user_id = ${userId} AND phone = ${phone} AND (coalesce(text, '') <> '' OR coalesce(msg_type, 'text') <> 'text')
+      WHERE user_id = ${userId} AND phone = ${phone}
       ORDER BY created_at DESC LIMIT 60) t ORDER BY created_at`);
   return r.rows.map((x) => {
-    const type = String(x.msg_type ?? "text");
+    // An empty «text» is a picture or a file stored without its caption.
+    const type = String(x.msg_type ?? "text") === "text" && !x.text.trim() ? "attachment" : String(x.msg_type ?? "text");
     return { fromMe: !!x.from_me, text: x.text, at: new Date(x.created_at), media: type !== "text" ? type : undefined };
   });
 }

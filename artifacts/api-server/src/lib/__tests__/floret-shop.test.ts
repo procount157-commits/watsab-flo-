@@ -103,6 +103,8 @@ const at0 = new Date(), us = { fromMe: true, text: "x", at: at0 };
 check("only the ad's line is a click, not a question", quickLabel([{ fromMe: false, text: "مرحباً! هل يمكنني الحصول على مزيد من المعلومات حول هذا؟", at: at0 }, us]) === "ad_click");
 check("the ad's line in English is a click too", quickLabel([{ fromMe: false, text: "Hello! Can I get more info on this?", at: at0 }]) === "ad_click");
 check("a picture with no words is a photo", quickLabel([{ fromMe: false, text: "", at: at0, media: "image" }, us]) === "photo");
+check("an attachment stored without a caption is a photo", quickLabel([{ fromMe: false, text: "", at: at0, media: "attachment" }]) === "photo");
+check("only our own attachments is silent", quickLabel([{ fromMe: true, text: "", at: at0, media: "attachment" }]) === "silent");
 check("a voice note goes to the model", quickLabel([{ fromMe: false, text: "", at: at0, media: "audio" }]) === null);
 check("the ad's line then her own words goes to the model", quickLabel([{ fromMe: false, text: "Hello! Can I get more info on this?", at: at0 }, { fromMe: false, text: "كم سعر الطقم؟", at: at0 }]) === null);
 const pr = parseReview('كلام قبل {"label":"hot","score":"85","piece":"طقم الكلوفر","summary":"تبي الطقم هدية","next":"صورة أوضح اليوم"} كلام بعد');

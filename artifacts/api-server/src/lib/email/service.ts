@@ -62,6 +62,9 @@ export async function recordEvent(userId: number, messageId: number | null, type
   } else if (type === "click") {
     await db.update(emailMessagesTable).set({ clickedAt: m.clickedAt ?? now, clickCount: sql`${emailMessagesTable.clickCount} + 1`, openedAt: m.openedAt ?? now }).where(eq(emailMessagesTable.id, messageId));
     if (m.campaignId && !m.clickedAt) await db.update(emailCampaignsTable).set({ clickCount: sql`${emailCampaignsTable.clickCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
+    // A person who clicked is warm now, not in a week: her next rung comes
+    // within a day. The 48-hour gap between any two mails still holds.
+    if (m.contactId && !m.clickedAt) await pullNextRung(userId, m.contactId, CLICK_PULL_HOURS).catch(() => {});
   } else if (type === "reply") {
     await db.update(emailMessagesTable).set({ repliedAt: m.repliedAt ?? now }).where(eq(emailMessagesTable.id, messageId));
     if (m.contactId) await db.update(emailContactsTable).set({ lastRepliedAt: now }).where(eq(emailContactsTable.id, m.contactId));
@@ -81,6 +84,34 @@ export async function recordEvent(userId: number, messageId: number | null, type
     }
     if (m.campaignId) await db.update(emailCampaignsTable).set({ [counter.unsubscribe]: sql`${emailCampaignsTable.unsubCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
   }
+}
+
+export const CLICK_PULL_HOURS = 24;
+
+/** The contact's next pending rung brought forward to within `hours`, if it was later. */
+export async function pullNextRung(userId: number, contactId: number, hours: number): Promise<boolean> {
+  const r = await db.execute(sql`UPDATE email_sequence_jobs SET due_at = now() + make_interval(hours => ${hours})
+    WHERE id = (SELECT id FROM email_sequence_jobs WHERE user_id = ${userId} AND contact_id = ${contactId} AND status = 'pending' ORDER BY due_at LIMIT 1)
+      AND due_at > now() + make_interval(hours => ${hours})`);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * The thread a follow-up joins: every mail already sent to this contact with
+ * a Message-ID, oldest first. The subject is the first one's with «Re:».
+ */
+export async function threadFor(userId: number, contactId: number, exceptId: number): Promise<{ subject: string; inReplyTo: string; references: string[] } | null> {
+  const prev = await db.select({ hdr: emailMessagesTable.messageIdHdr, subject: emailMessagesTable.subject }).from(emailMessagesTable)
+    .where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.contactId, contactId), eq(emailMessagesTable.status, "sent"),
+      sql`${emailMessagesTable.messageIdHdr} is not null`, sql`${emailMessagesTable.id} <> ${exceptId}`))
+    .orderBy(asc(emailMessagesTable.sentAt)).limit(20);
+  if (!prev.length) return null;
+  return { subject: replySubject(prev[0]!.subject), inReplyTo: prev[prev.length - 1]!.hdr!, references: prev.map((p) => p.hdr!) };
+}
+
+/** «Re: » once, however many times the subject has been answered. Pure. */
+export function replySubject(subject: string): string {
+  return `Re: ${subject.replace(/^\s*((re|fwd?|رد)\s*:\s*)+/i, "").trim()}`;
 }
 
 export async function messageByToken(token: string) {
@@ -453,13 +484,19 @@ async function drainOne(userId: number) {
   const rendered = renderEmail(html + (es.signature ? `<div style="margin-top:20px">${es.signature}</div>` : ""), vars,
     { base, token: m.token, secret: SECRET(), pixel: !!es.tracking, links: !!es.tracking && !!keep },
     { base: keep, token: m.token, fromName: es.fromName ?? es.fromEmail!, fromEmail: es.fromEmail! }, brandOf(es));
-  const subject = personalize(m.subject, vars);
+  let subject = personalize(m.subject, vars);
   const messageId = messageIdFor(m.token, es.fromEmail!);
+  // A follow-up is a reply in the thread she already has: «Re:» the first
+  // subject, under the same conversation in her inbox — not a fresh mail
+  // that reads like one more advert.
+  const thread = m.sequenceJobId && m.contactId ? await threadFor(userId, m.contactId, m.id) : null;
+  if (thread) subject = thread.subject;
 
   lastSentAt.set(userId, now);
   markSent(userId, pick.sender?.id ?? null, now);
   try {
-    const r = await sendEmail(es, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(keep, m.token) });
+    const r = await sendEmail(es, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(keep, m.token),
+      inReplyTo: thread?.inReplyTo ?? null, references: thread?.references ?? null });
     await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId, messageIdHdr: messageId, subject, senderId: pick.sender?.id ?? null }).where(eq(emailMessagesTable.id, m.id));
     if (contact) await db.update(emailContactsTable).set({ lastSentAt: new Date() }).where(eq(emailContactsTable.id, contact.id));
     await afterSend(trialId).catch(() => {});

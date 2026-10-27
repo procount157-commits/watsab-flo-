@@ -1335,6 +1335,36 @@ router.get("/autopilot", async (req, res) => {
   const userId = req.session.userId!;
   res.json({ autopilot: await getAutopilot(userId), team: await teamStatus(userId) });
 });
+// One employee, opened: who, what they did day by day, every action with its
+// words, and — for the follow-up — what the follow-ups brought back.
+router.get("/team/:role", async (req, res) => {
+  const userId = req.session.userId!;
+  const role = String(req.params["role"]);
+  const who = (await teamStatus(userId)).find((t) => t.role === role);
+  if (!who) return res.status(404).json({ error: "موظف غير معروف" });
+  const [days, actions, rows] = await Promise.all([
+    db.execute<{ d: string; n: number }>(sql`SELECT to_char(created_at AT TIME ZONE 'Asia/Dubai', 'YYYY-MM-DD') AS d, count(*)::int AS n FROM email_agent_activity
+      WHERE user_id = ${userId} AND role = ${role} AND created_at > now() - interval '14 days' GROUP BY 1 ORDER BY 1`),
+    db.execute<{ action: string; n: number }>(sql`SELECT action, count(*)::int AS n FROM email_agent_activity
+      WHERE user_id = ${userId} AND role = ${role} AND created_at > now() - interval '30 days' GROUP BY 1 ORDER BY 2 DESC`),
+    db.execute<any>(sql`SELECT id, action, text, ref, created_at FROM email_agent_activity WHERE user_id = ${userId} AND role = ${role} ORDER BY created_at DESC LIMIT 200`),
+  ]);
+  let followups: any = null;
+  if (role === "email_followup") {
+    const [f] = (await db.execute<any>(sql`SELECT count(*)::int AS sent,
+        count(*) FILTER (WHERE opened_at IS NOT NULL)::int AS opened, count(*) FILTER (WHERE clicked_at IS NOT NULL)::int AS clicked,
+        count(*) FILTER (WHERE replied_at IS NOT NULL)::int AS replied, count(*) FILTER (WHERE status = 'bounced')::int AS bounced
+      FROM email_messages WHERE user_id = ${userId} AND sequence_job_id IS NOT NULL AND sent_at > now() - interval '30 days'`)).rows;
+    const upcoming = (await db.execute<any>(sql`SELECT j.step_index, count(*)::int AS n, min(j.due_at) AS next FROM email_sequence_jobs j
+      WHERE j.user_id = ${userId} AND j.status = 'pending' GROUP BY 1 ORDER BY 1`)).rows;
+    const recent = (await db.execute<any>(sql`SELECT m.id, m.to_email, m.subject, m.sent_at, m.opened_at, m.clicked_at, m.replied_at, j.step_index, q.name AS sequence
+      FROM email_messages m JOIN email_sequence_jobs j ON j.id = m.sequence_job_id JOIN email_sequences q ON q.id = j.sequence_id
+      WHERE m.user_id = ${userId} AND m.status = 'sent' ORDER BY m.sent_at DESC LIMIT 50`)).rows;
+    followups = { ...f, upcoming, recent };
+  }
+  res.json({ employee: who, days: days.rows, actions: actions.rows, activity: rows.rows, followups });
+});
+
 router.put("/autopilot", async (req, res) => {
   const userId = req.session.userId!;
   const before = await getAutopilot(userId);

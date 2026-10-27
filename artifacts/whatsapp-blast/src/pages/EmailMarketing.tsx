@@ -4,6 +4,7 @@
 // after that is watching — the overview polls every ten seconds so what is
 // on screen is what is happening.
 
+import EmailEmployee from "./EmailEmployee";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRoute, useLocation } from "wouter";
@@ -74,6 +75,7 @@ export default function EmailMarketing() {
   const [, navigate] = useLocation();
   const tab = (TABS.find((t) => t.key === (deep?.tab ?? params?.tab))?.key ?? "dashboard") as Tab;
   const listId = tab === "lists" && deep?.id ? Number(deep.id) : null;
+  const employee = deep?.tab === "team" && deep.id ? deep.id : null;
   // A list's "campaign" button opens the builder on that list.
   const [campaignFor, setCampaignFor] = useState<number | null>(null);
   const toCampaign = (id: number) => { setCampaignFor(id); navigate("/email/campaigns"); };
@@ -105,7 +107,7 @@ export default function EmailMarketing() {
         ))}
       </div>
 
-      {tab === "dashboard" && <DashboardTab goMissions={() => navigate("/email/missions")} />}
+      {tab === "dashboard" && (employee ? <EmailEmployee role={employee} /> : <DashboardTab goMissions={() => navigate("/email/missions")} />)}
       {tab === "diagnose"  && <EmailDiagnose />}
       {tab === "overview"  && <Overview ov={ov} />}
       {tab === "import"    && <Import />}

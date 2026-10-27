@@ -17,6 +17,8 @@ export interface OutgoingEmail {
   messageId: string;
   unsubscribeUrl: string | null;
   inReplyTo?: string | null;
+  /** The thread so far, oldest first — a follow-up lands under the first mail, not as a new one. */
+  references?: string[] | null;
 }
 
 export interface SendResult { providerId: string | null; serverReply?: string; accepted?: string[]; rejected?: string[] }
@@ -110,7 +112,7 @@ export async function sendEmail(s: EmailSettings, m: OutgoingEmail): Promise<Sen
         from: fromHeader(s), to: m.toName ? `"${m.toName.replace(/"/g, "'")}" <${m.to}>` : m.to,
         replyTo: s.replyTo ?? undefined,
         subject: m.subject, html: m.html, text: m.text,
-        messageId: m.messageId, inReplyTo: m.inReplyTo ?? undefined,
+        messageId: m.messageId, inReplyTo: m.inReplyTo ?? undefined, references: m.references?.length ? m.references : undefined,
         headers,
       });
       // What the server said and which addresses it took: "accepted" only
@@ -134,7 +136,7 @@ export async function sendEmail(s: EmailSettings, m: OutgoingEmail): Promise<Sen
       body: JSON.stringify({
         from: fromHeader(s), to: [m.to], reply_to: s.replyTo ?? undefined,
         subject: m.subject, html: m.html, text: m.text,
-        headers: { ...headers, "Message-ID": m.messageId, ...(m.inReplyTo ? { "In-Reply-To": m.inReplyTo } : {}) },
+        headers: { ...headers, "Message-ID": m.messageId, ...(m.inReplyTo ? { "In-Reply-To": m.inReplyTo } : {}), ...(m.references?.length ? { References: m.references.join(" ") } : {}) },
       }),
     });
     const d: any = await r.json().catch(() => ({}));
@@ -151,7 +153,7 @@ export async function sendEmail(s: EmailSettings, m: OutgoingEmail): Promise<Sen
         to: [{ email: m.to, name: m.toName ?? undefined }],
         replyTo: s.replyTo ? { email: s.replyTo } : undefined,
         subject: m.subject, htmlContent: m.html, textContent: m.text,
-        headers: { ...headers, "Message-ID": m.messageId, ...(m.inReplyTo ? { "In-Reply-To": m.inReplyTo } : {}) },
+        headers: { ...headers, "Message-ID": m.messageId, ...(m.inReplyTo ? { "In-Reply-To": m.inReplyTo } : {}), ...(m.references?.length ? { References: m.references.join(" ") } : {}) },
       }),
     });
     const d: any = await r.json().catch(() => ({}));

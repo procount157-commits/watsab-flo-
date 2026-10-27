@@ -270,11 +270,11 @@ export function AgentCard({ t }: { t: any }) {
       <div className="flex items-center gap-2">
         <span className="text-xl">{t.avatar}</span>
         <div className="min-w-0">
-          <p className="text-sm font-semibold flex items-center gap-1.5">{t.name}<span className={cn("w-1.5 h-1.5 rounded-full", t.isActive ? "bg-primary" : "bg-muted-foreground")} title={t.isActive ? "في الخدمة" : "متوقف"} /></p>
+          <p className="text-sm font-semibold flex items-center gap-1.5"><Link href={`/email/team/${t.role}`} className="hover:text-primary hover:underline">{t.name}</Link><span className={cn("w-1.5 h-1.5 rounded-full", t.isActive ? "bg-primary" : "bg-muted-foreground")} title={t.isActive ? "في الخدمة" : "متوقف"} /></p>
           <p className="text-[10px] text-muted-foreground truncate">{t.title}</p>
         </div>
       </div>
-      <p className="text-[10px] text-muted-foreground">{n(t.actions7d)} عملاً هذا الأسبوع{t.lastAt ? ` · آخرها ${ago(t.lastAt)}` : ""}</p>
+      <p className="text-[10px] text-muted-foreground">{n(t.actions7d)} عملاً هذا الأسبوع{t.lastAt ? ` · آخرها ${ago(t.lastAt)}` : ""} · <Link href={`/email/team/${t.role}`} className="text-primary hover:underline">التفاصيل</Link></p>
       <div className="flex gap-1">
         <input className={cn(input, "text-[11px] py-1.5")} placeholder={`تعليمات لـ${t.name}…`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) teach.mutate(); }} />
         <button onClick={() => teach.mutate()} disabled={!text.trim() || teach.isPending} className="px-2 rounded-lg bg-primary/15 text-primary disabled:opacity-40"><Send className="w-3 h-3" /></button>
