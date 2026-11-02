@@ -245,6 +245,25 @@ export async function cancelSequencesFor(userId: number, contactId: number, reas
   return r.length;
 }
 
+/** Mail providers anyone can have: a reply from one gmail.com address says nothing about another. */
+export const FREE_MAIL = new Set(["gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com", "live.com", "icloud.com", "me.com", "aol.com", "msn.com", "proton.me", "protonmail.com", "gmx.com", "mail.com", "yandex.com", "zoho.com", "emirates.net.ae", "eim.ae"]);
+
+/** The company's domain of an address, or null for a free mailbox. Pure. */
+export function companyDomain(email: string): string | null {
+  const d = String(email).trim().toLowerCase().split("@")[1] ?? "";
+  return d && d.includes(".") && !FREE_MAIL.has(d) ? d : null;
+}
+
+/** Every pending rung to anyone at the same company stops, as theirs did. */
+export async function stopCompany(userId: number, email: string): Promise<number> {
+  const domain = companyDomain(email);
+  if (!domain) return 0;
+  const r = await db.execute(sql`UPDATE email_sequence_jobs j SET status = 'cancelled', error = ${`زميلٌ في ${domain} ردّ`}
+    FROM email_contacts c WHERE c.id = j.contact_id AND j.user_id = ${userId} AND j.status = 'pending'
+      AND lower(split_part(c.email, '@', 2)) = ${domain}`);
+  return r.rowCount ?? 0;
+}
+
 async function stopSequenceIf(jobId: number, flag: "stopOnOpen" | "stopOnReply", reason: string) {
   const [job] = await db.select().from(emailSequenceJobsTable).where(eq(emailSequenceJobsTable.id, jobId)).limit(1);
   if (!job) return;

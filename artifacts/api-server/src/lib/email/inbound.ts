@@ -33,7 +33,7 @@ import { memoryPreamble } from "../agent-memory";
 import { say } from "../agent-comms";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
-import { recordEvent, getSettings, cancelSequencesFor } from "./service";
+import { recordEvent, getSettings, cancelSequencesFor, stopCompany } from "./service";
 import { sendEmail, messageIdFor, isConfigured } from "./provider";
 import { newToken, htmlToText } from "./tracking";
 import { updateCard } from "../lead-card";
@@ -184,6 +184,10 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   if (contact && !matched) {
     await cancelSequencesFor(userId, contact.id, "ردّ على البريد").catch(() => {});
   }
+  // One person at a company answered: their colleagues stop getting the
+  // same ladder (Instantly, Smartlead: a reply stops the whole company).
+  const colleagues = await stopCompany(userId, from).catch(() => 0);
+  if (colleagues) logger.info({ userId, from, colleagues }, "ردّ من شركة — أُوقفت متابعات زملائه");
 
   // ── الهدنة: من طلب أن نمهله يُمهَل ──────────────────────────────
   // «سنراجع داخلياً ونعود إليكم» قرارٌ يُتّخذ في غرفةٍ لسنا فيها، ومن

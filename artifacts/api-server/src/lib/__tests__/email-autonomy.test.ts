@@ -24,4 +24,7 @@ ok(repairDraft(known, K).includes("50,000"), "a number from the knowledge stays"
 
 const longLead = `<p class="lead">${"One sentence here that runs on. ".repeat(3)}${"word ".repeat(60)}</p><p class="cta"><a href="#cta">Go</a></p>`;
 ok(!formatIssues(repairDraft(longLead, K), "first").some((i) => /الملخص/.test(i)), "a long lead keeps two sentences");
+const { companyDomain } = await import("../email/service");
+ok(companyDomain("Ahmed@Emaar.AE") === "emaar.ae", "a company address gives its domain");
+ok(companyDomain("someone@gmail.com") === null && companyDomain("x@eim.ae") === null, "a free mailbox is nobody's company");
 console.log(`email-autonomy: ${n}/${n} ✅`);
