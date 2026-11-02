@@ -449,7 +449,8 @@ export function repairDraft(html: string, knowledge: string, ctaHref?: string | 
   // No button at all: the smallest ask, after the lead (or at the end), to the firm's WhatsApp.
   if (ctaHref && !/class="cta"/.test(out)) {
     const button = `<p class="cta"><a href="${ctaHref.replace(/"/g, "&quot;")}">Worth a quick look?</a></p>`;
-    out = /<\/p>/.test(out) ? out.replace(/(<p[^>]*class="lead"[^>]*>[\s\S]*?<\/p>|<\/p>)/, `$1${button}`) : out + button;
+    const lead = /<p[^>]*class="lead"[^>]*>[\s\S]*?<\/p>/i;
+    out = lead.test(out) ? out.replace(lead, (m) => m + button) : /<\/p>/.test(out) ? out.replace(/<\/p>/, (m) => m + button) : out + button;
   }
   if (!/<p[^>]*class="lead"/i.test(out)) {
     out = out.replace(/<p(?![^>]*class=)([^>]*)>((?:(?!<\/p>)[\s\S])*)<\/p>/gi, (m, attrs: string, inner: string) => {
