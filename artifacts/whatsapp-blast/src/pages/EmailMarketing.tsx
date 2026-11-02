@@ -4,6 +4,7 @@
 // after that is watching — the overview polls every ten seconds so what is
 // on screen is what is happening.
 
+import { QuickGmail } from "@/components/EmailReadiness";
 import EmailEmployee from "./EmailEmployee";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -621,8 +622,9 @@ function SettingsTab() {
   );
   return (
     <div className="space-y-4">
+      {!data?.configured && <QuickGmail />}
       <div className={cn(card, "p-4 space-y-3")}>
-        <p className="text-sm font-semibold">المُرسِل</p>
+        <p className="text-sm font-semibold">{data?.configured ? "المُرسِل" : "أو اضبط المُرسِل يدوياً"}</p>
         <div className="grid md:grid-cols-3 gap-3">
           <div><label className="text-xs font-semibold block mb-1.5">الطريقة</label><select className={input} value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value })}><option value="smtp">SMTP (Google Workspace / Microsoft 365 / Hostinger / Zoho)</option><option value="resend">Resend API</option><option value="brevo">Brevo API</option></select></div>
           <L l="اسم المُرسِل" k="fromName" ph="بروكاونت للمحاسبة" /><L l="بريد المُرسِل" k="fromEmail" ph="hello@procount.ae" />

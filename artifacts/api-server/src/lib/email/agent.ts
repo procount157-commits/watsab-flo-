@@ -30,6 +30,7 @@ import { getSettings } from "./service";
 import { teamVoice, onDuty, type EmailRole } from "./team";
 import { asLanguage, languageRule } from "./language";
 import { INTENSITY, FOLLOW_PROMPT, asIntensity } from "./intensity";
+import { isShop } from "./seed";
 
 export const EMAIL_ROLE = "email";
 const KNOWLEDGE = "knowledge";
@@ -233,6 +234,14 @@ export function parseDraft(text: string): EmailDraft | null {
  * follow-up for each audience the campaign will leave behind.
  */
 export async function writeCampaign(userId: number, input: { filter: SegmentFilter; goal: string; language?: string; tone?: string | null; notes?: string | null; role?: EmailRole; intensity?: string | null }): Promise<{ draft: EmailDraft; audience: { description: string; count: number; sample: string[] }; provider: string } | null> {
+  // A shop writes to people, in its own name, with its pieces (shop-writer.ts).
+  const [prof] = await db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
+  if (isShop(prof as any)) {
+    const st = await getSettings(userId).catch(() => null);
+    const { writeShopCampaign } = await import("./shop-writer");
+    const { STORE_URL } = await import("../catalog/floret");
+    return writeShopCampaign(userId, input, { name: st?.brandName ?? (prof?.name ?? "").split("(")[0]!.trim() ?? null, site: st?.website ?? STORE_URL });
+  }
   // The writer's own voice — نورة, or يوسف for a follow-up wave — with the team's doctrine.
   const head = await teamVoice(userId, input.role ?? "email");
   const sectors = input.filter.sectors ?? [];

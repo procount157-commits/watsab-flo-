@@ -18,6 +18,7 @@ import { api, input } from "@/components/AgentPanel";
 import { useFolders } from "@/components/Folders";
 import { useEmailLists } from "./EmailLists";
 import { EmailEditor } from "@/components/EmailEditor";
+import { EmailReadiness } from "@/components/EmailReadiness";
 
 const card = "bg-card border border-card-border rounded-xl";
 const ghost = "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-card-border hover:border-primary/50 transition-colors disabled:opacity-40";
@@ -45,19 +46,26 @@ type Form = {
   /** en (the default) | ar | both — the message is checked against it. */
   language: string;
 };
-const blank = (target: Target = null): Form => ({ name: "", target, subject: "", subjectB: "", abPct: 20, abWaitHours: 4, html: "", when: "now", at: "", language: "en" });
+const blank = (target: Target = null, language = "en"): Form => ({ name: "", target, subject: "", subjectB: "", abPct: 20, abWaitHours: 4, html: "", when: "now", at: "", language });
+/** The account's own language from its settings — a shop writing Arabic does not start every campaign in English. */
+function useDefaultLanguage(): string {
+  const { data } = useQuery<any>({ queryKey: ["email-settings"], queryFn: () => api("/api/email/settings") });
+  return data?.settings?.defaultLanguage ?? "en";
+}
+const LANG_OPTIONS = (def: string) => [["en", "🇬🇧 الإنجليزية"], ["ar", "العربية"], ["both", "الاثنتان"]].map(([v, l]) => <option key={v} value={v}>{l}{v === def ? " (افتراضي)" : ""}</option>);
 
 export function Campaigns({ initialListId, onUsedInitial }: { initialListId?: number | null; onUsedInitial?: () => void }) {
   const qc = useQueryClient();
   const { data: rows = [], isLoading } = useQuery<any[]>({ queryKey: ["email-campaigns"], queryFn: () => api("/api/email/campaigns"), refetchInterval: 10_000 });
   const [form, setForm] = useState<Form | null>(null);
+  const lang = useDefaultLanguage();
   const [open, setOpen] = useState<number | null>(null);
   const [filter, setFilter] = useState<string>("");
   const inv = () => { qc.invalidateQueries({ queryKey: ["email-campaigns"] }); qc.invalidateQueries({ queryKey: ["email-overview"] }); };
 
   // Arrived from a list's "campaign" button: the builder opens on that list.
   useEffect(() => {
-    if (initialListId) { setForm(blank({ kind: "list", id: initialListId })); onUsedInitial?.(); }
+    if (initialListId) { setForm(blank({ kind: "list", id: initialListId }, lang)); onUsedInitial?.(); }
   }, [initialListId]);
 
   const start = useMutation({ mutationFn: (id: number) => api(`/api/email/campaigns/${id}/start`, { method: "POST" }), onSuccess: (d: any) => { inv(); toast.success(`بدأت — ${n(d.queued)} رسالة في الطابور${d.skipped ? ` · ${n(d.skipped)} تُخطّوا (ألغوا أو ارتدّوا)` : ""}`); }, onError: (e: Error) => toast.error(e.message) });
@@ -81,6 +89,7 @@ export function Campaigns({ initialListId, onUsedInitial }: { initialListId?: nu
         ))}
       </div>
 
+      {!form && <EmailReadiness />}
       {!form && <CreatorPanel />}
 
       {form ? <Builder form={form} setForm={setForm} onDone={() => { setForm(null); inv(); }} /> : (
@@ -92,7 +101,7 @@ export function Campaigns({ initialListId, onUsedInitial }: { initialListId?: nu
               </button>
             ))}
           </div>
-          <button onClick={() => setForm(blank())} className={cn(primary, "mr-auto")}><Plus className="w-3.5 h-3.5" /> حملة جديدة</button>
+          <button onClick={() => setForm(blank(null, lang))} className={cn(primary, "mr-auto")}><Plus className="w-3.5 h-3.5" /> حملة جديدة</button>
         </div>
       )}
 
@@ -102,7 +111,7 @@ export function Campaigns({ initialListId, onUsedInitial }: { initialListId?: nu
           <Megaphone className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
           <p className="font-medium">لا حملات بعد</p>
           <p className="text-sm text-muted-foreground mt-1">اختر قائمة أو مجلداً، ودع نورة تكتب الرسالة — وأرسل لنفسك نسخة تجربة قبل الإطلاق.</p>
-          <button onClick={() => setForm(blank())} className={cn(primary, "mx-auto mt-4")}><Plus className="w-3.5 h-3.5" /> أنشئ أول حملة</button>
+          <button onClick={() => setForm(blank(null, lang))} className={cn(primary, "mx-auto mt-4")}><Plus className="w-3.5 h-3.5" /> أنشئ أول حملة</button>
         </div>
       ) : (
         <div className="space-y-2.5">
@@ -158,6 +167,7 @@ export function Campaigns({ initialListId, onUsedInitial }: { initialListId?: nu
 
 // ── The builder ──────────────────────────────────────────────────
 function Builder({ form, setForm, onDone }: { form: Form; setForm: (f: Form | null) => void; onDone: () => void }) {
+  const defLang = useDefaultLanguage();
   const { data: lists = [] } = useEmailLists();
   const { data: folderData } = useFolders("email");
   const { data: segs = [] } = useQuery<any[]>({ queryKey: ["email-segments"], queryFn: () => api("/api/email/segments") });
@@ -310,7 +320,7 @@ function Builder({ form, setForm, onDone }: { form: Form; setForm: (f: Form | nu
         )}
         <div className="space-y-2">
           <div className="flex items-center gap-2"><span className="text-[11px] text-muted-foreground">لغة الحملة:</span>
-            <select className={cn(input, "w-56 text-xs")} value={form.language} onChange={(e) => set({ language: e.target.value })}><option value="en">🇬🇧 الإنجليزية (افتراضي)</option><option value="ar">العربية — بطلبك</option><option value="both">الاثنتان</option></select>
+            <select className={cn(input, "w-56 text-xs")} value={form.language} onChange={(e) => set({ language: e.target.value })}>{LANG_OPTIONS(defLang)}</select>
             {form.language !== "en" && <span className="text-[10px] text-yellow-400">غيّرت اللغة عن الافتراضية</span>}</div>
           <div><label className="text-[11px] font-semibold block mb-1">العنوان / Subject</label><input className={input} value={form.subject} onChange={(e) => set({ subject: e.target.value })} placeholder="{{company|Your company}} — is your AML framework inspection-ready?" /></div>
           <EmailEditor value={form.html} subject={form.subject} onChange={(html) => set({ html })} minHeight={340} />
@@ -411,6 +421,7 @@ function CampaignDetail({ id }: { id: number }) {
 
 // ── طارق builds a campaign on request ────────────────────────────
 function CreatorPanel() {
+  const defLang = useDefaultLanguage();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const { data: services = [] } = useQuery<any[]>({ queryKey: ["email-creator-services"], queryFn: () => api("/api/email/creator/services"), enabled: open });
@@ -418,7 +429,9 @@ function CreatorPanel() {
   const { data: folderData } = useFolders("email");
   const { data: sectorList } = useQuery<any>({ queryKey: ["email-sectors"], queryFn: () => api("/api/email/sectors"), enabled: open });
   const folders: any[] = folderData?.folders ?? [];
-  const [f, setF] = useState<{ service: string; language: string; kind: "sector" | "list" | "folder"; ids: Array<number | string>; take: number; notes: string }>({ service: "", language: "en", kind: "sector", ids: [], take: 150, notes: "" });
+  const [f, setF] = useState<{ service: string; language: string; kind: "sector" | "list" | "folder"; ids: Array<number | string>; take: number; notes: string }>({ service: "", language: defLang, kind: "sector", ids: [], take: 150, notes: "" });
+  // The settings arrive after the first render: the account's language replaces the placeholder until the owner picks one.
+  useEffect(() => { setF((x) => (x.language === "en" && defLang !== "en" ? { ...x, language: defLang } : x)); }, [defLang]);
   const toggle = (id: number | string) => setF({ ...f, ids: f.ids.includes(id) ? f.ids.filter((x) => x !== id) : [...f.ids, id] });
   const create = useMutation({
     mutationFn: () => api("/api/email/creator", { method: "POST", body: JSON.stringify({ service: f.service, language: f.language, take: f.take, notes: f.notes,
@@ -441,7 +454,7 @@ function CreatorPanel() {
       <div className="flex items-center gap-2"><span className="text-xl">🧩</span><p className="font-semibold text-sm">طارق ينشئ حملة</p><button onClick={() => setOpen(false)} className="mr-auto text-muted-foreground"><X className="w-4 h-4" /></button></div>
       <div className="grid md:grid-cols-3 gap-3">
         <label className="text-[11px] text-muted-foreground">الخدمة<select className={cn(input, "mt-1")} value={f.service} onChange={(e) => setF({ ...f, service: e.target.value })}><option value="">اختر…</option>{services.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></label>
-<label className="text-[11px] text-muted-foreground">اللغة<select className={cn(input, "mt-1")} value={f.language} onChange={(e) => setF({ ...f, language: e.target.value })}><option value="en">🇬🇧 الإنجليزية (افتراضي)</option><option value="ar">العربية — بطلبك</option><option value="both">الاثنتان</option></select></label>
+<label className="text-[11px] text-muted-foreground">اللغة<select className={cn(input, "mt-1")} value={f.language} onChange={(e) => setF({ ...f, language: e.target.value })}>{LANG_OPTIONS(defLang)}</select></label>
         <label className="text-[11px] text-muted-foreground">حجم الموجة<input type="number" className={cn(input, "mt-1")} value={f.take} onChange={(e) => setF({ ...f, take: Math.max(10, Number(e.target.value) || 10) })} /></label>
       </div>
       <div>

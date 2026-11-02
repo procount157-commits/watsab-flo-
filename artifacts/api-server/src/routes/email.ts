@@ -58,6 +58,7 @@ import { cleanFilter, facets, resolve as resolveSegment, count as countSegment, 
 import { ensureEmailAgent, memory as agentMemory, teach, rememberKnowledge, writeCampaign, EMAIL_ROLE } from "../lib/email/agent";
 import { createMission, setAudience as setMissionAudience, approve as approveMission, runMission, missionsFor, missionReport } from "../lib/email/missions";
 import { seedEmailDefaults, DEFAULT_SEQUENCE_NAME } from "../lib/email/seed";
+import { quickGmail } from "../lib/email/quick-setup";
 import { newToken, renderEmail, personalize } from "../lib/email/tracking";
 import { brandOf, directionOf } from "../lib/email/layout";
 import { logger } from "../lib/logger";
@@ -410,6 +411,17 @@ router.post("/senders/:id/test", async (req, res) => {
 router.delete("/senders/:id", async (req, res) => {
   await db.delete(emailSendersTable).where(and(eq(emailSendersTable.id, Number(req.params.id)), eq(emailSendersTable.userId, req.session.userId!)));
   res.json({ ok: true });
+});
+
+// Gmail in one step: the address and its app password; the rest from the account (quick-setup.ts).
+router.post("/settings/quick-gmail", async (req, res) => {
+  const userId = req.session.userId!;
+  const had = await getSettings(userId);
+  const r = await quickGmail(userId, { email: req.body?.email, appPassword: req.body?.appPassword, fromName: req.body?.fromName });
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  if (!had) await seedEmailDefaults(userId).catch(() => {});
+  const s = await getSettings(userId);
+  res.json({ settings: mask(s), configured: isConfigured(s) });
 });
 
 router.post("/settings/test", async (req, res) => {

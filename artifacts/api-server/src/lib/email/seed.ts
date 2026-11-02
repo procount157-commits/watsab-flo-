@@ -10,7 +10,7 @@
 // amount or a deadline: those are the owner's to write from the current
 // rules, not this file's to guess.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, emailSequencesTable, emailTemplatesTable, type EmailStep } from "@workspace/db";
 import { seedLibrary2 } from "./library-2";
 import { logger } from "../logger";
@@ -94,8 +94,17 @@ const TEMPLATES: Array<{ name: string; subject: string; html: string; category: 
 ];
 
 /** Install the sequence and the templates. `force` re-adds anything missing; nothing edited is touched. */
+/** A business that sells to people, not to companies: the shop verticals. Pure. */
+export function isShop(p: { vertical?: string | null; catalog_source?: string | null } | null | undefined): boolean {
+  return !!p && (p.catalog_source === "floret" || ["jewelry", "retail", "fashion", "restaurant", "cafe", "beauty"].includes(String(p.vertical ?? "")));
+}
+
 export async function seedEmailDefaults(userId: number, force = false): Promise<{ sequence: boolean; templates: number }> {
   let sequence = false, templates = 0;
+  // The library is an accounting firm's — AML to companies. A shop selling to
+  // people gets none of it; its first campaign is written for it instead.
+  const [p] = (await db.execute<{ vertical: string | null; catalog_source: string | null }>(sql`SELECT vertical, catalog_source FROM business_profile WHERE user_id = ${userId}`)).rows;
+  if (isShop(p)) return { sequence, templates };
   // المكتبة الثانية تُزرع دائماً بالاسم: قوالبها جديدة، ومن زُرع حسابه
   // قبل وجودها يأخذها الآن — ولا تُكرَّر ولا تمسّ ما عدّله صاحب العمل.
   const lib2 = await seedLibrary2(userId).catch(() => ({ added: 0 }));
