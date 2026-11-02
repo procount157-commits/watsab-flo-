@@ -32,7 +32,7 @@ import { INTENSITY, asIntensity } from "./intensity";
 import { CAMPAIGN_LANGUAGE, trackOfAngle, type Track } from "./policy";
 import { trackingActive, retestHeld, getSettings, signals } from "./service";
 import { warmupCap } from "./health";
-import { activity, guardCheck, formatIssues, onDuty, type EmailRole } from "./team";
+import { activity, guardCheck, formatIssues, repairDraft, onDuty, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
 
 async function log(missionId: number, text: string, kind = "note") {
@@ -153,9 +153,50 @@ export async function campaignCard(userId: number, audience: number, draft: Emai
   return { line, text, perDay, days };
 }
 
+const MAX_REWRITES = 5;
+/** How many times this mission has been sent back to the writer. */
+async function rewrites(missionId: number): Promise<number> {
+  const [r] = (await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM email_mission_log WHERE mission_id = ${missionId} AND kind = 'error'`)).rows;
+  return Number(r?.n ?? 0);
+}
+/** A mission no writing could make safe is set aside — not left waiting for the owner; the autopilot writes the next wave. */
+async function giveUp(m: EmailMission, why: string) {
+  await set(m.id, { status: "paused", pending: null });
+  await log(m.id, `تُركت بعد ${MAX_REWRITES} كتابات: ${why}. الموجة التالية تُكتب من جديد.`, "done");
+  await activity(m.userId, "email_guard", "skip", `ترك «${m.name}» — لم تصلح للإرسال بعد عدة كتابات: ${why}`, { missionId: m.id });
+}
+/** The draft mended (repairDraft) and checked again, the follow-ups with it. */
+function mend(d: EmailDraft, knowledge: string): { draft: EmailDraft; issues: string[] } {
+  const draft: EmailDraft = { ...d, html: repairDraft(d.html, knowledge), followups: d.followups.map((f) => ({ ...f, html: repairDraft(f.html, knowledge) })) };
+  draft.subjects = d.subjects.filter((x) => !guardCheck([x], knowledge).length);
+  if (!draft.subjects.length) return { draft, issues: ["كل العناوين فيها ما يُرفض"] };
+  return { draft, issues: [...guardCheck([...draft.subjects, draft.html, ...draft.followups.flatMap((f) => [f.subject, f.html])], knowledge), ...formatIssues(draft.html, "first").filter((i) => !LENGTH_ONLY.test(i))] };
+}
+/** Too long is a note for the writer's next lesson, not a reason to hold a campaign. */
+const LENGTH_ONLY = /^الرسالة \d+ كلمة/;
+
+/**
+ * A mission that was left awaiting the owner before the team ran on its own:
+ * its draft is mended and sent, or written again. Nothing waits for a yes
+ * on an account that said yes to everything.
+ */
+async function release(m: EmailMission): Promise<void> {
+  const d = m.pending as EmailDraft | null;
+  if (!d?.html) { await set(m.id, { stage: "draft", pending: null }); return; }
+  const fixed = mend(d, await knowledgeText(m.userId));
+  if (fixed.issues.length || ![fixed.draft.html, ...fixed.draft.subjects].every((t) => matchesLanguage(t, asLanguage(m.language)))) {
+    await set(m.id, { stage: "draft", pending: null });
+    await log(m.id, "كانت تنتظر الموافقة — أُعيدت للكتابة لتُرسل وحدها.", "write");
+    return;
+  }
+  await log(m.id, "كانت تنتظر الموافقة — أصلحها ماجد وأُرسلت بلا موافقة.", "approve");
+  await launch({ ...m, pending: fixed.draft as any }, fixed.draft);
+}
+
 /** One step for one mission. Safe to call at any time; each stage checks its own evidence. */
 export async function runMission(m: EmailMission): Promise<void> {
   if (m.status !== "active") return;
+  if (m.stage === "awaiting_approval" && !m.requireApproval) { await release(m); return; }
   const filter = m.filter as SegmentFilter;
   const sectors = filter.sectors ?? [];
 
@@ -167,8 +208,10 @@ export async function runMission(m: EmailMission): Promise<void> {
     await activity(m.userId, role, "write", `كتب حملة «${m.name}» لـ ${w.audience.count} شركة: «${w.draft.subjects[0]}»`, { missionId: m.id });
     // ماجد reads it before anything goes out on its own; what he finds sends it to the owner instead.
     if (!m.requireApproval && ![w.draft.html, ...w.draft.subjects].every((t) => matchesLanguage(t, asLanguage(m.language)))) {
-      await set(m.id, { stage: "awaiting_approval", pending: w.draft as any });
-      await log(m.id, wrongLanguage(asLanguage(m.language)), "error");
+      // Written in the wrong language: written again next round, not handed to the owner.
+      await log(m.id, `${wrongLanguage(asLanguage(m.language))} — أُعيدت للكتابة تلقائياً.`, "error");
+      if (await rewrites(m.id) >= MAX_REWRITES) { await giveUp(m, "اللغة لم تُضبط بعد عدة كتابات"); return; }
+      await set(m.id, {});
       return;
     }
     if (!m.requireApproval && (await onDuty(m.userId, "email_guard"))) {
@@ -186,10 +229,17 @@ export async function runMission(m: EmailMission): Promise<void> {
           await set(m.id, { stage: "draft", goal: `${m.goal.split("\n\nتجنّبي في هذه الكتابة:")[0]}\n\nتجنّبي في هذه الكتابة: ${issues.slice(0, 6).join(" · ")}`.slice(0, 4000) });
           return;
         }
-        await set(m.id, { stage: "awaiting_approval", pending: w.draft as any });
-        await log(m.id, `أوقفها حارس الجودة قبل الإرسال: ${issues.join(" · ")}`, "error");
-        await activity(m.userId, "email_guard", "hold", `أوقف «${m.name}» حتى تراجعها: ${issues.slice(0, 3).join(" · ")}`, { missionId: m.id, issues });
-        await notify(m.userId, `<b>🛡️ ماجد أوقف حملة «${esc(m.name)}» قبل الإرسال</b>\n${issues.slice(0, 4).map((i) => `• ${esc(i)}`).join("\n")}\nراجعها من البريد → المهام.`).catch(() => {});
+        // Two rewrites did not clear it: ماجد mends it himself and sends what passes.
+        const fixed = mend(w.draft, knowledge);
+        if (fixed.issues.length) {
+          await log(m.id, `بقي بعد الإصلاح: ${fixed.issues.join(" · ")} — تُكتب من جديد.`, "error");
+          if (await rewrites(m.id) >= MAX_REWRITES) { await giveUp(m, fixed.issues.slice(0, 3).join(" · ")); return; }
+          await set(m.id, { goal: m.goal.split("\n\nتجنّبي في هذه الكتابة:")[0]! });
+          return;
+        }
+        await activity(m.userId, "email_guard", "pass", `أصلح «${m.name}» بنفسه (${issues.slice(0, 3).join(" · ")}) — يُرسل.`, { missionId: m.id, issues });
+        await log(m.id, `أصلحها ماجد بنفسه: ${issues.join(" · ")} — تُرسل.`, "write");
+        await launch({ ...m, pending: fixed.draft as any }, fixed.draft);
         return;
       }
       await activity(m.userId, "email_guard", "pass", `راجع «${m.name}»: لا أرقام خارج المعرفة ولا مبالغة — يُرسل.`, { missionId: m.id });
@@ -325,7 +375,7 @@ async function finish(m: EmailMission) {
 
 export async function runMissions(): Promise<void> {
   const active = await db.select().from(emailMissionsTable)
-    .where(and(eq(emailMissionsTable.status, "active"), inArray(emailMissionsTable.stage, ["draft", "sending", "following_up"])));
+    .where(and(eq(emailMissionsTable.status, "active"), sql`(${emailMissionsTable.stage} in ('draft','sending','following_up') or (${emailMissionsTable.stage} = 'awaiting_approval' and not ${emailMissionsTable.requireApproval}))`));
   for (const m of active) {
     try { await runMission(m); }
     catch (err) { await log(m.id, `خطأ: ${String((err as any)?.message ?? err).slice(0, 300)}`, "error").catch(() => {}); }

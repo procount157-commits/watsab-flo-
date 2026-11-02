@@ -6,6 +6,7 @@
 // It becomes a mission that waits for the owner's approval like any other,
 // so nothing goes out until the owner says so.
 
+import { getAutopilot } from "./autopilot";
 import { db, emailTemplatesTable, type SegmentFilter } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { createMission, runMission } from "./missions";
@@ -70,11 +71,13 @@ export async function createWithCreator(userId: number, input: {
     `بيانات التواصل للدعوة: الهاتف وواتساب ${CONTACT.phone}، الموقع ${CONTACT.websiteLabel}.`,
     examples.length ? `أمثلة من مكتبة قوالب الشركة لهذه الخدمة — استلهم الأسلوب والبنية ولا تنسخها:\n${examples.map((t) => `العنوان: ${t.subject}\n${plain(t.html).slice(0, 900)}`).join("\n---\n")}` : "",
   ].filter(Boolean).join("\n\n");
+  // On an account whose team runs on its own, his campaigns go out like everyone's — ماجد checks, nobody waits.
+  const auto = (await getAutopilot(userId)).mode === "auto";
   const m = await createMission(userId, {
     name: `${svc.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
-    goal: `${svc.goal}\n\n${notes}`, filter, language: input.language, requireApproval: true, agentRole: "email_creator",
+    goal: `${svc.goal}\n\n${notes}`, filter, language: input.language, requireApproval: !auto, agentRole: "email_creator",
   });
-  await activity(userId, "email_creator", "create", `بدأ بناء حملة «${svc.label}» لـ ${n} شركة (${describe(filter)}) — تنتظر موافقتك حين تُكتب.`, { missionId: m.id });
+  await activity(userId, "email_creator", "create", `بدأ بناء حملة «${svc.label}» لـ ${n} شركة (${describe(filter)}) ${auto ? "— تُرسل وحدها بعد فحص ماجد." : "— تنتظر موافقتك حين تُكتب."}`, { missionId: m.id });
   // He writes now rather than at the next round, so the owner can read it in a minute.
   void runMission(m).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "creator write failed"));
   return { missionId: m.id, audience: n, description: describe(filter) };

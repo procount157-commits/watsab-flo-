@@ -430,6 +430,43 @@ export function formatIssues(html: string, kind: "first" | "followup" = "first")
   return issues;
 }
 
+/**
+ * What ماجد finds, mended instead of sent to the owner (the owner, 2026-11-02:
+ * «بدون موافقات… أنا موافق على كل شيء»). The writer's free models forget the
+ * [ملخص] mark far more often than they forget the summary itself — 61 of 73
+ * campaigns waited on that alone. So: the first real paragraph is the lead;
+ * a long lead keeps its first two sentences; a sentence with hype, false
+ * urgency, an official tone or a number the firm never taught is cut out.
+ * What is left is checked again by the caller. Pure.
+ */
+export function repairDraft(html: string, knowledge: string): string {
+  let out = html;
+  if (!/<p[^>]*class="lead"/i.test(out)) {
+    out = out.replace(/<p(?![^>]*class=)([^>]*)>((?:(?!<\/p>)[\s\S])*)<\/p>/gi, (m, attrs: string, inner: string) => {
+      const text = inner.replace(/<[^>]+>/g, " ").trim();
+      if (/^(hello|hi|dear|good (morning|afternoon|evening)|مرحب|السلام|مساء|صباح)\b/i.test(text) && words(text) <= 6) return m;
+      if (words(text) < 6 || /class="lead"/.test(out.slice(0, out.indexOf(m)))) return m;
+      return `<p class="lead"${attrs}>${inner}</p>`;
+    });
+    // Only the first candidate becomes the lead.
+    let seen = false;
+    out = out.replace(/<p class="lead"/g, (m) => (seen ? "<p" : ((seen = true), m)));
+  }
+  out = out.replace(/(<p[^>]*class="lead"[^>]*>)([\s\S]*?)(<\/p>)/i, (m, open: string, inner: string, close: string) => {
+    if (words(inner) <= 55) return m;
+    const sentences = inner.split(/(?<=[.!?؟])\s+/);
+    return `${open}${sentences.slice(0, 2).join(" ")}${close}`;
+  });
+  // A sentence that carries what the guard refuses goes; the rest of the paragraph stays.
+  const bad = (sentence: string) => guardCheck([sentence], knowledge).length > 0;
+  out = out.replace(/>([^<>]+)</g, (m, text: string) => {
+    if (!bad(text)) return m;
+    const kept = text.split(/(?<=[.!?؟])\s+/).filter((x) => !bad(x)).join(" ");
+    return `>${kept}<`;
+  });
+  return out.replace(/<(p|li|div)[^>]*>\s*<\/\1>/g, "");
+}
+
 // ── ماجد's check ──────────────────────────────────────────────────
 const HYPE = /(الأفضل|الافضل|الأقوى|الاقوى|الأرخص|الارخص|الرائد|حلول متكاملة|خبرات عالمية|\bbest\b(?!\s+(?:regards|wishes))|no\.?\s?1\b|cheapest|\bleading\b|world[- ]class|guarantee|مضمون|نضمن|ضمان|100\s?%|١٠٠\s?٪)/i;
 const URGENCY = /(آخر فرصة|اخر فرصة|عرض ينتهي اليوم|سارع|لا تفوّت|خلال ٢٤ ساعة فقط|act now|last chance|limited time|urgent)/i;
