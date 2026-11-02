@@ -444,8 +444,13 @@ export function formatIssues(html: string, kind: "first" | "followup" = "first")
  * urgency, an official tone or a number the firm never taught is cut out.
  * What is left is checked again by the caller. Pure.
  */
-export function repairDraft(html: string, knowledge: string): string {
+export function repairDraft(html: string, knowledge: string, ctaHref?: string | null): string {
   let out = html;
+  // No button at all: the smallest ask, after the lead (or at the end), to the firm's WhatsApp.
+  if (ctaHref && !/class="cta"/.test(out)) {
+    const button = `<p class="cta"><a href="${ctaHref.replace(/"/g, "&quot;")}">Worth a quick look?</a></p>`;
+    out = /<\/p>/.test(out) ? out.replace(/(<p[^>]*class="lead"[^>]*>[\s\S]*?<\/p>|<\/p>)/, `$1${button}`) : out + button;
+  }
   if (!/<p[^>]*class="lead"/i.test(out)) {
     out = out.replace(/<p(?![^>]*class=)([^>]*)>((?:(?!<\/p>)[\s\S])*)<\/p>/gi, (m, attrs: string, inner: string) => {
       const text = inner.replace(/<[^>]+>/g, " ").trim();

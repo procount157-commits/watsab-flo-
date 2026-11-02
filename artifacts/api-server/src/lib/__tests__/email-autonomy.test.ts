@@ -24,6 +24,10 @@ ok(repairDraft(known, K).includes("50,000"), "a number from the knowledge stays"
 
 const longLead = `<p class="lead">${"One sentence here that runs on. ".repeat(3)}${"word ".repeat(60)}</p><p class="cta"><a href="#cta">Go</a></p>`;
 ok(!formatIssues(repairDraft(longLead, K), "first").some((i) => /الملخص/.test(i)), "a long lead keeps two sentences");
+const noCta = `<p>Hello,</p><p class="lead">Brokers must register on goAML before a cash deal, and many have not yet done it.</p><p>Details.</p>`;
+const d = repairDraft(noCta, K, "https://wa.me/971542328336");
+ok(formatIssues(d, "first").length === 0 && d.indexOf('class="cta"') > d.indexOf('class="lead"'), "a missing button is added after the lead");
+ok(!/class="cta"/.test(repairDraft(noCta, K)), "no link known, no button invented");
 const { companyDomain } = await import("../email/service");
 ok(companyDomain("Ahmed@Emaar.AE") === "emaar.ae", "a company address gives its domain");
 ok(companyDomain("someone@gmail.com") === null && companyDomain("x@eim.ae") === null, "a free mailbox is nobody's company");

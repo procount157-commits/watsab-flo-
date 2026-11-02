@@ -166,14 +166,21 @@ async function giveUp(m: EmailMission, why: string) {
   await activity(m.userId, "email_guard", "skip", `ترك «${m.name}» — لم تصلح للإرسال بعد عدة كتابات: ${why}`, { missionId: m.id });
 }
 /** The draft mended (repairDraft) and checked again, the follow-ups with it. */
-function mend(d: EmailDraft, knowledge: string): { draft: EmailDraft; issues: string[] } {
-  const draft: EmailDraft = { ...d, html: repairDraft(d.html, knowledge), followups: d.followups.map((f) => ({ ...f, html: repairDraft(f.html, knowledge) })) };
+function mend(d: EmailDraft, knowledge: string, cta: string | null = null): { draft: EmailDraft; issues: string[] } {
+  const draft: EmailDraft = { ...d, html: repairDraft(d.html, knowledge, cta), followups: d.followups.map((f) => ({ ...f, html: repairDraft(f.html, knowledge, cta) })) };
   draft.subjects = d.subjects.filter((x) => !guardCheck([x], knowledge).length);
   if (!draft.subjects.length) return { draft, issues: ["كل العناوين فيها ما يُرفض"] };
   return { draft, issues: [...guardCheck([...draft.subjects, draft.html, ...draft.followups.flatMap((f) => [f.subject, f.html])], knowledge), ...formatIssues(draft.html, "first").filter((i) => !LENGTH_ONLY.test(i))] };
 }
 /** Too long is a note for the writer's next lesson, not a reason to hold a campaign. */
 const LENGTH_ONLY = /^الرسالة \d+ كلمة/;
+/** Where a mended button goes: the firm's WhatsApp with the ask written, else its site. */
+async function ctaFor(userId: number): Promise<string | null> {
+  const s = await getSettings(userId).catch(() => null);
+  const wa = (s?.phone ?? "").replace(/\D/g, "");
+  if (wa.length >= 9) return `https://wa.me/${wa}?text=${encodeURIComponent("Hello, I would like a quick look at our AML / tax position.")}`;
+  return s?.website ? (/^https?:/.test(s.website) ? s.website : `https://${s.website}`) : null;
+}
 
 /**
  * A mission that was left awaiting the owner before the team ran on its own:
@@ -183,7 +190,7 @@ const LENGTH_ONLY = /^الرسالة \d+ كلمة/;
 async function release(m: EmailMission): Promise<void> {
   const d = m.pending as EmailDraft | null;
   if (!d?.html) { await set(m.id, { stage: "draft", pending: null }); return; }
-  const fixed = mend(d, await knowledgeText(m.userId));
+  const fixed = mend(d, await knowledgeText(m.userId), await ctaFor(m.userId));
   if (fixed.issues.length || ![fixed.draft.html, ...fixed.draft.subjects].every((t) => matchesLanguage(t, asLanguage(m.language)))) {
     await set(m.id, { stage: "draft", pending: null });
     await log(m.id, "كانت تنتظر الموافقة — أُعيدت للكتابة لتُرسل وحدها.", "write");
@@ -230,7 +237,7 @@ export async function runMission(m: EmailMission): Promise<void> {
           return;
         }
         // Two rewrites did not clear it: ماجد mends it himself and sends what passes.
-        const fixed = mend(w.draft, knowledge);
+        const fixed = mend(w.draft, knowledge, await ctaFor(m.userId));
         if (fixed.issues.length) {
           await log(m.id, `بقي بعد الإصلاح: ${fixed.issues.join(" · ")} — تُكتب من جديد.`, "error");
           if (await rewrites(m.id) >= MAX_REWRITES) { await giveUp(m, fixed.issues.slice(0, 3).join(" · ")); return; }
