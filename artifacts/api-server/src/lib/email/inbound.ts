@@ -21,7 +21,7 @@ import {
   botEmployeesTable, businessProfileTable, type EmailSettings, emailSendersTable, type EmailSender,
 } from "@workspace/db";
 import { senderFor, asSettings } from "./senders";
-import { classifyMail, classifyWithModel, mayBecomeLead, KIND_AR, INTENT_AR, toSharedIntent, type MailKind, type EmailIntent } from "./classify";
+import { classifyMail, classifyWithModel, bounceSeverity, mayBecomeLead, KIND_AR, INTENT_AR, toSharedIntent, type MailKind, type EmailIntent } from "./classify";
 import { thread, threadBrief, openingsUsed, sentBody } from "./thread";
 import { replyInstructions, OUTPUT_SHAPE } from "./prompts";
 import { retrieve } from "../knowledge";
@@ -160,7 +160,17 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   }
 
   if (v.kind === "bounce") {
-    if (matched) await recordEvent(userId, matched.id, "bounce", { meta: { subject: mail.subject } });
+    // الشدّة قبل الحكم: العنوان الميت وحده يُخرج الجهة (classify.ts).
+    const severity = bounceSeverity(`${mail.subject ?? ""}\n${raw}`);
+    if (matched && severity === "hard") await recordEvent(userId, matched.id, "bounce", { meta: { subject: mail.subject } });
+    else if (matched && severity !== "delay" && severity !== "report") {
+      await recordEvent(userId, matched.id, "failed", { meta: { subject: mail.subject, severity } });
+      // صندوقٌ ممتلئ يُعطى ثلاثة أيام ثم يُراسَل؛ ورفض السياسة لا يمسّ الجهة.
+      if (severity === "soft" && matched.contactId) await db.update(emailContactsTable)
+        .set({ quietUntil: new Date(Date.now() + 3 * 86_400_000), quietReason: "صندوقه ممتلئ أو خادمه مؤقتاً لا يستقبل" })
+        .where(eq(emailContactsTable.id, matched.contactId));
+      if (severity === "policy") await activity(userId, "email_guard", "policy", `مزوّد ${mail.from} رفض رسالتنا لسياسته (لا عنوانٌ ميت) — الجهة باقية، والنص يُراجَع.`).catch(() => {});
+    }
     const b = await record(userId, null, matched?.id ?? null, mail, text, v);
     return { id: b.id, bounce: true, kind: "bounce", isReply: false };
   }

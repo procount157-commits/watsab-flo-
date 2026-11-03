@@ -174,7 +174,7 @@ export async function workTheGoal(userId: number, r: ResultsReport, apply = true
   });
   const changed: string[] = [];
   // السمعة قبل الهدف: إن رفض المزوّد نصّنا فالطيار يُصغّر الموجة بنفسه، ولا يكبّرها المدير.
-  const reputationHold = r.decisions.some((d) => d.kind === "policy") || r.overall.bounceRate >= 5;
+  const reputationHold = r.decisions.some((d) => d.kind === "policy") || (r.recent?.sent >= 150 ? r.recent.bounceRate : r.overall.bounceRate) >= 5;
   if (apply && plan.state !== "done" && !reputationHold && plan.waveSize !== cfg.waveSize) {
     await saveAutopilot(userId, { waveSize: plan.waveSize });
     changed.push(`حجم الموجة ${cfg.waveSize} ← ${plan.waveSize} (الهدف يحتاج ${plan.perDay} شركة يومياً)`);
@@ -219,7 +219,7 @@ export function cycleFacts(c: Omit<CycleResult, "brief">): string {
     `الفريق: ${c.staffing.total} موظفاً.${c.staffing.hired.length ? ` عُيّن في هذه الدورة: ${c.staffing.hired.join("، ")}.` : ""}${c.staffing.offDuty.length ? ` متوقفون: ${c.staffing.offDuty.map((o) => `${o.name} — ${o.gap}`).join("؛ ")}.` : " كلهم على رأس العمل."}`,
     `الإرسال: الطيار ${c.sending.enabled ? "يعمل" : "متوقف"}، ${c.sending.mode === "auto" ? "آلي بلا موافقة" : "ينتظر موافقة صاحب العمل على كل حملة"}. صحة المُرسِل: ${c.sending.level}${c.sending.reasons.length ? ` (${c.sending.reasons.slice(0, 2).join("؛ ")})` : ""}.`,
     `النسبة (آخر ${r.days} يوماً): AML ${Math.round(sh.aml * 100)}٪ · خدمات ${Math.round(sh.services * 100)}٪ — المستهدف ${MIX.aml * 100}/${MIX.services * 100}.`,
-    `النتائج بالشركة: ${r.overall.sent} شركة راسلناها · ${r.overall.positive} رداً نافعاً · ${r.overall.replied} رداً حقيقياً · ارتداد ${r.overall.bounceRate}٪ · رفض المزوّد ${r.overall.rejected} رسالة.`,
+    `النتائج بالشركة: ${r.overall.sent} شركة راسلناها · ${r.overall.positive} رداً نافعاً · ${r.overall.replied} رداً حقيقياً · ارتداد ${r.overall.bounceRate}٪ (آخر ${r.recent?.sent ?? 0} شركة في ٧ أيام: ${r.recent?.bounceRate ?? 0}٪) · رفض المزوّد ${r.overall.rejected} رسالة.`,
     ...r.tracks.map((t) => `• ${t.label}: ${t.sent} شركة، ${t.positive} رداً نافعاً، ارتداد ${t.bounceRate}٪ ← ${VERDICT_AR[t.verdict].label}`),
     r.angles.length ? "الزوايا:" : "لا زاوية مسمّاة اكتملت عيّنتها بعد.",
     ...r.angles.map((a) => `• ${a.label}: ${a.sent} شركة، ${a.positive} نافعاً ← ${VERDICT_AR[a.verdict].label} (${a.why})`),

@@ -455,3 +455,39 @@ export function mayBecomeLead(kind: MailKind): boolean { return kind === "reply"
 
 /** الأنواع التي تُعرض في صندوق الوارد افتراضياً — ما يستحق وقت صاحب العمل. */
 export const INBOX_DEFAULT: MailKind[] = ["reply"];
+
+// ── شدّة الارتداد ─────────────────────────────────────────────────
+// كل إشعار تسليمٍ كان «ارتداداً» يحرق الجهة نهائياً. وفي وارد هذا الحساب:
+// إنذارات تأخير («has not yet been delivered… after more») لم تفشل أصلاً،
+// وصناديق ممتلئة (4.x و5.2.2) تعود بعد أيام، ورفضٌ لسياسة المزوّد (5.7.1
+// بسبب الإزعاج أو السمعة) حكمٌ على نصّنا لا على العنوان. وحده العنوان
+// الميت (5.1.1، «user unknown») يُخرج الجهة.
+export type BounceSeverity = "hard" | "soft" | "delay" | "policy" | "report";
+// تقارير DMARC اليومية (Google وYahoo وMicrosoft) تصل بترويسات تقرير تسليم
+// فكانت تُعدّ ارتداداً: ١٨٩ «ارتداداً» في هذا الحساب أغلبها تقارير عن نطاقنا.
+const DMARC_REPORT = /(^|\n)\s*(\[preview\]\s*)?(dmarc )?(aggregate )?report[ -]?domain\s*:|aggregate (dmarc )?report|dmarc aggregate|this is a dmarc|forensic report/i;
+const DELAY = /(has not yet been delivered|delivery (is )?delayed|will (continue|keep) (to )?try|delay(ed)? (warning|notification)|\(delay\))/i;
+// حكم المزوّد على نصّنا أو على عنوان خادمنا — لا على عنوان المستلم.
+const POLICY = /(\bspam\b|spamhaus|block ?list|blacklist|black list|reputation|rejected due to local policy|policy (error|reasons|violation)|content rejected|abuse)/i;
+const SOFT_WORDS = /(mailbox (is )?full|over ?quota|quota exceeded|\bquota\b|insufficient storage|inode limit|temporar(y|ily)|try (again|resending)|greylist|downstream server error)/i;
+const HARD = /(\b5\.1\.\d{1,2}\b|user unknown|no such user|does not exist|address rejected|recipient (address )?rejected|unknown recipient|mailbox unavailable|invalid recipient|account (has been )?disabled|no mailbox here|no mailbox by that name|undeliverable address)/i;
+const SOFT_CODE = /(\b4\.\d{1,2}\.\d{1,3}\b|\b5\.2\.2\b)/;
+/** The report itself, without the copy of our message it carries — our own words must not decide. */
+const COPY_MARK = /(below this line is a copy|original message follows|this is a copy of the message|content-type:\s*message\/rfc822|-{3,} ?original message|return-path:)/i;
+
+/** What a delivery report says about the address. Pure. */
+export function bounceSeverity(text: string): BounceSeverity {
+  const all = text ?? "";
+  if (DMARC_REPORT.test(all)) return "report";
+  const cut = all.search(COPY_MARK);
+  // أسماء الخوادم تقول «antispam» ولا تحكم بشيء: mx10.antispam.mailspamprotection.com.
+  const t = (cut > 0 ? all.slice(0, cut) : all).replace(/\b(?=[\w.-]*[a-z])[\w-]+(\.[\w-]+){2,}\b/gi, " ");
+  if (DELAY.test(t) && !HARD.test(t)) return "delay";
+  // قوائم الحظر تُذكر بأسماء نطاقاتها (spamhaus.org) فتُقرأ قبل حذف الأسماء: عنوان خادمنا محظور.
+  if (POLICY.test(t) || /spamhaus|spamcop|barracuda(central)?|sorbs\.net|uceprotect/i.test(cut > 0 ? all.slice(0, cut) : all)) return "policy";
+  if (SOFT_WORDS.test(t)) return "soft";
+  if (HARD.test(t)) return "hard";
+  if (SOFT_CODE.test(t)) return "soft";
+  return "hard";
+}
+

@@ -196,6 +196,8 @@ export interface ResultsReport {
   days: number;
   mix: { state: MixState; share: Record<Track, number>; target: Record<Track, number>; drift: number };
   overall: Funnel;
+  /** آخر سبعة أيام وحدها: ما يحدث الآن بعد تنظيف القوائم، لا ما تراكم من قوائم قديمة. */
+  recent: Funnel;
   tracks: Funnel[];
   sectors: Funnel[];
   angles: Funnel[];
@@ -211,8 +213,22 @@ export interface ResultsReport {
   needsOwner: string[];
 }
 
+export const RECENT_DAYS = 7;
+
+/**
+ * ارتدادٌ فوق الحد في المدة كلها، وقد نزل تحته في الأيام الأخيرة على عيّنةٍ
+ * تكفي: السبب قوائم قديمة نُظّفت، فلا إيقاف — بل «راقب» والرقمان معاً.
+ * والارتداد الحديث فوق الحد يبقى إيقافاً كما هو. Pure.
+ */
+export function settledBounce(overall: Funnel, recent: Funnel): Funnel {
+  if (overall.verdict !== "hold" || overall.bounceRate < BOUNCE_HOLD) return overall;
+  if (recent.sent < 150 || recent.bounceRate >= BOUNCE_HOLD) return overall;
+  return { ...overall, verdict: "watch", why: `ارتداد ${overall.bounceRate}٪ على ${overall.sent} شركة في المدة كلها، لكنه ${recent.bounceRate}٪ على ${recent.sent} في آخر ${RECENT_DAYS} أيام — من قوائم قديمة نُظّفت. يُراقَب ولا يُوقَف.` };
+}
+
 export async function resultsReport(userId: number, days = 30): Promise<ResultsReport> {
   const base = BASE(userId, days);
+  const recentRows = await db.execute<any>(sql`${BASE(userId, RECENT_DAYS)} SELECT ${AGG} FROM x`);
   const [all, byTrack, bySector, byAngle, byMission, byAddr, state, audience] = await Promise.all([
     db.execute<any>(sql`${base} SELECT ${AGG} FROM x`),
     db.execute<any>(sql`${base} SELECT track AS k, ${AGG} FROM x GROUP BY track`),
@@ -232,7 +248,11 @@ export async function resultsReport(userId: number, days = 30): Promise<ResultsR
     targetAudience(userId),
   ]);
 
-  const overall = funnel(rows(all)[0] ?? {}, "all", "الكل", "aggregate");
+  const recent = funnel(rows(recentRows)[0] ?? {}, "recent", `آخر ${RECENT_DAYS} أيام`, "aggregate");
+  const overall0 = funnel(rows(all)[0] ?? {}, "all", "الكل", "aggregate");
+  // ٢٠٢٣ شركة في ٣٠ يوماً بارتداد ٥٫٤٪ — وآخر سبعة أيام ١٫١٪ بعد أن خرجت
+  // القوائم الميتة. الحكم بالإيقاف على ما انتهى يوقف إرسالاً سليماً.
+  const overall = settledBounce(overall0, recent);
   const tracks = rows(byTrack).map((r: any) => funnel(r, r.k, TRACK_AR[r.k as Track] ?? r.k, "aggregate"));
   const sectors = rows(bySector).map((r: any) => funnel(r, `${r.track}:${r.k}`, `${r.k} — ${TRACK_AR[r.track as Track] ?? r.track}`, "aggregate")).filter((f) => f.sent >= 5);
   const angles = rows(byAngle).map((r: any) => funnel(r, r.k, angleById(r.k)?.label ?? r.k));
@@ -276,7 +296,7 @@ export async function resultsReport(userId: number, days = 30): Promise<ResultsR
   }
   for (const s of sectors) if (s.verdict === "hold") needsOwner.push(`«${s.label}»: ${s.why} — راجع مصدر القائمة.`);
 
-  return { days, mix: { state, share, target: MIX, drift }, overall, tracks, sectors, angles, missions, addressTypes, audience, avoidAngles, decisions, needsOwner };
+  return { days, mix: { state, share, target: MIX, drift }, overall, recent, tracks, sectors, angles, missions, addressTypes, audience, avoidAngles, decisions, needsOwner };
 }
 
 /** الوقائع نصاً للمحلّل — مضغوطةً، فالحساب المجاني ٨٠٠٠ رمزاً في الدقيقة. */
@@ -286,6 +306,7 @@ export function resultsFacts(r: ResultsReport): string {
     `النافذة: آخر ${r.days} يوماً. العدّ بالشركة لا بالرسالة.`,
     `النسبة: AML ${Math.round(r.mix.share.aml * 100)}٪ (${r.mix.state.aml}) · الخدمات ${Math.round(r.mix.share.services * 100)}٪ (${r.mix.state.services}) — المستهدف ${r.mix.target.aml * 100}/${r.mix.target.services * 100}.`,
     line(r.overall),
+    line(r.recent),
     r.tracks.length ? "بالمسار:" : "", ...r.tracks.map(line),
     r.sectors.length ? "بالقطاع:" : "", ...r.sectors.slice(0, 6).map(line),
     r.angles.length ? "بالزاوية:" : "لا زاوية مسمّاة جُرّبت بعد — الموجات السابقة كُتبت قبل تسمية الزوايا.", ...r.angles.map(line),
