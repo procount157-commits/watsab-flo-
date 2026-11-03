@@ -32,7 +32,7 @@ import { INTENSITY, asIntensity } from "./intensity";
 import { CAMPAIGN_LANGUAGE, trackOfAngle, type Track } from "./policy";
 import { trackingActive, retestHeld, getSettings, signals } from "./service";
 import { warmupCap } from "./health";
-import { activity, guardCheck, formatIssues, repairDraft, onDuty, type EmailRole } from "./team";
+import { activity, guardCheck, formatIssues, repairDraft, onDuty, tooSimilar, leadOf, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
 
 async function log(missionId: number, text: string, kind = "note") {
@@ -200,6 +200,42 @@ async function release(m: EmailMission): Promise<void> {
   await launch({ ...m, pending: fixed.draft as any }, fixed.draft);
 }
 
+/**
+ * What this audience already read: the last three campaigns sent to the same
+ * list (the mission's source list, or its filter's lists) — subject, lead and
+ * angle. The writer is shown them so the new wave says something else, and
+ * ماجد compares the new lead against them. Defensive: any failure is «nothing
+ * before», never a stopped mission.
+ */
+export async function priorWavesFor(m: EmailMission, limit = 3): Promise<{ waves: Array<{ subject: string; lead: string }>; angles: string[] }> {
+  try {
+    const listIds = [...new Set([m.sourceListId, ...((m.filter as SegmentFilter).listIds ?? [])].filter((x): x is number => !!x))];
+    if (!listIds.length) return { waves: [], angles: [] };
+    const ids = sql.join(listIds.map((i) => sql`${i}`), sql`, `);
+    const rows = (await db.execute<{ subject: string; html: string; angle: string | null }>(sql`
+      SELECT c.subject, c.html, mm.angle FROM email_campaigns c
+      LEFT JOIN email_missions mm ON mm.id = c.mission_id
+      WHERE c.user_id = ${m.userId} AND c.mission_id IS DISTINCT FROM ${m.id}
+        AND (c.list_id IN (${ids}) OR mm.source_list_id IN (${ids})
+             OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(coalesce(mm.filter->'listIds', '[]'::jsonb)) x WHERE x::int IN (${ids})))
+      ORDER BY c.created_at DESC LIMIT ${limit}`)).rows;
+    return {
+      waves: rows.map((r) => ({ subject: r.subject ?? "", lead: leadOf(r.html ?? "") })).filter((w) => w.subject || w.lead),
+      angles: [...new Set(rows.map((r) => r.angle).filter((a): a is string => !!a))],
+    };
+  } catch { return { waves: [], angles: [] }; }
+}
+
+/** «31٪» — a rate in Arabic digits, for lessons the writer reads. Pure. */
+const arPct = (n: number, d: number) => `${d ? Math.round((n / d) * 100) : 0}٪`.replace(/\d/g, (x) => "٠١٢٣٤٥٦٧٨٩"[Number(x)]!);
+const arNum = (n: number) => String(n).replace(/\d/g, (x) => "٠١٢٣٤٥٦٧٨٩"[Number(x)]!);
+/** The subject-test lesson with its numbers: «X» — فتح ٣١٪، ردود ٢ (مقابل «Y» ١٨٪، ٠). Pure, exported for tests. */
+export function subjectLesson(kind: "win" | "loss", mine: { subject: string; sent: number; opened: number; replied: number }, other: { subject: string; sent: number; opened: number; replied: number }): string {
+  const rates = (v: typeof mine) => v.sent ? `فتح ${arPct(v.opened, v.sent)}، ردود ${arNum(v.replied)}` : "";
+  const a = rates(mine), b = other.sent ? `${arPct(other.opened, other.sent)}، ${arNum(other.replied)}` : "";
+  return `عنوان ${kind === "win" ? "فاز" : "خسر"} في الاختبار: «${mine.subject}»${a ? ` — ${a}` : ""}${b ? ` (مقابل «${other.subject}» ${b})` : ""}`;
+}
+
 /** One step for one mission. Safe to call at any time; each stage checks its own evidence. */
 export async function runMission(m: EmailMission): Promise<void> {
   if (m.status !== "active") return;
@@ -209,7 +245,11 @@ export async function runMission(m: EmailMission): Promise<void> {
 
   if (m.stage === "draft") {
     const role = (m.agentRole as EmailRole | null) ?? "email";
-    const w = await writeCampaign(m.userId, { filter, goal: m.goal, language: m.language, tone: m.tone, role, intensity: m.intensity ?? (await getSettings(m.userId))?.followIntensity });
+    const prior = await priorWavesFor(m);
+    const w = await writeCampaign(m.userId, {
+      filter, goal: m.goal, language: m.language, tone: m.tone, role, intensity: m.intensity ?? (await getSettings(m.userId))?.followIntensity,
+      priorWaves: prior.waves, angle: m.angle ?? null, usedAngles: prior.angles,
+    });
     if (!w) { await log(m.id, "تعذّرت الكتابة — النموذج لم يستجب. أحاول في الجولة القادمة.", "error"); await set(m.id, {}); return; }
     await log(m.id, `كتبت الحملة (${w.provider}): «${w.draft.subjects.join("» / «")}» — ${w.draft.why}`, "write");
     await activity(m.userId, role, "write", `كتب حملة «${m.name}» لـ ${w.audience.count} شركة: «${w.draft.subjects[0]}»`, { missionId: m.id });
@@ -223,9 +263,13 @@ export async function runMission(m: EmailMission): Promise<void> {
     }
     if (!m.requireApproval && (await onDuty(m.userId, "email_guard"))) {
       const knowledge = await knowledgeText(m.userId);
+      // The same email under a new subject is what got thirty of ours refused: a lead
+      // mostly made of the last waves' words goes back to the writer like any other issue.
+      const twin = tooSimilar(w.draft.html, prior.waves.map((x) => x.lead));
       const issues = [
         ...guardCheck([...w.draft.subjects, w.draft.html, ...w.draft.followups.flatMap((f) => [f.subject, f.html])], knowledge),
         ...formatIssues(w.draft.html, "first"),
+        ...(twin ? [`نص شبه مطابق لموجة سابقة: «${twin.slice(0, 80)}…»`] : []),
       ];
       if (issues.length) {
         // The owner asked for everything to run by itself: what ماجد finds goes
@@ -285,8 +329,17 @@ export async function runMission(m: EmailMission): Promise<void> {
     if (c.abWinner && !learned.length) {
       const win = c.abWinner === "B" ? c.subjectB! : c.subject, lose = c.abWinner === "B" ? c.subject : c.subjectB!;
       const topic = sectors.length === 1 ? sectors[0]! : null;
-      await rememberLesson(m.userId, "win", `عنوان فاز في الاختبار: «${win}»`, topic);
-      await rememberLesson(m.userId, "loss", `عنوان خسر في الاختبار: «${lose}»`, topic);
+      // With the numbers: «won» alone taught the writer nothing about by how much, or whether it brought replies.
+      const byVariant = await db.select({
+        v: emailMessagesTable.variant,
+        sent: sql<number>`count(*) filter (where ${emailMessagesTable.sentAt} is not null)`,
+        opened: sql<number>`count(*) filter (where ${emailMessagesTable.openedAt} is not null)`,
+        replied: sql<number>`count(*) filter (where ${emailMessagesTable.repliedAt} is not null)`,
+      }).from(emailMessagesTable).where(and(eq(emailMessagesTable.campaignId, c.id), sql`${emailMessagesTable.variant} is not null`)).groupBy(emailMessagesTable.variant).catch(() => [] as Array<{ v: string | null; sent: number; opened: number; replied: number }>);
+      const stat = (variant: string, subject: string) => { const r = byVariant.find((x) => x.v === variant); return { subject, sent: Number(r?.sent ?? 0), opened: Number(r?.opened ?? 0), replied: Number(r?.replied ?? 0) }; };
+      const wv = stat(c.abWinner === "B" ? "B" : "A", win), lv = stat(c.abWinner === "B" ? "A" : "B", lose);
+      await rememberLesson(m.userId, "win", subjectLesson("win", wv, lv), topic);
+      await rememberLesson(m.userId, "loss", subjectLesson("loss", lv, wv), topic);
       await log(m.id, `حُسم اختبار العنوان: فاز «${win}». حفظته في ذاكرتي${topic ? ` لقطاع ${topic}` : ""}.`, "ab");
     }
     const [{ q }] = await db.select({ q: sql<number>`count(*)` }).from(emailMessagesTable)

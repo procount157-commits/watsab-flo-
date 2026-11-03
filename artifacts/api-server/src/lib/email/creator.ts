@@ -49,6 +49,20 @@ export const SERVICES: Record<string, { label: string; category: string; goal: s
 
 const plain = (html: string) => html.replace(/<li>/g, "\n- ").replace(/<\/p>/g, "\n").replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/\n{3,}/g, "\n\n").trim();
 
+/**
+ * Templates from before the research rules ask for a meeting on the first
+ * touch («Book a free consultation», «Schedule a call»). Shown to طارق as the
+ * voice to write in, they taught him exactly the ask the doctrine now
+ * forbids. Such a template is left out; with none left, no example is given
+ * — the writer's own full example (prompts.ts) covers the shape. Pure.
+ */
+export const MEETING_CTA = /(consultation|\bbook a\b|\bschedule\b|\bbook (?:your|my|the)\b|استشارة مجانية|احجز)/i;
+export function usableExamples<T extends { html: string; subject: string }>(templates: T[], max = 2): T[] {
+  // The summary-first ones (a lead paragraph) say the shape as well as the voice: they go first.
+  const ok = templates.filter((t) => !MEETING_CTA.test(t.html) && !MEETING_CTA.test(t.subject));
+  return [...ok.filter((t) => /class="lead"/.test(t.html)), ...ok.filter((t) => !/class="lead"/.test(t.html))].slice(0, max);
+}
+
 export async function createWithCreator(userId: number, input: {
   service: string; language?: string; listIds?: number[]; folderIds?: number[]; sectors?: string[]; take?: number; notes?: string;
 }): Promise<{ missionId: number; audience: number; description: string }> {
@@ -64,8 +78,8 @@ export async function createWithCreator(userId: number, input: {
   };
   const n = await count(userId, filter, true);
   // Two of the firm's own templates for this service, as the voice to write in.
-  const examples = await db.select().from(emailTemplatesTable)
-    .where(and(eq(emailTemplatesTable.userId, userId), eq(emailTemplatesTable.category, svc.category))).limit(2);
+  const examples = usableExamples(await db.select().from(emailTemplatesTable)
+    .where(and(eq(emailTemplatesTable.userId, userId), eq(emailTemplatesTable.category, svc.category))).limit(8));
   const notes = [
     input.notes?.trim() ? `تعليمات صاحب العمل لهذه الحملة: ${input.notes.trim()}` : "",
     `بيانات التواصل للدعوة: الهاتف وواتساب ${CONTACT.phone}، الموقع ${CONTACT.websiteLabel}.`,

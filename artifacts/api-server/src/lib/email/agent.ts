@@ -24,7 +24,7 @@ import { seedSkills } from "../skills";
 import { logger } from "../logger";
 import { count, describe, resolve } from "./segments";
 import { passages } from "./knowledge-docs";
-import { COLD_CRAFT, HOOK_CRAFT } from "./prompts";
+import { COLD_CRAFT, HOOK_CRAFT, WRITER_EXAMPLE } from "./prompts";
 import { FOLLOWUP_CRAFT } from "../followup-doctrine";
 import { getSettings } from "./service";
 import { teamVoice, onDuty, type EmailRole } from "./team";
@@ -78,25 +78,56 @@ export async function memory(userId: number) {
     .orderBy(desc(agentMemoryTable.updatedAt));
 }
 
-/** What applies to these sectors: their own items first, then the general ones, within a budget. */
-export async function brief(userId: number, sectors: string[] = [], budget = 3500) {
+/** Words worth matching on: lowercase, three letters or more, Arabic or Latin. */
+export const queryWords = (q: string): string[] =>
+  [...new Set(q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3))];
+
+/**
+ * How much a knowledge row is about the query: distinct query words it
+ * contains. A goal of «AML real-estate inspection» should pull the Ministry's
+ * real-estate fine ahead of the VAT threshold even when the latter was
+ * taught more often. Pure, exported for tests.
+ */
+export function overlap(text: string, words: string[]): number {
+  if (!words.length) return 0;
+  const t = text.toLowerCase();
+  return words.reduce((n, w) => n + (t.includes(w) ? 1 : 0), 0);
+}
+
+/**
+ * What applies to these sectors: their own items first, then the general ones, within a budget.
+ *
+ * `query`: the facts are ranked by overlap with it (then by how often they were
+ * taught), and the top-scoring one that carries a digit is named as the official
+ * fact the summary opens on — the writer no longer has to find it in 3.5k chars.
+ * `lessons: false`: knowledge only. writeCampaign already gets the owner's
+ * instructions, wins and losses through memoryPreamble (teamVoice), and the
+ * same lines twice in one prompt cost tokens and taught nothing.
+ */
+export async function brief(userId: number, sectors: string[] = [], budget = 3500, opts: { lessons?: boolean; query?: string } = {}) {
   const rows = await db.select().from(agentMemoryTable)
     .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, EMAIL_ROLE),
       sectors.length ? or(isNull(agentMemoryTable.topic), inArray(agentMemoryTable.topic, sectors))! : sql`true`))
     .orderBy(desc(agentMemoryTable.times), desc(agentMemoryTable.updatedAt));
+  const words = queryWords(opts.query ?? "");
   const pick = (kind: string) => rows.filter((r) => r.kind === kind)
-    .sort((a, b) => Number(!!b.topic) - Number(!!a.topic));
+    .map((r) => ({ r, score: overlap(r.content, words) }))
+    .sort((a, b) => b.score - a.score || Number(!!b.r.topic) - Number(!!a.r.topic) || b.r.times - a.r.times)
+    .map((x) => x.r);
   const take = (items: typeof rows, max: number) => {
     const out: string[] = []; let used = 0;
     for (const r of items) { const line = `- ${r.topic ? `[${r.topic}] ` : ""}${r.content}`; if (used + line.length > max) break; out.push(line); used += line.length; }
     return out;
   };
-  const knowledge = take(pick(KNOWLEDGE), budget);
-  const rules = take(pick("instruction"), 900);
-  const wins = take(pick("win"), 600);
-  const losses = take(pick("loss"), 500);
+  const facts = pick(KNOWLEDGE);
+  const knowledge = take(facts, budget);
+  const official = words.length ? facts.find((r) => /\d|[٠-٩]/.test(r.content) && overlap(r.content, words) > 0) : undefined;
+  const withLessons = opts.lessons !== false;
+  const rules = withLessons ? take(pick("instruction"), 900) : [];
+  const wins = withLessons ? take(pick("win"), 600) : [];
+  const losses = withLessons ? take(pick("loss"), 500) : [];
   return [
-    knowledge.length ? `ما تعرفينه عن عملنا وعن هذا القطاع:\n${knowledge.join("\n")}` : "",
+    knowledge.length ? `${official ? `الحقيقة الرسمية التي يبدأ بها الملخص: ${official.content}\n` : ""}ما تعرفينه عن عملنا وعن هذا القطاع:\n${knowledge.join("\n")}` : "",
     rules.length ? `تعليمات صاحب العمل — التزمي بها:\n${rules.join("\n")}` : "",
     wins.length ? `ما نجح من قبل:\n${wins.join("\n")}` : "",
     losses.length ? `ما لم ينجح — لا تكرريه:\n${losses.join("\n")}` : "",
@@ -176,7 +207,11 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 export function toHtml(text: string): string {
   // Paragraphs by blank lines; within one, a run of "- " lines is a list
   // and the rest are lines of the same paragraph.
-  return text.trim().split(/\n\s*\n/).map((para) => {
+  // «[ملخص]» alone on a line with the summary on the next (weak models do
+  // this) used to give an empty lead and the summary as a plain paragraph:
+  // the mark is pulled onto the line that follows it, across a blank line too.
+  const src = text.trim().replace(/^(\s*\**\[(?:ملخص|summary)\]\**)\s*\n+\s*(?=\S)/gim, "$1 ");
+  return src.split(/\n\s*\n/).map((para) => {
     const lines = para.split("\n").map((l) => esc(l.trim()).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")).filter(Boolean);
     const out: string[] = [];
     let text: string[] = [], items: string[] = [];
@@ -209,22 +244,56 @@ export function toHtml(text: string): string {
   }).join("");
 }
 
+// ── Reading the draft ─────────────────────────────────────────────
+// The format is asked for exactly, and the free-tier models answer it
+// loosely: «[Subject]» for «[عنوان]», «**[عنوان]**», «1. [عنوان]», a bare
+// «Subject:», «[message]» or «[body]» for «[الرسالة]», a closing mark left
+// out, «Subject:» inside a follow-up instead of «عنوان:». Each of those
+// used to make the whole draft unreadable — a null, a warning, and a wave
+// written again next round for nothing. So every mark below is read in all
+// the ways it has been seen written. The strict shape still parses first.
+const SUBJECT_LINE = /^\s*(?:\d+[.)]\s*)?\**\[(?:عنوان|subject)\]\**\s*[:：]?\s*(.+)$/gim;
+const BARE_SUBJECT = /^\s*\**(?:Subject|العنوان|عنوان)\**\s*[:：]\s*(.+)$/gim;
+const BODY_OPEN = /\**\[(?:الرسالة|message|body|email)\]\**[ \t]*\n?/i;
+const BODY_CLOSE = /\**\[\/(?:الرسالة|message|body|email)\]\**/i;
+/** Where the body ends when its closing mark is missing: the first follow-up or the reason, else EOF. */
+const NEXT_BLOCK = /\**\[(?:متابعة|follow|السبب|why)/i;
+const FOLLOW_BLOCK = /\**\[(?:متابعة|follow-?up)([^\]]*)\]\**[ \t]*\n?([\s\S]*?)(?=\**\[\/(?:متابعة|follow-?up)\]|\**\[(?:متابعة|follow-?up)[^\]]*\]|\**\[(?:السبب|why)\]|$(?![\s\S]))/gi;
+const FOLLOW_SUBJECT = /^\s*\**(?:عنوان|العنوان|subject)\**\s*[:：]\s*(.+)$/im;
+const WHY_LINE = /^\s*\**\[(?:السبب|why)\]\**\s*[:：]?\s*(.+)$/im;
+const unquote = (x: string) => x.trim().replace(/^["«“]|["»”]$/g, "").replace(/\*\*/g, "").trim();
+
+/** The first email's text between its marks — or to the next block when the writer forgot to close it. Pure. */
+export function bodyOf(text: string): string | null {
+  const open = BODY_OPEN.exec(text);
+  if (!open) return null;
+  const rest = text.slice(open.index + open[0].length);
+  const close = BODY_CLOSE.exec(rest);
+  const end = close ? close.index : (NEXT_BLOCK.exec(rest)?.index ?? rest.length);
+  const body = rest.slice(0, end).trim();
+  return body || null;
+}
+
 /** Read what she wrote. Pure. */
 export function parseDraft(text: string): EmailDraft | null {
-  const subjects = [...text.matchAll(/^\s*\[عنوان\]\s*(.+)$/gm)].map((m) => m[1]!.trim().replace(/^["«]|["»]$/g, "")).filter(Boolean).slice(0, 3);
-  const body = /\[الرسالة\]\s*\n?([\s\S]*?)\[\/الرسالة\]/.exec(text)?.[1]?.trim();
+  const bracketed = [...text.matchAll(SUBJECT_LINE)].map((m) => unquote(m[1]!)).filter(Boolean);
+  // A bare «Subject: …» counts only before the body — inside a follow-up it is that follow-up's own.
+  const bodyAt = BODY_OPEN.exec(text)?.index ?? text.length;
+  const bare = bracketed.length ? [] : [...text.slice(0, bodyAt).matchAll(BARE_SUBJECT)].map((m) => unquote(m[1]!)).filter(Boolean);
+  const subjects = [...new Set(bracketed.length ? bracketed : bare)].slice(0, 3);
+  const body = bodyOf(text);
   if (!subjects.length || !body) return null;
   const followups: EmailDraft["followups"] = [];
-  for (const m of text.matchAll(/\[متابعة([^\]]*)\]\s*\n?([\s\S]*?)\[\/متابعة\]/g)) {
+  for (const m of text.matchAll(FOLLOW_BLOCK)) {
     const attrs = m[1] ?? "";
-    const after = Number(/بعد\s*=\s*(\d+)/.exec(attrs)?.[1] ?? 72);
-    const audience: EmailDraft["followups"][number]["audience"] = /وداع|breakup/.test(attrs) ? "breakup" : /قيمة|value/.test(attrs) ? "value" : /زاوية|angle/.test(attrs) ? "angle" : /تذكير|bump/.test(attrs) ? "bump" : /بارد|cold/.test(attrs) ? "cold" : "warm";
+    const after = Number(/(?:بعد|after)\s*=\s*(\d+)/i.exec(attrs)?.[1] ?? 72);
+    const audience: EmailDraft["followups"][number]["audience"] = /وداع|breakup/i.test(attrs) ? "breakup" : /قيمة|value/i.test(attrs) ? "value" : /زاوية|angle/i.test(attrs) ? "angle" : /تذكير|bump/i.test(attrs) ? "bump" : /بارد|cold/i.test(attrs) ? "cold" : "warm";
     const inner = m[2]!.trim();
-    const subject = /^\s*عنوان\s*[:：]\s*(.+)$/m.exec(inner)?.[1]?.trim();
-    const bodyText = inner.replace(/^\s*عنوان\s*[:：].*$/m, "").trim();
-    if (subject && bodyText) followups.push({ audience, afterHours: Math.min(24 * 30, Math.max(24, after)), subject, html: toHtml(bodyText) });
+    const subject = FOLLOW_SUBJECT.exec(inner)?.[1]?.trim();
+    const bodyText = inner.replace(FOLLOW_SUBJECT, "").trim();
+    if (subject && bodyText) followups.push({ audience, afterHours: Math.min(24 * 30, Math.max(24, after)), subject: unquote(subject), html: toHtml(bodyText) });
   }
-  const why = /^\s*\[السبب\]\s*(.+)$/m.exec(text)?.[1]?.trim() ?? "";
+  const why = WHY_LINE.exec(text)?.[1]?.trim() ?? "";
   return { subjects, html: toHtml(body), followups, why };
 }
 
@@ -233,7 +302,33 @@ export function parseDraft(text: string): EmailDraft | null {
  * A campaign for a target: two or three subjects to test, the body, and a
  * follow-up for each audience the campaign will leave behind.
  */
-export async function writeCampaign(userId: number, input: { filter: SegmentFilter; goal: string; language?: string; tone?: string | null; notes?: string | null; role?: EmailRole; intensity?: string | null }): Promise<{ draft: EmailDraft; audience: { description: string; count: number; sample: string[] }; provider: string } | null> {
+export interface WriteInput {
+  filter: SegmentFilter; goal: string; language?: string; tone?: string | null; notes?: string | null; role?: EmailRole; intensity?: string | null;
+  /** The last waves this audience already read — subject and lead — so the new one says something else. */
+  priorWaves?: Array<{ subject: string; lead: string }>;
+  /** This wave's angle (the mission's), and the angles already spent on the audience. */
+  angle?: string | null;
+  usedAngles?: string[];
+}
+
+/** The block that keeps a wave from repeating the last one. Pure, exported for tests. */
+export function priorWavesBlock(priorWaves: WriteInput["priorWaves"], angle?: string | null, usedAngles: string[] = []): string {
+  const waves = (priorWaves ?? []).filter((w) => w.subject || w.lead).slice(0, 3);
+  const lines: string[] = [];
+  if (waves.length) lines.push("ما قيل لهذا الجمهور من قبل — لا تعيديه (لا العنوان ولا الفكرة ولا الصياغة):", ...waves.map((w, i) => `${i + 1}. العنوان: «${w.subject}» — الملخص: «${w.lead.slice(0, 220)}»`));
+  if (angle) lines.push(`زاوية هذه الموجة: ${angle}.${usedAngles.length ? ` زوايا استُهلكت على هذا الجمهور: ${usedAngles.filter((a) => a !== angle).join("، ")}.` : ""}`);
+  else if (usedAngles.length) lines.push(`زوايا استُهلكت على هذا الجمهور — اختاري غيرها: ${usedAngles.join("، ")}.`);
+  return lines.join("\n");
+}
+
+/**
+ * Output budget for the writer. Two subjects, a first email with its
+ * details, a warm and a cold follow-up and up to four more run to 1200–1600
+ * tokens; the chain's 800 default cut the last follow-ups off mid-block.
+ */
+export const WRITER_MAX_TOKENS = 2400;
+
+export async function writeCampaign(userId: number, input: WriteInput): Promise<{ draft: EmailDraft; audience: { description: string; count: number; sample: string[] }; provider: string } | null> {
   // A shop writes to people, in its own name, with its pieces (shop-writer.ts).
   const [prof] = await db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
   if (isShop(prof as any)) {
@@ -245,10 +340,12 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
   // The writer's own voice — نورة, or يوسف for a follow-up wave — with the team's doctrine.
   const head = await teamVoice(userId, input.role ?? "email");
   const sectors = input.filter.sectors ?? [];
+  const query = `${input.goal} ${input.angle ?? ""} ${sectors.join(" ")}`;
   const [n, sampleRows, knows, facts, docs] = await Promise.all([
     count(userId, input.filter, true),
     resolve(userId, input.filter, { sendable: true, limit: 12 }),
-    brief(userId, sectors),
+    // Knowledge only: the lessons already arrive through teamVoice's memory preamble.
+    brief(userId, sectors, 3500, { lessons: false, query }),
     retrieve(userId, `${input.goal} ${sectors.join(" ")}`, 4).catch(() => []),
     passages(userId, `${input.goal} ${sectors.join(" ")}`, { sectors, limit: 4 }).catch(() => []),
   ]);
@@ -272,6 +369,11 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       HOOK_CRAFT,
       // والمتابعات التي تُكتب مع الحملة — ومهمات يوسف كلها — بصنعة المتابعة.
       (input.role ?? "email") === "email_followup" ? FOLLOWUP_CRAFT : "المتابعات [متابعة] أدناه: كلٌّ تحمل شيئاً لم يكن في الرسالة الأولى، أقصر منها، بطلبٍ واحد — وبلا «just following up» ولا «checking in» ولا اعتذار عن المتابعة.",
+      "",
+      priorWavesBlock(input.priorWaves, input.angle, input.usedAngles),
+      "",
+      // One complete, valid answer: a weak model copies a shape far more reliably than it follows a description of one.
+      WRITER_EXAMPLE,
       "",
       "المطلوب: حملة بريد لجمهور محدد. اكتبي بهذا الشكل بالضبط ولا شيء خارجه:",
       "[عنوان] <العنوان الأول>",
@@ -323,7 +425,7 @@ export async function writeCampaign(userId: number, input: { filter: SegmentFilt
       sample.length ? `أمثلة منهم: ${sample.slice(0, 8).join("؛ ")}` : "",
       input.notes ? `ملاحظات صاحب العمل: ${input.notes}` : "",
     ].filter(Boolean).join("\n") },
-  ], 90_000));
+  ], 90_000, { maxTokens: WRITER_MAX_TOKENS }));
   if (!out?.text) return null;
   const draft = parseDraft(out.text);
   if (!draft) { logger.warn({ userId, sample: out.text.slice(0, 300) }, "مسودة نورة لم تُقرأ"); return null; }
@@ -358,6 +460,13 @@ export async function learnFrom(userId: number, sectors: string[], report: unkno
     { role: "user", content: JSON.stringify(report).slice(0, 6000) },
   ], 45_000);
   const lessons = (out?.text ?? "").split("\n").map((l) => /الدرس\s*[:：]\s*(.+)/.exec(l)?.[1]?.trim()).filter((x): x is string => !!x).slice(0, 4);
-  for (const l of lessons) await rememberLesson(userId, "instruction", l, sectors.length === 1 ? sectors[0]! : null);
+  // A model's reading of a report is a win or a loss, never an «instruction»:
+  // that kind is rendered as the owner's own order («التزم بها حرفياً»).
+  for (const l of lessons) await rememberLesson(userId, lessonKind(l), l, sectors.length === 1 ? sectors[0]! : null);
   return lessons;
+}
+
+/** Which way a lesson points: words of failure make it a loss, anything else a win. Pure. */
+export function lessonKind(line: string): "win" | "loss" {
+  return /(فشل|لم\s|لا\s+يُ|صفر|منخفض|ضعيف|تجنّ|تجن|خسر|أسوأ|اسوأ|بلا رد|بلا ردود|did not|didn't|failed|zero|low\b|avoid|worse)/i.test(line) ? "loss" : "win";
 }

@@ -81,8 +81,8 @@ async function clean() {
 await clean();
 await db.insert(emailSettingsTable).values({ userId: USER, provider: "smtp", smtpHost: "smtp.invalid", smtpUser: "u", smtpPass: "p", fromEmail: "t@procount.invalid" });
 const rows = [
-  ...Array.from({ length: 30 }, (_, i) => ({ userId: USER, email: `re${i}@x.ae`, company: `RE ${i} Real Estate`, sector: "عقارات", city: i < 20 ? "Dubai" : "Ajman", mxOk: true })),
-  ...Array.from({ length: 12 }, (_, i) => ({ userId: USER, email: `co${i}@x.ae`, company: `CO ${i} Contracting`, sector: "مقاولات", city: "Dubai", phone: "971500000000", mxOk: true })),
+  ...Array.from({ length: 30 }, (_, i) => ({ userId: USER, email: `re${i}@re${i}.ae`, company: `RE ${i} Real Estate`, sector: "عقارات", city: i < 20 ? "Dubai" : "Ajman", mxOk: true })),
+  ...Array.from({ length: 12 }, (_, i) => ({ userId: USER, email: `co${i}@co${i}.ae`, company: `CO ${i} Contracting`, sector: "مقاولات", city: "Dubai", phone: "971500000000", mxOk: true })),
   { userId: USER, email: "none@x.ae", company: "Zelin", sector: null, city: "Dubai", mxOk: true },
   { userId: USER, email: "gone@x.ae", company: "Gone Real Estate", sector: "عقارات", city: "Dubai", status: "unsubscribed", mxOk: true },
 ];

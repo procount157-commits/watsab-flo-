@@ -29,10 +29,17 @@ export const KIND_AR: Record<string, string> = {
   value: "معلومة مفيدة", angle: "زاوية جديدة", bump: "تذكير قصير", breakup: "الرسالة الأخيرة",
 };
 
+/**
+ * Word caps per kind. A follow-up is read on a phone by someone who already
+ * ignored one email; the later it comes, the shorter it must be. None of
+ * them carries a [تفاصيل] section — that was the first email's job.
+ */
+export const FOLLOW_WORDS: Record<FollowKind, number> = { value: 70, angle: 60, bump: 35, breakup: 45 };
+
 /** What the writer is asked for, per kind, in the draft's own block format. */
 export const FOLLOW_PROMPT: Record<FollowKind, string[]> = {
-  value: ["[متابعة جمهور=قيمة]", "عنوان: <one genuinely useful fact or tip from the knowledge base for their sector — a reason to open that is not a sales pitch>", "<body: the insight, why it matters to them, a soft call to action>", "[/متابعة]"],
-  angle: ["[متابعة جمهور=زاوية]", "عنوان: <a completely different pain point or service angle that has NOT been used yet>", "<body: short, one new reason, one easy question>", "[/متابعة]"],
-  bump: ["[متابعة جمهور=تذكير]", "عنوان: <very short and human — reads like a note from a person, not a campaign>", "<body: two lines at most, one yes/no question>", "[/متابعة]"],
-  breakup: ["[متابعة جمهور=وداع]", "عنوان: <the last note — polite, closes the loop, leaves the door open>", "<body: two or three lines; no more emails after this one>", "[/متابعة]"],
+  value: ["[متابعة جمهور=قيمة]", "عنوان: <one genuinely useful fact or tip from the knowledge base for their sector — a reason to open that is not a sales pitch>", `<body: [ملخص] the insight and why it matters to them, then [زر] a soft call to action — at most ${FOLLOW_WORDS.value} words, no [تفاصيل] section>`, "[/متابعة]"],
+  angle: ["[متابعة جمهور=زاوية]", "عنوان: <a completely different pain point or service angle that has NOT been used yet>", `<body: [ملخص] one new reason and one easy question, then [زر] — at most ${FOLLOW_WORDS.angle} words, no [تفاصيل] section>`, "[/متابعة]"],
+  bump: ["[متابعة جمهور=تذكير]", "عنوان: <very short and human — reads like a note from a person, not a campaign>", `<body: two lines at most, one yes/no question — at most ${FOLLOW_WORDS.bump} words, no [تفاصيل] section, no list>`, "[/متابعة]"],
+  breakup: ["[متابعة جمهور=وداع]", "عنوان: <the last note — polite, closes the loop, leaves the door open>", `<body: two or three lines; no more emails after this one — at most ${FOLLOW_WORDS.breakup} words, no [تفاصيل] section>`, "[/متابعة]"],
 };

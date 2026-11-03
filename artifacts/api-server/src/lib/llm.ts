@@ -70,6 +70,18 @@ const KEYS: Record<string, () => string> = {
 // that finishes early costs nothing.
 const MAX_OUTPUT_TOKENS = 800;
 
+/**
+ * Per-call output ceiling. The campaign writer asks for two subjects, a first
+ * email and two to five follow-ups in one answer — 1200–1600 tokens — and at
+ * 800 the tail follow-ups were cut mid-block and silently dropped by the
+ * parser. Callers that need more say so; everyone else keeps the default.
+ */
+export interface CompleteOpts { maxTokens?: number }
+function outputCap(opts?: CompleteOpts): number {
+  const n = Number(opts?.maxTokens);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : MAX_OUTPUT_TOKENS;
+}
+
 const OPENAI_COMPATIBLE: Record<string, { url: string; model: string }> = {
   // llama-3.3-70b-versatile was the default here and Groq no longer serves it.
   groq:        { url: "https://api.groq.com/openai/v1/chat/completions",
@@ -212,7 +224,7 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-async function callGemini(messages: LlmMessage[], timeoutMs: number, apiKey: string): Promise<string> {
+async function callGemini(messages: LlmMessage[], timeoutMs: number, apiKey: string, opts?: CompleteOpts): Promise<string> {
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
   const rest   = messages.filter((m) => m.role !== "system");
   const res = await fetch(
@@ -224,7 +236,7 @@ async function callGemini(messages: LlmMessage[], timeoutMs: number, apiKey: str
       body: JSON.stringify({
         ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
         contents: rest.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-        generationConfig: { temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS },
+        generationConfig: { temperature: 0.4, maxOutputTokens: outputCap(opts) },
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -240,7 +252,7 @@ async function callGemini(messages: LlmMessage[], timeoutMs: number, apiKey: str
  * message, `max_tokens` is required, and the reply arrives as a list of
  * content blocks that has to be filtered by type.
  */
-async function callAnthropic(messages: LlmMessage[], timeoutMs: number, apiKey: string): Promise<string> {
+async function callAnthropic(messages: LlmMessage[], timeoutMs: number, apiKey: string, opts?: CompleteOpts): Promise<string> {
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
   const rest   = messages.filter((m) => m.role !== "system");
 
@@ -253,7 +265,7 @@ async function callAnthropic(messages: LlmMessage[], timeoutMs: number, apiKey: 
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: 1_024,
+      max_tokens: Math.max(1_024, outputCap(opts)),
       ...(system ? { system } : {}),
       output_config: { effort: ANTHROPIC_EFFORT },
       messages: rest.map((m) => ({ role: m.role, content: m.content })),
@@ -273,10 +285,11 @@ async function callAnthropic(messages: LlmMessage[], timeoutMs: number, apiKey: 
 }
 
 async function callOpenAiCompatible(
-  url: string, key: string, model: string, messages: LlmMessage[], timeoutMs: number,
+  url: string, key: string, model: string, messages: LlmMessage[], timeoutMs: number, opts?: CompleteOpts,
 ): Promise<string> {
+  const cap = outputCap(opts);
   const body: Record<string, unknown> = {
-    model, messages, temperature: 0.4, max_tokens: MAX_OUTPUT_TOKENS,
+    model, messages, temperature: 0.4, max_tokens: cap,
   };
 
   // Several of OpenRouter's free models are reasoning models, and they spend
@@ -287,7 +300,7 @@ async function callOpenAiCompatible(
   // thinking from the response while still paying for it.
   if (url.includes("openrouter.ai")) {
     // MiniMax M3.1 refuses with 400 when reasoning is off: kept short instead.
-    if (/minimax/i.test(model)) { body["reasoning"] = { effort: "low" }; body["max_tokens"] = 1600; }
+    if (/minimax/i.test(model)) { body["reasoning"] = { effort: "low" }; body["max_tokens"] = Math.max(1600, cap); }
     else body["reasoning"] = { enabled: false };
   }
   // Zhipu's GLM-4.5 does the same by default — 251 tokens of thinking for a
@@ -297,7 +310,7 @@ async function callOpenAiCompatible(
   // Luna). On the server, 2026-10-19, one of its first two live calls spent the
   // whole 800 tokens thinking and returned nothing. effort «low» measured 0
   // reasoning tokens and a full reply in 4s; the extra room is a ceiling only.
-  if (url.includes("thegrid.ai")) { body["reasoning"] = { effort: "low" }; body["max_tokens"] = 1600; }
+  if (url.includes("thegrid.ai")) { body["reasoning"] = { effort: "low" }; body["max_tokens"] = Math.max(1600, cap); }
 
   const res = await fetch(url, {
     method: "POST",
@@ -345,17 +358,17 @@ async function callPollinations(messages: LlmMessage[], timeoutMs: number): Prom
 /** One attempt at one provider. Throws; the chain above decides what to do. */
 async function callOne(
   provider: string, model: string, apiKey: string,
-  messages: LlmMessage[], timeoutMs: number,
+  messages: LlmMessage[], timeoutMs: number, opts?: CompleteOpts,
 ): Promise<string> {
-  if (provider === "anthropic")    return callAnthropic(messages, timeoutMs, apiKey);
-  if (provider === "gemini")       return callGemini(messages, timeoutMs, apiKey);
+  if (provider === "anthropic")    return callAnthropic(messages, timeoutMs, apiKey, opts);
+  if (provider === "gemini")       return callGemini(messages, timeoutMs, apiKey, opts);
   if (provider === "pollinations") return callPollinations(messages, timeoutMs);
   const cfg = OPENAI_COMPATIBLE[provider];
   if (!cfg) throw new Error(`مزوّد غير معروف: ${provider}`);
   if (provider === "thegrid") {
     if (gridInFlight >= GRID_MAX_IN_FLIGHT) throw new Error("thegrid 429: ثلاثة طلبات جارية — إلى البديل");
     gridInFlight++;
-    try { return await callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs); }
+    try { return await callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs, opts); }
     finally { gridInFlight--; }
   }
   if (provider === "openrouter" || provider === "openrouter2" || provider === "groq") {
@@ -363,12 +376,12 @@ async function callOne(
     const keys = [apiKey, ...(provider === "groq" ? groqPool() : openrouterPool())].filter((k, i, a) => k && a.indexOf(k) === i);
     let lastErr: unknown = new Error("openrouter: لا مفتاح");
     for (const k of keys) {
-      try { return await callOpenAiCompatible(cfg.url, k, model || cfg.model, messages, timeoutMs); }
+      try { return await callOpenAiCompatible(cfg.url, k, model || cfg.model, messages, timeoutMs, opts); }
       catch (err) { lastErr = err; if (!/\b(401|402|429)\b/.test(String((err as any)?.message ?? err))) throw err; }
     }
     throw lastErr;
   }
-  return callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs);
+  return callOpenAiCompatible(cfg.url, apiKey, model || cfg.model, messages, timeoutMs, opts);
 }
 
 /**
@@ -425,7 +438,7 @@ const EXTRA_MODELS: Record<string, string[]> = {
  * first unless it is in cooldown. pollinations stays last and keyless, so the
  * chain never runs out.
  */
-export async function complete(messages: LlmMessage[], timeoutMs = 20_000): Promise<LlmResult | null> {
+export async function complete(messages: LlmMessage[], timeoutMs = 20_000, opts?: CompleteOpts): Promise<LlmResult | null> {
   // Counted against the employee whose work this is, when it runs inside asAgent().
   const who = currentAgent(), t0 = Date.now();
   const charsIn = messages.reduce((a, m) => a + m.content.length, 0);
@@ -437,7 +450,7 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000): Prom
       return null;
     }
   } else noteUnattributedCall();
-  const out = await completeInner(messages, timeoutMs);
+  const out = await completeInner(messages, timeoutMs, opts);
   if (who) receipt({
     userId: who.userId, node: who.role, action: "llm.call", status: out ? "ok" : "failed",
     model: out?.provider ?? null, tokensIn: tokensOf(charsIn), tokensOut: tokensOf(out?.text.length ?? 0), durationMs: Date.now() - t0,
@@ -486,7 +499,7 @@ function paidFirst<T extends { provider: string }>(ordered: T[], userId: number 
   return [...paid.flatMap((p) => ordered.filter((c) => c.provider === p)), ...ordered.filter((c) => !paid.includes(c.provider))];
 }
 
-async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise<LlmResult | null> {
+async function completeInner(messages: LlmMessage[], timeoutMs: number, opts?: CompleteOpts): Promise<LlmResult | null> {
   const resolved = await resolveProvider();
   if (!resolved || !resolved.apiKey) return null;
   // A stored key has to win over the environment for the whole call, so the
@@ -530,7 +543,7 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number): Promise
     for (let attempt = 1; attempt <= attempts; attempt++) {
       const t0 = Date.now();
       try {
-        const text = await callOne(step.provider, step.model, step.apiKey, messages, timeoutMs);
+        const text = await callOne(step.provider, step.model, step.apiKey, messages, timeoutMs, opts);
         if (!text) throw new Error("رد فارغ");
         await recordOk(step.provider, step.model, Date.now() - t0);
         if (step.provider !== resolved.provider || step.model !== pinnedModel) {

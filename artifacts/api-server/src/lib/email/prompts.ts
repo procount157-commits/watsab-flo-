@@ -70,16 +70,60 @@ export const COLD_CRAFT = [
 // يُفتح بريدٌ ويُترك آخر. هذه الأسطر هي ذلك — وكل رافعةٍ فيها مقيّدة بما
 // في المعرفة: الخوف من الخسارة بغرامةٍ مُختلقة احتيال لا تسويق.
 export const HOOK_CRAFT = [
-  "علم الفتح والقراءة — كاتبٌ محترف يعرف هذه ويطبّقها، لا يذكرها:",
-  "• العنوان يفتح فجوة فضول ولا يُغلقها: محدّد (اسم الشركة أو القطاع أو الجهة الرقابية)، ٢–٥ كلمات، بلغة زميلٍ لا لغة إعلان. السؤال الذي لا يُجاب بلا فتح الرسالة أقوى من أي وصف.",
+  "علم الفتح والقراءة — كاتبٌ محترف يعرف هذه ويطبّقها، لا يذكرها (قواعد العنوان والطلب والاستعجال في صنعة الرسالة الأولى أعلاه، ولا تُكرَّر هنا):",
   "• [معاينة] تُكمل العنوان ولا تكرّره: هي السطر الرمادي بجانبه في صندوق الوارد — نصف قرار الفتح. أعطِ فيه السبب الثاني للفتح.",
   "• [عنوان كبير] أول ما تراه العين: ٤–٩ كلمات، النتيجة التي يريدها أو الخطر الذي يتجنّبه — عنه هو، لا عنا.",
   "• الخسارة أقوى من الربح بمرّتين: «ما الذي يفوتك أو يعرّضك» يحرّك أكثر من «ما تكسبه» — لكن بحقيقةٍ من المعرفة فقط (التزامٌ قائم، جهةٌ تفتّش، مهلةٌ معلنة). بلا حقيقة: اكتب الربح.",
   "• التحديد يصنع الثقة: «فحص ملف العناية الواجبة لعشرة عملاء» أقوى من «حلول امتثال شاملة». الرقم الحقيقي يُقرأ، والكلمة العامة تُتخطّى.",
   "• المعاملة بالمثل: قدّم شيئاً قبل أن تطلب — قائمة تحقق، مراجعة قصيرة، ملاحظة عن قطاعه. من أخذ شيئاً يردّ.",
-  "• التزامٌ صغير قبل الكبير: الزر يطلب أصغر خطوة ممكنة («Get the goAML checklist» أو «Check my AML gaps» لا «Book a consultation» ولا «Sign up now»). نعم الصغيرة تفتح الكبيرة.",
   "• [إبراز] سطرٌ واحد في صندوقٍ ملوّن: أقوى حقيقةٍ في الرسالة (من المعرفة) — العين تقفز إليه قبل أي فقرة. لا تضع فيه شيئاً عاماً.",
-  "• الاستعجال الحقيقي وحده: مهلةٌ أو تفتيشٌ معلن. «عرض لفترة محدودة» يُدخل الرسالة مجلد الإعلانات ويُسقط الثقة.",
+].join("\n");
+
+// ── مثالٌ كامل بالشكل المطلوب ──────────────────────────────────────
+// سطرٌ واحد من المثال لا يكفي نموذجاً مجانياً: كان يكتب «[Subject]» بدل
+// «[عنوان]»، وينسى «[/الرسالة]»، ويضع الزر في آخر الرسالة. النموذج الضعيف
+// ينسخ شكلاً كاملاً أدقّ مما يتّبع وصفه. فهذا جوابٌ واحد صحيح من أوله
+// إلى آخره — والحقيقة الوحيدة فيه من معرفة الشركة (مخالفات النصف الأول
+// من ٢٠٢٥) — يُعرض على الكاتب قبل «المطلوب»، مع تنبيهٍ ألا يُنسخ نصّه.
+export const WRITER_EXAMPLE = [
+  "═══ مثال على الشكل الصحيح — للبنية فقط، لا تنسخي جملةً منه ولا تعيدي رقمه إلا إن كان في معرفتك أدناه ═══",
+  "[عنوان] {{company|Your brokerage}} and goAML",
+  "[عنوان] 495 brokers fined",
+  "[الرسالة]",
+  "[معاينة] What the inspector asks for after registration",
+  "[عنوان كبير] Registered on goAML is not the same as ready",
+  "Hello {{first_name|there}},",
+  "",
+  "[ملخص] In H1 2025 the Ministry of Economy recorded 1,063 AML violations with fines over AED 42 million — 495 of them on real-estate brokers (AED 18.5 million). Is {{company|your brokerage}} ready for what an inspector asks after goAML?",
+  "",
+  "[زر] Check my AML gaps",
+  "",
+  "[تفاصيل]",
+  "- Due diligence on buyers and the beneficial owner",
+  "- Source of funds on every closed deal",
+  "- A one-page list of what is missing",
+  "",
+  "[إبراز] 495 real-estate brokers fined AED 18.5 million in H1 2025.",
+  "",
+  "Best regards,",
+  "The Pro Count team",
+  "[/الرسالة]",
+  "[متابعة بعد=72 جمهور=دافئ]",
+  "عنوان: Source of funds at {{company|your brokerage}}",
+  "[ملخص] The question inspectors ask most is where the buyer's money came from — and whether the file shows it. Does {{company|your brokerage}} keep a source-of-funds note on every closed deal?",
+  "[زر] Send me the checklist",
+  "Best regards,",
+  "The Pro Count team",
+  "[/متابعة]",
+  "[متابعة بعد=72 جمهور=بارد]",
+  "عنوان: One question on AML",
+  "[ملخص] 495 real-estate brokers were fined in H1 2025, most for files that stopped at registration. If {{company|your brokerage}} would like a quick look at the gaps, we can send a one-page checklist.",
+  "[زر] Check my AML gaps",
+  "Best regards,",
+  "The Pro Count team",
+  "[/متابعة]",
+  "[السبب] Real-estate brokers know they must register; what they rarely know is what the inspection asks for after registration — so the official figure opens the gap and the free check closes it.",
+  "═══ نهاية المثال — اكتبي حملتك أنت بالشكل نفسه ومحتوى مختلف ═══",
 ].join("\n");
 
 // ── المتابعة ──────────────────────────────────────────────────────

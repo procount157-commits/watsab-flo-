@@ -96,7 +96,7 @@ export function finalCheck(channel: Channel, extra: string[] = []): string {
     "□ هل لغتها ولهجتها وطولها على مقاس رسالته؟",
     "□ هل فيها عبارة من عبارات القوالب الممنوعة؟ احذفها.",
     channel === "whatsapp" ? "□ هل هي بطول رسالة واتساب — سطر إلى ثلاثة — بلا ترقيم ولا عناوين؟" : "",
-    channel === "email" ? "□ هل العنوان أقل من ٨ كلمات، والسطر الأول عنه لا عنا، والدعوة واحدة؟" : "",
+    channel === "email" ? "□ هل العنوان ٢–٥ كلمات، والسطر الأول عنه لا عنا، والدعوة واحدة؟" : "",
     channel === "social" ? "□ هل الرد العلني سطر أو سطران بلا سعر، والخاص ٢–٤ أسطر؟" : "",
     channel === "groups" ? "□ هل الرد كما يكتبه صاحب العمل في هذا القروب، بلا موعد أو مبلغ من عندك؟" : "",
     ...extra,
@@ -121,6 +121,15 @@ export type CoreInput = {
   check?: string[];
   /** Skip the examples (a very long prompt, or a job with no customer). */
   noExamples?: boolean;
+  /**
+   * A cold campaign, not a conversation: nobody has written to us yet, so
+   * the mirror (match their language, length, register) and the work
+   * protocol (read what came before, find the one thing they asked) have
+   * nothing to act on. Writers skip both — a free-tier model reads 35k
+   * characters of prompt, and every line that does not apply dilutes the
+   * ones that do. NEVER, the examples and the final check stay.
+   */
+  campaign?: boolean;
 };
 
 /**
@@ -137,13 +146,13 @@ export function corePrompt(i: CoreInput): string {
     i.firm ? `الشركة: ${i.firm}` : "",
     i.role ? `\n${charterBlock(i.role)}` : "",
     "",
-    WORK_PROTOCOL,
+    i.campaign ? "" : WORK_PROTOCOL,
     "",
     ...(i.rules ?? []),
     "",
     NEVER,
     "",
-    i.channel === "internal" ? "" : MIRROR,
+    i.channel === "internal" || i.campaign ? "" : MIRROR,
     i.noExamples || i.channel === "internal" ? "" : `\n${EXAMPLES[i.channel]}`,
     "",
     ...(i.context ?? []),
