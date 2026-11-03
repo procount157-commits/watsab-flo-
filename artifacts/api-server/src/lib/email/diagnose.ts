@@ -17,6 +17,8 @@ import {
 import { count as countSegment, describe as describeSegment } from "./segments";
 import { outboxState } from "../telegram";
 import { trackingState, probePublicUrl } from "./public-url";
+import { stallReason } from "./service";
+import { emailWindowNote, isEmailSendingTime } from "../sending-hours";
 import type { SegmentFilter } from "@workspace/db";
 
 export type Check = {
@@ -73,7 +75,7 @@ async function probeSmtp(s: typeof emailSettingsTable.$inferSelect): Promise<Che
     "راجع كلمة المرور، أو جرّب المنفذ 587، أو تأكد أن الشبكة لا تحجب البريد.");
 }
 
-export async function diagnose(userId: number): Promise<{ checks: Check[]; verdict: string; canSend: boolean }> {
+export async function diagnose(userId: number): Promise<{ checks: Check[]; verdict: string; canSend: boolean; stall: { why: string; at: number } | null }> {
   const checks: Check[] = [];
   const day = new Date(Date.now() - 24 * 60 * 60_000);
 
@@ -160,6 +162,14 @@ export async function diagnose(userId: number): Promise<{ checks: Check[]; verdi
     ? ok("queue", "الطابور", `${queued} في الانتظار · ${sent} أُرسلت اليوم`)
     : sent > 0 ? ok("queue", "الطابور", `فارغ · ${sent} أُرسلت اليوم`)
     : warn("queue", "الطابور", "فارغ، ولم تُرسل رسالة اليوم", "لا حملة تعمل الآن."));
+  // ── لماذا الطابور ساكن: آخر سببٍ كتبه العامل، ونافذة البريد ──
+  const stall = stallReason(userId);
+  if (queued > 0) {
+    checks.push(!isEmailSendingTime()
+      ? warn("stall", "لماذا لا يُرسل الآن", emailWindowNote(), "ينتظر وحده حتى تفتح النافذة — لا شيء تفعله.")
+      : stall ? warn("stall", "لماذا لا يُرسل الآن", `${stall.why} · منذ ${Math.max(0, Math.round((Date.now() - stall.at) / 60_000))} دقيقة`)
+      : ok("stall", "لماذا لا يُرسل الآن", "العامل يُرسل — لا توقّف مسجّل"));
+  }
 
   // ── Do the reports reach anyone ──
   const [tg] = await db.select().from(telegramSettingsTable).where(eq(telegramSettingsTable.userId, userId)).limit(1);
@@ -203,5 +213,5 @@ export async function diagnose(userId: number): Promise<{ checks: Check[]; verdi
     ? "كل شيء جاهز للإرسال."
     : `${bad.length} ${bad.length === 1 ? "عائق يمنع" : "عوائق تمنع"} الإرسال: ${bad.map((c) => c.title).join("، ")}.`;
 
-  return { checks, verdict, canSend };
+  return { checks, verdict, canSend, stall };
 }

@@ -13,7 +13,8 @@ import {
   emailEventsTable, emailSegmentsTable, type EmailSettings, type EmailStep, type EmailContact,
 } from "@workspace/db";
 import { resolve as resolveSegment } from "./segments";
-import { isWithinSendingHours } from "../sending-hours";
+import { isEmailSendingTime, emailWindowNote } from "../sending-hours";
+import { isRoleAddress } from "./importer";
 import { logger } from "../logger";
 import { notify, esc } from "../telegram";
 import { sendEmail, SendError, isConfigured, messageIdFor } from "./provider";
@@ -169,8 +170,13 @@ export async function startCampaign(userId: number, campaignId: number): Promise
     if (!ok) skipped++;
     return ok;
   });
-  const { kept: eligible, held: risky } = byRisk(sendable, await domainSignals(userId), s!.skipRisky);
+  const { kept: ranked, held: risky } = byRisk(sendable, await domainSignals(userId), s!.skipRisky);
   skipped += risky;
+  // عنوانٌ واحد لكل شركة في الموجة: ٣٦٪ من الجهات عناوين دور، وكثيرٌ من
+  // الشركات لها ثلاثة وأربعة عناوين — وثلاث رسائل في أسبوعٍ على نطاقٍ واحد
+  // تُقرأ إزعاجاً لا اهتماماً. الباقون ينتظرون حملةً تالية.
+  const { kept: eligible, dropped: extras } = onePerCompany(ranked);
+  skipped += extras;
 
   // A subject test on a slice of the list, the rest held until it is decided.
   // Only on a fresh start: a resumed campaign has already made its choice.
@@ -246,12 +252,32 @@ export async function cancelSequencesFor(userId: number, contactId: number, reas
 }
 
 /** Mail providers anyone can have: a reply from one gmail.com address says nothing about another. */
-export const FREE_MAIL = new Set(["gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com", "live.com", "icloud.com", "me.com", "aol.com", "msn.com", "proton.me", "protonmail.com", "gmx.com", "mail.com", "yandex.com", "zoho.com", "emirates.net.ae", "eim.ae"]);
+export const FREE_MAIL = new Set(["gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com", "live.com", "icloud.com", "me.com", "aol.com", "msn.com", "proton.me", "protonmail.com", "gmx.com", "mail.com", "yandex.com", "zoho.com", "emirates.net.ae", "eim.ae",
+  // من القائمة الحيّة: صناديق شخصية لا شركات (٤٤ عنواناً لـ٤٤ جهة في ymail وحده).
+  "ymail.com", "rocketmail.com", "mail.ru", "yandex.ru", "hotmail.co.uk", "yahoo.co.in", "outlook.sa", "gmx.de", "web.de", "rediffmail.com", "qq.com", "163.com"]);
 
 /** The company's domain of an address, or null for a free mailbox. Pure. */
 export function companyDomain(email: string): string | null {
   const d = String(email).trim().toLowerCase().split("@")[1] ?? "";
   return d && d.includes(".") && !FREE_MAIL.has(d) ? d : null;
+}
+
+/**
+ * عنوانٌ واحد لكل نطاق شركة، والبريد الحر معفى. المفضَّل عنوان الدور
+ * (info@ …): في هذا الحساب يرتدّ أربع مرات أقل من العناوين الشخصية؛ وإلا
+ * فالأول في الترتيب (الأقل خطراً). Pure.
+ */
+export function onePerCompany<T extends { email: string }>(contacts: T[]): { kept: T[]; dropped: number } {
+  const best = new Map<string, number>();
+  contacts.forEach((c, i) => {
+    const d = companyDomain(c.email);
+    if (!d) return;
+    const cur = best.get(d);
+    if (cur == null || (isRoleAddress(c.email) && !isRoleAddress(contacts[cur]!.email))) best.set(d, i);
+  });
+  const keep = new Set(best.values());
+  const kept = contacts.filter((c, i) => !companyDomain(c.email) || keep.has(i));
+  return { kept, dropped: contacts.length - kept.length };
 }
 
 /** Every pending rung to anyone at the same company stops, as theirs did. */
@@ -370,27 +396,45 @@ export async function verdictFor(userId: number): Promise<EmailVerdict> {
   return assessEmail(await signals(userId));
 }
 
+// ── لماذا لا يخرج شيء ─────────────────────────────────────────────
+// صاحب العمل يرى الطابور ممتلئاً والعدّاد ساكناً ولا يُقال له لماذا. كل
+// خروجٍ مبكر من `drainOne` يكتب سبباً قصيراً هنا، وأول إرسالٍ ناجح يمحوه.
+const stalls = new Map<number, { why: string; at: number }>();
+const stall = (userId: number, why: string): false => { stalls.set(userId, { why, at: Date.now() }); return false; };
+/** آخر سببٍ لتوقّف طابور هذا الحساب، أو null إن كان يُرسل. */
+export const stallReason = (userId: number) => stalls.get(userId) ?? null;
+const holdNote = (until: number) => `إيقاف الحارس حتى ${new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Dubai", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(until))}`;
+
+/** كم رسالةً تخرج لحساب في مرورٍ واحد: صناديق كثيرة حرّة لا تنتظر عشرين ثانيةً لكل واحدة. */
+export const MAX_PER_TICK = 6;
+
 /** One pass over every account with something queued. Runs every 20 s. */
 export async function drainQueues(): Promise<void> {
-  if (!isWithinSendingHours()) return;
   const accounts = await db.selectDistinct({ userId: emailMessagesTable.userId }).from(emailMessagesTable)
     .where(eq(emailMessagesTable.status, "queued"));
+  // البريد البارد في أيام العمل وساعاتها فقط؛ واتساب له نافذته الخاصة.
+  if (!isEmailSendingTime()) { for (const { userId } of accounts) stall(userId, emailWindowNote()); return; }
 
   for (const { userId } of accounts) {
-    try { await drainOne(userId); }
-    catch (err) { logger.warn({ userId, err: String((err as any)?.message ?? err) }, "فشل مرور طابور البريد"); }
+    try {
+      // رسالةٌ واحدة في المرور كانت تعني ثلاثاً في الدقيقة مهما كثرت
+      // الصناديق. الآن نكرّر ما دام صندوقٌ حرٌّ يأخذ رسالة؛ فاصل كل
+      // صندوقٍ (markSent) يجعل التكرار التالي يختار غيره أو يتوقف.
+      for (let i = 0; i < MAX_PER_TICK; i++) if (!(await drainOne(userId))) break;
+    } catch (err) { logger.warn({ userId, err: String((err as any)?.message ?? err) }, "فشل مرور طابور البريد"); }
   }
 }
 
-async function drainOne(userId: number) {
+/** يعيد true حين استهلك فتحة صندوق (أرسل أو حاول)، وfalse حين لا شيء يخرج الآن. */
+async function drainOne(userId: number): Promise<boolean> {
   const s = await getSettings(userId);
-  if (!isConfigured(s)) return;
+  if (!isConfigured(s)) return stall(userId, "إعدادات البريد غير مكتملة");
 
   const now = Date.now();
-  if ((heldUntil.get(userId) ?? 0) > now) return;
+  if ((heldUntil.get(userId) ?? 0) > now) return stall(userId, holdNote(heldUntil.get(userId)!));
   // A hold written to the account outlives a restart; when it ends, what it paused resumes.
   if (s!.guardHoldUntil) {
-    if (s!.guardHoldUntil.getTime() > now) { heldUntil.set(userId, s!.guardHoldUntil.getTime()); return; }
+    if (s!.guardHoldUntil.getTime() > now) { heldUntil.set(userId, s!.guardHoldUntil.getTime()); return stall(userId, holdNote(s!.guardHoldUntil.getTime())); }
     await liftHold(userId);
   }
 
@@ -411,7 +455,7 @@ async function drainOne(userId: number) {
       .where(and(eq(emailCampaignsTable.userId, userId), eq(emailCampaignsTable.status, "sending")));
     await notify(userId, `<b>📧 أوقفنا إرسال البريد ${v.holdMinutes} دقيقة</b>\n${esc(v.reasons.join("\n"))}\nيستأنف وحده حين تنتهي المهلة.`).catch(() => {});
     logger.warn({ userId, reasons: v.reasons }, "email sending held");
-    return;
+    return stall(userId, holdNote(until.getTime()));
   }
 
   // Pace and caps, per mailbox: the next message goes out of whichever
@@ -422,7 +466,7 @@ async function drainOne(userId: number) {
   const pick = await pickSender(userId, s!, {
     dailyCap: warmupCap(s!.dailyCap, sig.senderAgeDays, s!.warmup), hourlyCap: s!.hourlyCap, gapMs: sendGapMs(s!.hourlyCap, v.throttle),
   }, v.throttle, now);
-  if (!pick) return;
+  if (!pick) return stall(userId, "كل الصناديق عند سقفها أو في فاصلها");
 
   // Next in line: campaigns that are sending, and any sequence rung.
   const sending = db.select({ id: emailCampaignsTable.id }).from(emailCampaignsTable)
@@ -440,24 +484,31 @@ async function drainOne(userId: number) {
       sql`(${emailMessagesTable.sequenceJobId} is null or (
         not exists (select 1 from email_sequence_jobs j join email_sequences q on q.id = j.sequence_id where j.id = ${emailMessagesTable.sequenceJobId} and not q.is_active)
         and not exists (select 1 from email_contacts c where c.id = ${emailMessagesTable.contactId} and c.last_sent_at > now() - interval '48 hours')))`,
+      // فاصل الشركة: زميلٌ على النطاق نفسه راسلناه خلال خمسة أيام، فهذه
+      // تنتظر دورها — إلا البريد الحر (gmail…) فلا شركة خلفه. الفهرس 070.
+      companyGapClause(emailMessagesTable.contactId),
       // ملفٌ جديد أرسل عيّنته: ما بعدها ينتظر حكمها (bounce-guard.ts).
       awaitingVerdict(emailMessagesTable.contactId)))
     .orderBy(asc(emailMessagesTable.createdAt)).limit(1);
-  if (!m) { await completeFinishedCampaigns(userId); return; }
+  if (!m) {
+    await completeFinishedCampaigns(userId);
+    const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(emailMessagesTable).where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.status, "queued")));
+    return stall(userId, Number(n) ? "لا رسالة مؤهلة الآن (فاصل الشركة ٥ أيام / عيّنة الملف / تتابع موقوف)" : "الطابور فارغ");
+  }
 
   // A message whose contact was deleted is nobody's to send any more.
   if (!m.contactId) {
     await db.update(emailMessagesTable).set({ status: "cancelled", error: "ألغيت: جهة الاتصال حُذفت" }).where(eq(emailMessagesTable.id, m.id));
-    return;
+    return stall(userId, "رسالة بلا جهة اتصال أُلغيت — التالية في المرور القادم");
   }
   const [contact] = await db.select().from(emailContactsTable).where(eq(emailContactsTable.id, m.contactId)).limit(1);
   if (contact && inTruce(contact)) {
     await db.update(emailMessagesTable).set({ status: "cancelled", error: `ألغيت: هدنة حتى ${new Date(contact.quietUntil!).toISOString().slice(0, 10)} — ${contact.quietReason ?? "طلبها ردُّه"}` }).where(eq(emailMessagesTable.id, m.id));
-    return;
+    return stall(userId, "رسالة في هدنة أُلغيت — التالية في المرور القادم");
   }
   if (contact && contact.status !== "active") {
     await db.update(emailMessagesTable).set({ status: "failed", error: `جهة الاتصال ${contact.status}` }).where(eq(emailMessagesTable.id, m.id));
-    return;
+    return stall(userId, "جهة غير نشطة أُسقطت — التالية في المرور القادم");
   }
 
   // The body: a campaign's html, or the rung's.
@@ -482,7 +533,7 @@ async function drainOne(userId: number) {
         : "ألغيت: حُذفت حملتها أو تتابعها، فلم يبقَ لها نص. الجهة ما زالت قابلة للمراسلة.",
     }).where(eq(emailMessagesTable.id, m.id));
     logger.warn({ userId, messageId: m.id, campaignId: m.campaignId, sequenceJobId: m.sequenceJobId }, "رسالة بلا جسم — أُلغيت ولم تُحرق");
-    return;
+    return stall(userId, "رسالة بلا جسم أُلغيت — التالية في المرور القادم");
   }
 
   const es = pick.settings;
@@ -492,7 +543,7 @@ async function drainOne(userId: number) {
     const g = await beforeSend(userId, contact, es.fromEmail!).catch(() => ({ send: true as const, trialId: null }));
     if (!g.send) {
       await db.update(emailMessagesTable).set({ status: "cancelled", error: g.why }).where(eq(emailMessagesTable.id, m.id));
-      return;
+      return stall(userId, `حارس الارتداد أوقف رسالة: ${g.why.slice(0, 80)}`);
     }
     trialId = g.trialId;
   }
@@ -522,6 +573,7 @@ async function drainOne(userId: number) {
     if (m.campaignId) await db.update(emailCampaignsTable).set({ sentCount: sql`${emailCampaignsTable.sentCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
     await recordEvent(userId, m.id, "sent");
     receipt({ userId, node: "sender", graph: "email", action: "send.email", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : m.sequenceJobId ? `sequence-job:${m.sequenceJobId}` : null, outputRef: `email-message:${m.id}` });
+    stalls.delete(userId);
   } catch (err) {
     const e = err as SendError;
     // The first mailbox's login refused stops the account as it always did.
@@ -531,7 +583,7 @@ async function drainOne(userId: number) {
     if (pick.sender && e?.kind === "config") {
       await markBroken(pick.sender.id, String(e?.message ?? err));
       await activity(userId, "email_guard", "hold", `الصندوق ${pick.sender.fromEmail} رفض خادمه الدخول — عطّلته حتى تصحّح كلمة مروره في الإعدادات. الصناديق الأخرى تكمل.`).catch(() => {});
-      return;
+      return true;
     }
     await db.update(emailMessagesTable).set({ status: "failed", error: String(e?.message ?? err).slice(0, 400), senderId: pick.sender?.id ?? null }).where(eq(emailMessagesTable.id, m.id));
     if (m.campaignId) await db.update(emailCampaignsTable).set({ failedCount: sql`${emailCampaignsTable.failedCount} + 1` }).where(eq(emailCampaignsTable.id, m.campaignId));
@@ -552,7 +604,27 @@ async function drainOne(userId: number) {
     if (e?.kind === "transient" || (!e?.kind && !e?.permanent)) heldUntil.set(userId, now + 10 * 60_000);
     logger.warn({ userId, messageId: m.id, err: String(e?.message ?? err) }, "email send failed");
     receipt({ userId, node: "sender", graph: "email", action: "send.email", status: "failed", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : null, outputRef: `email-message:${m.id}`, why: String(e?.message ?? err).slice(0, 300) });
+    if ((heldUntil.get(userId) ?? 0) > now) stall(userId, holdNote(heldUntil.get(userId)!));
   }
+  return true;
+}
+
+/** شرط SQL: لا زميلَ على نطاق شركة هذه الجهة راسلناه خلال `COMPANY_GAP_DAYS`؛ البريد الحر معفى. */
+export const COMPANY_GAP_DAYS = 5;
+const FREE_MAIL_SQL = sql.join([...FREE_MAIL].map((d) => sql`${d}`), sql`, `);
+export const companyGapClause = (contactId: any) => sql`not exists (
+  select 1 from email_contacts c join email_contacts c2 on c2.user_id = c.user_id and c2.id <> c.id
+    and lower(split_part(c2.email, '@', 2)) = lower(split_part(c.email, '@', 2))
+  where c.id = ${contactId} and lower(split_part(c.email, '@', 2)) not in (${FREE_MAIL_SQL})
+    and c2.last_sent_at > now() - make_interval(days => ${COMPANY_GAP_DAYS}))`;
+
+/** فهارس 070 عند الإقلاع: النشر لا يشغّل ملفات SQL، وبلا الفهرس يقرأ شرط الشركة الجدول كله في كل مرور. */
+export const DOMAIN_INDEX_SQL = [
+  `CREATE INDEX IF NOT EXISTS idx_email_contacts_domain ON email_contacts (user_id, lower(split_part(email, '@', 2)))`,
+  `CREATE INDEX IF NOT EXISTS idx_email_contacts_last_sent ON email_contacts (user_id, last_sent_at)`,
+];
+async function ensureDomainIndexes() {
+  for (const q of DOMAIN_INDEX_SQL) await db.execute(sql.raw(q)).catch((e) => logger.warn({ err: String(e?.message ?? e) }, "تعذّر إنشاء فهرس البريد"));
 }
 
 /** مرةً في اليوم، لا مع كل رسالة مرفوضة. */
@@ -642,6 +714,8 @@ export async function overview(userId: number) {
     week: { sent: Number(w?.sent ?? 0), opened: Number(w?.opened ?? 0), clicked: Number(w?.clicked ?? 0), replied: Number(w?.replied ?? 0), bounced: Number(w?.bounced ?? 0),
       openRate: rate(Number(w?.opened ?? 0), Number(w?.sent ?? 0)), clickRate: rate(Number(w?.clicked ?? 0), Number(w?.sent ?? 0)), replyRate: rate(Number(w?.replied ?? 0), Number(w?.sent ?? 0)), bounceRate: rate(Number(w?.bounced ?? 0), Number(w?.sent ?? 0)) },
     queue: { queued: Number(queued?.n ?? 0), pendingRungs: Number(seq?.n ?? 0), heldUntil: heldUntil.get(userId) && heldUntil.get(userId)! > Date.now() ? new Date(heldUntil.get(userId)!) : null },
+    stall: stallReason(userId),
+    window: emailWindowNote(),
     health: v,
     events: recent.map((r: any) => ({ id: r.e.id, type: r.e.type, at: r.e.createdAt, to: r.to, subject: r.subject, url: r.e.url, meta: r.e.meta })),
   };
@@ -759,6 +833,7 @@ export async function dailyEmailReport(userId: number): Promise<boolean> {
 
 export function startEmailWorkers(): void {
   let lastReportDay = "";
+  void ensureDomainIndexes();
   setTimeout(() => {
     setInterval(() => void drainQueues().catch((e) => logger.warn({ err: String(e?.message ?? e) }, "email drain failed")), 20_000);
     setInterval(() => void enqueueDueSequenceSteps().catch(() => {}), 60_000);

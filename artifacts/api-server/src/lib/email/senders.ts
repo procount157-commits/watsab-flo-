@@ -38,8 +38,8 @@ export function senderWarmupCap(dailyCap: number, ageDays: number, on = true): n
   return Math.min(dailyCap, Math.round(20 * Math.pow(1.15, Math.max(0, ageDays))));
 }
 
-/** حدّ الارتداد الذي يُمهَل بعده صندوقٌ وحده، وأقل عيّنةٍ يُحكم عليها. */
-export const SENDER_BOUNCE_HOLD = { pct: 8, minSent: 20, hours: 24 };
+/** حدّ الارتداد الذي يُمهَل بعده صندوقٌ وحده، وأقل عيّنةٍ يُحكم عليها. ٤٪ — إرشاد Gmail ٢٪، والصندوق الأول أشدّ منه. */
+export const SENDER_BOUNCE_HOLD = { pct: 4, minSent: 20, hours: 24 };
 
 export interface Candidate {
   id: number | null;            // null = الصندوق الأول
@@ -84,13 +84,16 @@ export async function liveSenders(userId: number, now = new Date()): Promise<Ema
   return rows.filter((r) => !r.heldUntil || r.heldUntil <= now);
 }
 
-/** كم أرسل كل صندوقٍ في الساعة واليوم (sender_id فارغ = الأول). */
+/** بداية اليوم التقويمي في دبي، كتعبير SQL. «اليوم» كان ٢٤ ساعةً دوّارة، فحمل صباحُ كل يومٍ عبءَ مساء أمسه ولم يبدأ الصندوق يومه بسقفٍ كامل قط. */
+export const DUBAI_DAY_START = sql`(date_trunc('day', now() at time zone 'Asia/Dubai') at time zone 'Asia/Dubai')`;
+
+/** كم أرسل كل صندوقٍ في الساعة (دوّارة) وفي يوم دبي التقويمي (sender_id فارغ = الأول). */
 async function sentBySender(userId: number): Promise<Map<number, { h: number; d: number }>> {
   const r = await db.execute<{ sid: number; h: number; d: number }>(sql`
     SELECT coalesce(sender_id, 0) AS sid,
            count(*) FILTER (WHERE sent_at > now() - interval '1 hour')::int AS h,
-           count(*)::int AS d
-    FROM email_messages WHERE user_id = ${userId} AND status = 'sent' AND sent_at > now() - interval '24 hours'
+           count(*) FILTER (WHERE sent_at >= ${DUBAI_DAY_START})::int AS d
+    FROM email_messages WHERE user_id = ${userId} AND status = 'sent' AND (sent_at >= ${DUBAI_DAY_START} OR sent_at > now() - interval '1 hour')
     GROUP BY 1`);
   return new Map(r.rows.map((x) => [Number(x.sid), { h: Number(x.h), d: Number(x.d) }]));
 }

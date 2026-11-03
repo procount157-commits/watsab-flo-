@@ -47,6 +47,56 @@ export function msLeftInSendingWindow(now = new Date()): number {
   return (endSecs - nowSecs) * 1_000;
 }
 
+// ── نافذة البريد: أيام العمل فقط ──────────────────────────────────
+// واتساب يُقرأ في العطلة؛ البريد البارد لا. في ثلاثين يوماً خرج ١٣٥٤ بريداً
+// يوم السبت و٩٦٧ يوم الأحد (عطلة الإمارات) وحتى الثامنة مساءً — ولم يُردّ
+// على واحدٍ منها، وصار الاثنين كومةً فوق كومة. البريد يخرج الإثنين–الجمعة
+// ٨–١٧ بتوقيت دبي، والجمعة حتى الظهر. الطابور لا يُمسّ: ينتظر فحسب.
+//
+// `EMAIL_SENDING_DAYS` بأرقام JS getDay (٠ الأحد … ٦ السبت).
+
+const parseDays = (v: string | undefined, dflt: number[]) => {
+  // Number("") هو ٠ — فسلسلةٌ فارغة كانت تعني «الأحد فقط».
+  const ds = (v ?? "").split(",").map((x) => x.trim()).filter(Boolean).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
+  return ds.length ? [...new Set(ds)] : dflt;
+};
+export const EMAIL_DAYS        = parseDays(process.env["EMAIL_SENDING_DAYS"], [1, 2, 3, 4, 5]);
+export const EMAIL_HOUR_START  = Number(process.env["EMAIL_HOUR_START"] ?? 8);   // inclusive
+export const EMAIL_HOUR_END    = Number(process.env["EMAIL_HOUR_END"]   ?? 17);  // exclusive
+export const EMAIL_FRIDAY_END  = Number(process.env["EMAIL_FRIDAY_END"] ?? 12);  // exclusive
+
+/** اليوم (0–6 كـ getDay) والساعة في منطقة الإرسال. Pure. */
+export function dayHourInSendingTz(now = new Date()): { day: number; hour: number } {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: SENDING_TZ, weekday: "short", hour: "2-digit", hour12: false }).formatToParts(now);
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
+  return { day: day < 0 ? 1 : day, hour };
+}
+
+/** نهاية النافذة لهذا اليوم: الجمعة أقصر. Pure. */
+export const emailHourEnd = (day: number) => (day === 5 ? Math.min(EMAIL_FRIDAY_END, EMAIL_HOUR_END) : EMAIL_HOUR_END);
+
+/** هل البريد البارد يخرج الآن؟ أيام العمل وساعاتها بتوقيت دبي. `SENDING_HOURS_ENABLED=false` يفتحها كلها. */
+export function isEmailSendingTime(now = new Date()): boolean {
+  if (!SENDING_HOURS_ENABLED) return true;
+  const { day, hour } = dayHourInSendingTz(now);
+  return EMAIL_DAYS.includes(day) && hour >= EMAIL_HOUR_START && hour < emailHourEnd(day);
+}
+
+const AR_DAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+const arNum = (n: number) => String(n).replace(/\d/g, (d) => "٠١٢٣٤٥٦٧٨٩"[Number(d)]!);
+
+/** سطرٌ واحد للتشخيص: متى يخرج البريد، وأين نحن منه الآن. */
+export function emailWindowNote(now = new Date()): string {
+  const days = [...EMAIL_DAYS].sort((a, b) => a - b);
+  const weekdays = days.filter((d) => d !== 5), friday = days.includes(5);
+  const span = weekdays.length ? `${AR_DAYS[weekdays[0]!]}–${AR_DAYS[weekdays[weekdays.length - 1]!]} ${arNum(EMAIL_HOUR_START)}–${arNum(EMAIL_HOUR_END)}` : "";
+  const fri = friday ? `الجمعة ${arNum(EMAIL_HOUR_START)}–${arNum(emailHourEnd(5))}` : "";
+  const window = [span, fri].filter(Boolean).join("، ");
+  return `${isEmailSendingTime(now) ? "داخل" : "خارج"} نافذة البريد: ${window} بتوقيت دبي`;
+}
+
 // ── Greeting of the hour ──────────────────────────────────────────
 // The owner (2026-10-21): «it sends صباح الخير in the evening». The writer
 // model was told to open with the greeting of the hour but never told the
