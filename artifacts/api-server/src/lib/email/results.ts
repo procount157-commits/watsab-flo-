@@ -161,8 +161,12 @@ export async function mixState(userId: number, days = 30): Promise<MixState> {
     SELECT ms.track,
       coalesce(sum(CASE
         WHEN ms.campaign_id IS NOT NULL THEN
-          (SELECT count(*) FROM email_messages m WHERE m.campaign_id = ms.campaign_id AND m.status NOT IN ('cancelled'))
-        ELSE coalesce(nullif(ms.filter->>'take', '')::int, 0)
+          (SELECT count(*) FROM email_messages m WHERE m.campaign_id = ms.campaign_id AND m.status NOT IN ('cancelled')
+             AND (ms.status = 'active' OR m.sent_at IS NOT NULL))
+        -- خطةٌ لم تُطلَق: تحجز حصتها ما دامت نشطة فقط. المتروكة (giveUp ←
+        -- paused) والموقوفة والملغاة كانت تُعدّ «take» ثلاثين يوماً فتخنق مسارها.
+        WHEN ms.status = 'active' THEN coalesce(nullif(ms.filter->>'take', '')::int, 0)
+        ELSE 0
       END), 0)::int AS n
     FROM email_missions ms
     WHERE ms.user_id = ${userId} AND ms.track IS NOT NULL

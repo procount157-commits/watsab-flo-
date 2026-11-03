@@ -523,7 +523,7 @@ function InboxTab() {
           <button key={r.id} onClick={() => setOpen(r.id)} className={cn("w-full text-right p-3 border-b border-card-border hover:bg-muted/40", open === r.id && "bg-muted/60", r.state === "ignored" && "opacity-50")}>
             <div className="flex items-center gap-2"><span className="text-xs font-semibold truncate">{r.company ?? r.fromName ?? r.fromEmail}</span><span className={cn("text-[10px] px-1.5 rounded", r.intent === "interested" ? "bg-primary/15 text-primary" : r.kind && r.kind !== "reply" ? "bg-muted/60 text-muted-foreground" : "bg-muted text-muted-foreground")}>{r.kind && r.kind !== "reply" ? r.kindLabel : (r.intentLabel ?? r.intent ?? "")}</span><span className="text-[10px] text-muted-foreground mr-auto">{ago(r.receivedAt)}</span></div>
             <p className="text-[11px] text-muted-foreground truncate mt-0.5">{r.summary ?? r.subject ?? ""}</p>
-            <p className="text-[10px] mt-0.5">{r.state === "sent" ? <span className="text-green-400">رُدّ عليه</span> : r.state === "drafted" ? <span className="text-blue-400">مسودة جاهزة</span> : r.state === "ignored" ? "متجاهَل" : <span className="text-yellow-400">جديد</span>}</p>
+            <p className="text-[10px] mt-0.5">{r.state === "sent" ? <span className="text-green-400">رُدّ عليه</span> : r.state === "drafted" ? <span className="text-blue-400">مسودة جاهزة</span> : r.state === "held" ? <span className="text-orange-400">أُوقف الرد الآلي — راجعه</span> : r.state === "ignored" ? "متجاهَل" : <span className="text-yellow-400">جديد</span>}</p>
           </button>
         ))}
       </div>

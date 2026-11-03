@@ -18,6 +18,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, emailMessagesTable } from "@workspace/db";
 import { type Intent } from "../intent";
+import { complete } from "../llm";
 
 /** نوع الرسالة الواردة — سؤالٌ مستقل تماماً عن نيّة كاتبها. */
 export type MailKind =
@@ -315,6 +316,14 @@ const E_LATER     = /(not (right )?now|later (this|next) (year|quarter|month)|af
 const E_INTEREST  = /(interested|please send (me |us )?(the |your )?(proposal|quot|price|pricing|details|fee|more)|how much|what (is|are) (the|your) (price|pricing|fee|cost|rate)|(book|schedule|set up|arrange) (a )?(call|meeting|demo)|when (are|can) you (available|free)|let('s| us) (talk|meet|discuss|proceed)|(we|i) would like to (proceed|start|engage|sign)|send (us |me )?(the )?(contract|engagement|agreement)|مهتم|ارسل(وا)? (لي |لنا )?(العرض|السعر|التفاصيل)|كم (السعر|التكلفه)|نريد (البدء|البدا|التعاقد)|موعد)/i;
 const E_CONSIDER  = /((we|i) (will|shall|'ll) (review|study|go through|discuss|consider|check) (it|this|the|your|these|internally)|under (review|consideration|discussion)|revert (back )?to you|get back to you (shortly|soon|once|after|internally)|keep (it |this |your details )?on (file|record)|noted (with thanks)?|will (share|pass) (it )?internally|سنراجع|سندرس|تحت الدراسه|سنعود اليكم|سنرد عليكم)/i;
 const E_GREETING  = /^(hi|hello|dear|good (morning|afternoon|day)|thanks?|thank you|noted|ok(ay)?|received|مرحبا|السلام عليكم|شكرا|تم)[\s.,!]*$/i;
+/**
+ * القصير الحار. «Call me» و«Send price» أقصر من اثني عشر حرفاً، فكانت
+ * قاعدة «القصير تحية» تجعلهما تحيةً تُجاب بسؤال تأهيل — بدل تسليمٍ حار
+ * لصاحب العمل. تُقرأ قبل قاعدة التحية، ولا تُقرأ إلا للنص القصير: في
+ * رسالةٍ طويلة الكلمات نفسها لها سياقٌ تحكمه القواعد المرتّبة أعلاه.
+ */
+export const HOT_SHORT = /(call me|phone|price|pricing|quote|send (me )?(the )?(details|proposal|quote)|interested|let'?s talk|اتصل|كلمني|السعر|عرض سعر|مهتم|ارسل)/i;
+const SHORT_MAX = 60;
 
 /**
  * نيّة ردٍّ حقيقي، بالقواعد. الترتيب هو الحكم: ما يُغلق الباب يُقرأ قبل
@@ -333,6 +342,10 @@ export function emailIntent(subject: string | null | undefined, text: string | n
   for (const [intent, re, c] of tests) {
     const m = hit(re);
     if (m) return { intent, confidence: c, matched: [m] };
+  }
+  if (body.length <= SHORT_MAX) {
+    const m = hit(HOT_SHORT);
+    if (m) return { intent: "interested", confidence: 0.8, matched: [m] };
   }
   if (E_GREETING.test(body) || body.length < 12) return { intent: "greeting", confidence: 0.6, matched: [] };
   if (/\?|؟/.test(body)) return { intent: "question", confidence: 0.55, matched: ["علامة استفهام"] };
@@ -368,7 +381,17 @@ export const INTENT_AR: Record<EmailIntent, { label: string; next: string }> = {
  * الحكم الكامل: نوعٌ أولاً، ثم — للرد الحقيقي وحده — نيّة.
  * لا تُستدعى النيّة لغير الرد: إعلانٌ «مهتم» هو ما صنع المشكلة كلها.
  */
-export async function classifyMail(userId: number, input: ClassifyInput): Promise<MailVerdict & { matchedId: number | null; sentCount: number }> {
+export type FullVerdict = MailVerdict & {
+  matchedId: number | null; sentCount: number;
+  /**
+   * ثقة النيّة وحدها. `confidence` هي الأعلى بين ثقة النوع وثقة النيّة،
+   * فردٌّ حقيقي بنيّةٍ «غير واضحة» (٠٫٣) يحمل ثقة ٠٫٨ لأن نوعه مؤكّد —
+   * وبوابة الرد التلقائي تسأل عن النيّة لا عن النوع.
+   */
+  intentConfidence: number | null;
+};
+
+export async function classifyMail(userId: number, input: ClassifyInput): Promise<FullVerdict> {
   const sol = await solicitation(userId, input);
   const k = kindOf(input, sol.solicited);
   if (sol.how) k.reasons.unshift(sol.how);
@@ -377,7 +400,7 @@ export async function classifyMail(userId: number, input: ClassifyInput): Promis
   if (stop) k.reasons.push("يطلب أن نكفّ عن مراسلته — يُنفَّذ أياً كان نوع الرسالة");
 
   if (k.kind !== "reply") {
-    return { ...k, asksToStop: stop, solicited: sol.solicited, intent: null, classifier: "rules", matchedId: sol.matchedId, sentCount: sol.sentCount };
+    return { ...k, asksToStop: stop, solicited: sol.solicited, intent: null, classifier: "rules", matchedId: sol.matchedId, sentCount: sol.sentCount, intentConfidence: null };
   }
   const v = emailIntent(input.subject, input.text);
   k.reasons.push(`نيّة الرد: ${INTENT_AR[v.intent].label}${v.matched[0] ? ` («${v.matched[0]}»)` : ""}`);
@@ -385,9 +408,39 @@ export async function classifyMail(userId: number, input: ClassifyInput): Promis
   // عندنا يبقى غير مُستدعى، وصاحب العمل يرى ذلك في سبب التصنيف.
   return {
     ...k, asksToStop: stop, solicited: sol.solicited, intent: v.intent, classifier: "rules",
-    confidence: Math.max(k.confidence, v.confidence),
+    confidence: Math.max(k.confidence, v.confidence), intentConfidence: v.confidence,
     matchedId: sol.matchedId, sentCount: sol.sentCount,
   };
+}
+
+const INTENTS: EmailIntent[] = ["interested", "question", "considering", "later", "referral", "wrong_person", "not_interested", "opt_out", "complaint", "greeting", "unclear"];
+
+/**
+ * النموذج يُسأل حين تتردّد القواعد — وللرد الحقيقي وحده. سؤالٌ من سطرين
+ * وجوابٌ من كلمة. الدمج محافظ: ثقة ٠٫٧٥ لا أكثر، فلا يُرسَل بها ردٌّ آلي
+ * على نيّةٍ لم تُثبتها قاعدة؛ وأي فشلٍ — مهلة، كلمةٌ خارج القائمة — يُبقي
+ * حكم القواعد كما هو. ولا يُرفَع «غير واضح» ولا يُهبَط «إيقاف» بالنموذج:
+ * الأول يبقى لإنسان، والثاني قاعدةٌ لا تُراجَع.
+ */
+export async function classifyWithModel<V extends { kind: MailKind; intent: EmailIntent | null; intentConfidence: number | null; confidence: number; classifier: "rules" | "rules+ai"; reasons: string[] }>(
+  v: V, input: { subject?: string | null; text?: string | null },
+): Promise<V> {
+  if (v.kind !== "reply" || (v.intentConfidence ?? 1) >= 0.7 || v.intent === "opt_out") return v;
+  try {
+    const out = await complete([
+      { role: "system", content: `You classify the intent of a business email reply to a B2B outreach. Answer with ONE word only from: ${INTENTS.join(", ")}.` },
+      { role: "user", content: `Subject: ${(input.subject ?? "").slice(0, 200)}\n\n${(input.text ?? "").slice(0, 1200)}` },
+    ], 12_000);
+    const word = (out?.text ?? "").trim().toLowerCase().replace(/[^a-z_]/g, "");
+    const intent = INTENTS.find((i) => i === word);
+    if (!intent || intent === "unclear") return v;
+    return {
+      ...v, intent, classifier: "rules+ai", intentConfidence: 0.75, confidence: Math.max(v.confidence, 0.75),
+      reasons: [...v.reasons, `النموذج رجّح النيّة: ${INTENT_AR[intent].label} (القواعد تردّدت)`],
+    };
+  } catch {
+    return v;
+  }
 }
 
 /** بالعربية لصاحب العمل. */

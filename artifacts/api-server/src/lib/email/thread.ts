@@ -180,6 +180,26 @@ export function openingsUsed(turns: ThreadTurn[]): string[] {
   return [...new Set(out)];
 }
 
+/**
+ * نصُّ الرسالة التي أرسلناها بعينها — كاملاً، لا مُقتطعاً بثلاثمئة حرف.
+ * الموجز يعطي الخيط كله مضغوطاً، لكن من يكتب الردّ يحتاج أن يقرأ ما
+ * ردّ عليه الشخص فعلاً بتمامه: الوعد الذي قطعناه، والسعر إن ذُكر، والسؤال
+ * الذي طرحناه. `maxChars` يحفظ الرموز.
+ */
+export async function sentBody(messageId: number, maxChars = 1500): Promise<string> {
+  const [m] = await db.select({
+    campaignId: emailMessagesTable.campaignId, sequenceJobId: emailMessagesTable.sequenceJobId, contactId: emailMessagesTable.contactId,
+  }).from(emailMessagesTable).where(eq(emailMessagesTable.id, messageId)).limit(1);
+  if (!m) return "";
+  const [contact] = m.contactId ? await db.select().from(emailContactsTable).where(eq(emailContactsTable.id, m.contactId)).limit(1) : [null];
+  const vars: Record<string, string | null | undefined> = contact
+    ? { name: contact.name ?? contact.company ?? "", first_name: (contact.name ?? "").split(/\s+/)[0] ?? "",
+        company: contact.company ?? "", email: contact.email, city: contact.city ?? "", industry: contact.industry ?? "" }
+    : {};
+  const { body } = await bodyOf(m.campaignId, m.sequenceJobId, new Map(), vars);
+  return body.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, maxChars);
+}
+
 /** هل لهذه الشركة خيطٌ أصلاً — يُسأل قبل تحميل أي شيء. */
 export async function hasHistory(userId: number, contactId: number): Promise<boolean> {
   const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(emailMessagesTable)

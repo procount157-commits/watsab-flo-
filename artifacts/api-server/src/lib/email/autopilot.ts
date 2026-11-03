@@ -177,6 +177,15 @@ export async function busy(listId: number, sector?: string | null): Promise<bool
     ));
   return Number(r?.n ?? 0) > 0;
 }
+// `busy` يعدّ status = 'active' وحدها: المتروكة (giveUp ← paused) والموقوفة
+// بالاستهداف (paused) والملغاة لا تحجز قطاعها — وإلا جاع القطاع إلى الأبد.
+
+/** موجة AML نشطة ترسل الآن — حين توجد، لا يُرفع سقف الخدمات. */
+export async function amlSending(userId: number): Promise<boolean> {
+  const [r] = await db.select({ n: sql<number>`count(*)` }).from(emailMissionsTable)
+    .where(and(eq(emailMissionsTable.userId, userId), eq(emailMissionsTable.status, "active"), eq(emailMissionsTable.track, "aml"), eq(emailMissionsTable.stage, "sending")));
+  return Number(r?.n ?? 0) > 0;
+}
 
 /** At most this many sector waves running per list at once, and none for a sector too small to be worth a campaign. */
 export const MAX_SECTOR_WAVES = 3;
@@ -266,6 +275,37 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
   // مئتين، فنصٌّ جديد يُجرَّب على عددٍ لا يُغرق المزوّد إن أخطأ.
   const waveCap = res?.decisions.some((d) => d.kind === "policy") ? Math.min(cfg.waveSize, 60) : cfg.waveSize;
 
+  // ── الجوع: AML «له جمهور» بالحساب، ولا يخرج منه شيء بالفعل ──────
+  // `amlHasAudience` يُحسب قبل الحلقة من عدد غير المُراسَلين، والموجة
+  // نفسها قد لا تجد أحداً (العدّ بعد المرشّحات صفر) أو لا زاوية. فكان
+  // السقف يبقى على الخدمات، ولا AML يخرج، ويقف الإرسال كله. فيُعدّ ما
+  // خرج فعلاً، وإن لم يخرج AML ولا موجة AML ترسل الآن، أُعيد للقطاعات
+  // التي لم يخرج لها شيء بسقفٍ مرفوع هذه الجولة.
+  let amlLaunched = 0;
+  const missed: Array<{ list: (typeof lists)[number]; sector: string }> = [];
+  const runningBy = new Map<number, number>();
+  const launchWave = async (list: (typeof lists)[number], sector: string, pick: { track: Track; take: number | null; why: string }): Promise<boolean> => {
+    const take = Math.min(waveCap, pick.take ?? waveCap);
+    const filter: SegmentFilter = { listIds: [list.id], sectors: [sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take, ...(roleFirst ? { roleFirst: true } : {}) };
+    const n = await count(userId, filter, true);
+    if (!n) return false;
+    const angle = nextAngle(pick.track, sector, await anglesUsed(userId, pick.track, sector), avoidAngles);
+    if (!angle) return false;
+    const m = await createMission(userId, {
+      name: `${sector} — ${TRACK_AR[pick.track]} — ${angle.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
+      goal: angle.goal, filter, language: CAMPAIGN_LANGUAGE, requireApproval,
+      followAfterHours: cfg.followAfterHours, agentRole: "email", sourceListId: list.id,
+      track: pick.track, angle: angle.id,
+    });
+    mix[pick.track] += n;
+    if (pick.track === "aml") amlLaunched++;
+    done.waves++;
+    await activity(userId, "email_strategist", "wave",
+      `موجة ${TRACK_AR[pick.track]} لـ ${n} من «${sector}» في «${list.name}» بزاوية «${angle.label}» — ${pick.why}. النسبة بعدها: AML ${Math.round(mixShare(mix).aml * 100)}٪ / خدمات ${Math.round(mixShare(mix).services * 100)}٪.`,
+      { listId: list.id, missionId: m.id, sector, track: pick.track, angle: angle.id });
+    return true;
+  };
+
   for (const list of lists) {
     // يوسف: where everyone is.
     if (followup) {
@@ -297,29 +337,12 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
         if (running >= MAX_SECTOR_WAVES) break;
         if (await busy(list.id, s.sector)) continue;
         const pick = chooseTrack(s.sector, mix, { amlHasAudience, minWave: MIN_SECTOR });
-        if (!pick) {
-          await sayOnce(userId, "email_strategist", "wait", `«${s.sector}» في «${list.name}» ينتظر: مسار الخدمات عند سقفه (${Math.round(mixShare(mix).services * 100)}٪ من ${MIX.services * 100}٪).`, 24);
-          continue;
-        }
-        const take = Math.min(waveCap, pick.take ?? waveCap);
-        const filter: SegmentFilter = { listIds: [list.id], sectors: [s.sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take, ...(roleFirst ? { roleFirst: true } : {}) };
-        const n = await count(userId, filter, true);
-        if (!n) continue;
-        const used = await anglesUsed(userId, pick.track, s.sector);
-        const angle = nextAngle(pick.track, s.sector, used, avoidAngles);
-        if (!angle) continue;
-        const m = await createMission(userId, {
-          name: `${s.sector} — ${TRACK_AR[pick.track]} — ${angle.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
-          goal: angle.goal, filter, language: CAMPAIGN_LANGUAGE, requireApproval,
-          followAfterHours: cfg.followAfterHours, agentRole: "email", sourceListId: list.id,
-          track: pick.track, angle: angle.id,
-        });
-        mix[pick.track] += n;
-        done.waves++; running++;
-        await activity(userId, "email_strategist", "wave",
-          `موجة ${TRACK_AR[pick.track]} لـ ${n} من «${s.sector}» في «${list.name}» بزاوية «${angle.label}» — ${pick.why}. النسبة بعدها: AML ${Math.round(mixShare(mix).aml * 100)}٪ / خدمات ${Math.round(mixShare(mix).services * 100)}٪.`,
-          { listId: list.id, missionId: m.id, sector: s.sector, track: pick.track, angle: angle.id });
+        // ما لم يخرج له شيء يُحفظ: إن لم تخرج موجة AML في الجولة كلها،
+        // يُعاد إليه بعد الحلقة بسقفٍ مرفوع.
+        if (!pick || !(await launchWave(list, s.sector, pick))) { missed.push({ list, sector: s.sector }); continue; }
+        running++;
       }
+      runningBy.set(list.id, running);
     }
 
     // يوسف: those who clicked, then those who opened, each its own wave.
@@ -344,6 +367,24 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
         await activity(userId, "email_followup", "nurture", `بدأ متابعة ${n} ممن ${sl.stage === "clicked" ? "نقروا" : "فتحوا ولم يردّوا"} في «${list.name}» بزاوية جديدة.`, { listId: sl.id, missionId: m.id });
       }
     }
+  }
+
+  // لا AML خرج هذه الجولة، ولا موجة AML ترسل الآن: الخدمات لا تنتظر.
+  if (strategist && healthy && missed.length && !amlLaunched && !(await amlSending(userId))) {
+    let filled = 0;
+    for (const { list, sector } of missed) {
+      const running = runningBy.get(list.id) ?? 0;
+      if (running >= MAX_SECTOR_WAVES || (await busy(list.id, sector))) continue;
+      const pick = chooseTrack(sector, mix, { amlHasAudience: false, minWave: MIN_SECTOR });
+      if (pick?.track !== "services") continue;
+      if (await launchWave(list, sector, pick)) { filled++; runningBy.set(list.id, running + 1); }
+    }
+    if (filled) await sayOnce(userId, "email_strategist", "fill", "لا موجة AML ممكنة الآن (لا جمهور) — أُطلقت موجة خدمات بدل الانتظار", 6);
+  }
+  // ما بقي بلا موجة بعد ذلك ينتظر — ويُقال مرةً في اليوم.
+  for (const { list, sector } of missed) {
+    if (await busy(list.id, sector)) continue;
+    await sayOnce(userId, "email_strategist", "wait", `«${sector}» في «${list.name}» ينتظر: مسار الخدمات عند سقفه (${Math.round(mixShare(mix).services * 100)}٪ من ${MIX.services * 100}٪) أو لا جمهور/زاوية تصلح الآن.`, 24);
   }
   return { ...done, ran: true };
 }

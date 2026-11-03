@@ -95,6 +95,8 @@ const cancelled = await db.select().from(emailSequenceJobsTable).where(and(eq(em
 check("...and the contact's pending rungs are cancelled", cancelled.length >= 1);
 
 // A bounce from the daemon marks the address.
+// The subject test draws its slice at random: the bounced address is made one that went out, whichever slice it fell in.
+await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date() }).where(and(eq(emailMessagesTable.contactId, contacts[4]!.id), eq(emailMessagesTable.campaignId, camp!.id)));
 await handleInbound(USER, { from: "MAILER-DAEMON@mx.invalid", subject: "Delivery Status Notification (Failure)", text: `Your message to ${contacts[4]!.email} could not be delivered.` });
 const [bounced] = await db.select().from(emailContactsTable).where(eq(emailContactsTable.id, contacts[4]!.id));
 check("a daemon bounce marks the contact bounced", bounced?.status === "bounced");

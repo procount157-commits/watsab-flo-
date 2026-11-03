@@ -17,12 +17,12 @@ import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
-  db, emailSettingsTable, emailContactsTable, emailMessagesTable, emailInboundTable,
+  db, emailSettingsTable, emailContactsTable, emailMessagesTable, emailInboundTable, emailSequenceJobsTable,
   botEmployeesTable, businessProfileTable, type EmailSettings, emailSendersTable, type EmailSender,
 } from "@workspace/db";
 import { senderFor, asSettings } from "./senders";
-import { classifyMail, mayBecomeLead, KIND_AR, INTENT_AR, toSharedIntent, type MailKind, type EmailIntent } from "./classify";
-import { thread, threadBrief, openingsUsed } from "./thread";
+import { classifyMail, classifyWithModel, mayBecomeLead, KIND_AR, INTENT_AR, toSharedIntent, type MailKind, type EmailIntent } from "./classify";
+import { thread, threadBrief, openingsUsed, sentBody } from "./thread";
 import { replyInstructions, OUTPUT_SHAPE } from "./prompts";
 import { retrieve } from "../knowledge";
 import { passages } from "./knowledge-docs";
@@ -38,7 +38,7 @@ import { sendEmail, messageIdFor, isConfigured } from "./provider";
 import { newToken, htmlToText } from "./tracking";
 import { updateCard } from "../lead-card";
 import { replyVoice } from "./agent";
-import { lt, isNotNull } from "drizzle-orm";
+import { lt, gt, isNotNull } from "drizzle-orm";
 
 /**
  * النيّات التي يجوز أن يجيبها ردٌّ آلي. الشكوى والرفض ينتظران شخصاً،
@@ -46,6 +46,16 @@ import { lt, isNotNull } from "drizzle-orm";
  * إنسان — أي عنوانٍ يُراسَل بعده — لا رسالةً تُرسَل من تلقاء نفسها.
  */
 export const AUTO_INTENTS = new Set(["interested", "question", "greeting", "considering", "later"]);
+/**
+ * ودون هذه الثقة في النيّة لا يخرج ردٌّ آلي مهما كانت النيّة: ردٌّ خاطئ
+ * أسوأ من لا ردّ. «غير واضح» ليست في القائمة أصلاً، وهذا الحد يمسك ما
+ * دخلها بثقةٍ واهية — علامة استفهامٍ وحدها (٠٫٥٥)، أو نصٌّ قصير حُسب تحية.
+ */
+export const AUTO_MIN_CONFIDENCE = 0.6;
+/** كم يعيش المسوّدة قبل أن تُعدّ قديمةً فلا تُرسَل من تلقاء نفسها. */
+const DRAFT_MAX_AGE_MS = 48 * 3_600_000;
+/** ردٌّ حار مسوّدته تنتظر هذه المدة بلا أحد: يُصعَّد. */
+const HOT_STALE_MS = 2 * 3_600_000;
 
 export interface InboundMail {
   from: string;
@@ -61,11 +71,32 @@ export interface InboundMail {
 }
 
 /** Strip the quoted original so the classifier reads what they wrote, not what we wrote. */
+/**
+ * علامات بداية المقتبس التي تمتدّ على سطرٍ أو سطرين — تُفحص على النص كله
+ * لا سطراً سطراً: ترويسة Outlook «From: …\nSent: …» سطران، وجيميل على
+ * الهاتف يكسر «On … wrote:» أحياناً. وما سبق أول علامةٍ هو ما كتبه هو.
+ */
+const QUOTE_MARKERS: RegExp[] = [
+  /^On .+ wrote:$/m, /^On .+\n.*wrote:$/m,
+  /^Le .+ a écrit/m,
+  /^-----\s*Original Message\s*-----/im,
+  /^From:\s.+\nSent:\s/m, /^From:\s.+\n(To|Date):\s/m,
+  /^De : .+$/m,
+  /^في .+ كتب/m, /^بتاريخ .+ كتب/m,
+  /^---+ ?(الرسالة الأصلية|Forwarded message)/m,
+  /^________________________________/m,
+];
+
 export function replyOnly(text: string): string {
-  const lines = text.replace(/\r/g, "").split("\n");
+  let t = text.replace(/\r/g, "");
+  let cut = -1;
+  for (const re of QUOTE_MARKERS) {
+    const i = t.search(re);
+    if (i >= 0 && (cut < 0 || i < cut)) cut = i;
+  }
+  if (cut >= 0) t = t.slice(0, cut);
   const out: string[] = [];
-  for (const l of lines) {
-    if (/^(On .+ wrote:|في .+ كتب|-----Original Message-----|From: .+|De : .+|________________________________)/i.test(l.trim())) break;
+  for (const l of t.split("\n")) {
     if (l.trim().startsWith(">")) continue;
     out.push(l);
   }
@@ -92,11 +123,14 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   // المُرسَل إلينا «عميلاً حاراً»، وصُنعت منه صفقة، وأُرسل به إشعار بنار.
   // الآن النوع يُحسم أولاً، ولا شيء غير الرد الحقيقي يعبر هذه النقطة
   // إلى العميل والصفقة والإشعار.
-  const v = await classifyMail(userId, {
+  const v0 = await classifyMail(userId, {
     from, subject: mail.subject, text, raw,
     headers: mail.headers ?? null, inReplyTo: mail.inReplyTo, references: mail.references,
     ourEmail: s0?.fromEmail ?? null,
   });
+  // القواعد تردّدت في نيّة ردٍّ حقيقي: النموذج يُسأل كلمةً واحدة. وأي
+  // فشلٍ يُبقي حكم القواعد.
+  const v = await classifyWithModel(v0, { subject: mail.subject, text }).catch(() => v0);
   const isReply = mayBecomeLead(v.kind);
 
   // الرسالة التي ردّ عليها: الترويسة أولاً، ثم العنوان.
@@ -169,6 +203,11 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   if (!isReply) {
     await activity(userId, "email_replies", "noise", `${KIND_AR[v.kind]} — ${mail.fromName ?? from}: «${(mail.subject ?? text).slice(0, 90)}»`,
       { inboundId: row.id, kind: v.kind, reasons: v.reasons }).catch(() => {});
+    // خارج المكتب: ليس رداً، لكنه يقول متى يعود. كان يُهمَل فتصله
+    // المتابعة الثانية وهو غائب، ويقرأ الثلاث معاً حين يرجع.
+    if (v.kind === "auto_reply" && contact) {
+      await outOfOffice(userId, contact, text, from, s0?.fromEmail ?? null, row.id).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "تعذّر تسجيل الغياب"));
+    }
     logger.info({ userId, from, kind: v.kind, reasons: v.reasons }, "بريد وارد ليس رداً");
     return { id: row.id, bounce: false, kind: v.kind, isReply: false };
   }
@@ -225,14 +264,17 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   void draftReply(userId, row.id).then(async (d) => {
     if (!d) return;
     const s = await getSettings(userId);
-    if (!s?.autoReply || !AUTO_INTENTS.has(v.intent!) || contact?.status !== "active") return;
+    // البوابة: نيّةٌ يجوز الرد عليها آلياً، وبثقةٍ كافية، وجهةٌ نشطة.
+    // «غير واضح» ليست في القائمة، وما دونه ثقةً يُترك لإنسان.
+    const sure = (v.intentConfidence ?? v.confidence) >= AUTO_MIN_CONFIDENCE;
+    if (!s?.autoReply || !AUTO_INTENTS.has(v.intent!) || !sure || contact?.status !== "active") return;
     const base = Math.max(2, s.autoReplyDelayMin) * 60_000;
     const at = new Date(Date.now() + Math.round(base * (0.6 + Math.random() * 0.8)));
     await db.update(emailInboundTable).set({ autoSendAt: at }).where(eq(emailInboundTable.id, row.id));
     logger.info({ userId, inboundId: row.id, at }, "رد البريد سيُرسل تلقائياً");
   }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "تعذّرت مسودة الرد على البريد"));
 
-  await notify(userId, [
+  const told = await notify(userId, [
     `<b>${temp === "hot" ? "🔥 عميل حار ردّ على البريد" : "📧 ردّ على البريد"}</b> — ${esc(mail.fromName ?? from)} &lt;${esc(from)}&gt;`,
     contact?.company ? esc(contact.company) : "",
     `النية: ${esc(INTENT_AR[v.intent!].label)}${temp ? ` · ليلى: ${TEMP_AR[temp]}` : ""}${temp === "hot" && contact?.phone ? ` · واتساب: +${esc(contact.phone.replace(/\D/g, ""))}` : ""}`,
@@ -240,8 +282,12 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
     v.solicited ? "" : "⚠️ لا سجلَّ إرسالٍ لهذا العنوان عندنا — يرجَّح أن العرض أُرسل بيدك من خارج النظام.",
     `«${esc(text.slice(0, 300))}»`,
     "", "المسودة تنتظرك في قسم البريد → الوارد.",
-  ].filter(Boolean).join("\n")).catch(() => {});
+  ].filter(Boolean).join("\n")).catch(() => false);
   await say({ userId, fromRole: "sales", toRole: "chief", kind: "report", body: `ردّ بريد من ${contact?.company ?? from}: ${INTENT_AR[v.intent!].label}` }).catch(() => {});
+  // عميلٌ حار ولا تليجرام يصله الخبر: لا يُترك في سجلٍ لا يقرؤه أحد.
+  if (temp === "hot" && !told) {
+    await escalate(userId, { inboundId: row.id, from, company: contact?.company ?? mail.fromName ?? null, text, why: "تليجرام غير مضبوط — الإشعار لم يصل" }).catch(() => {});
+  }
 
   logger.info({ userId, from, kind: v.kind, intent: v.intent, matched: !!matched }, "ردّ بريد");
   return { id: row.id, bounce: false, kind: v.kind, isReply: true };
@@ -301,6 +347,149 @@ export function truceFor(intent: EmailIntent, text: string): { until: Date; why:
   return { until: add(30), why: "قال ليس الآن بلا موعد محدّد — شهرٌ هو أقل ما يُحترم به ذلك" };
 }
 
+// ── خارج المكتب: متى يعود ─────────────────────────────────────────
+// الرد الآلي يقول تاريخ العودة بصيغٍ كثيرة: «back on 12 November»،
+// «until 15 Nov»، «return on 12/11»، «من ١ إلى ١٠ نوفمبر»، أو ISO. تُجمع كل
+// التواريخ في النص، ويُفضَّل ما سبقته كلمةُ عودة، وإلا أبعدُها — في
+// «من … إلى …» تاريخ العودة هو الثاني. نقيّة لتُختبر بلا قاعدة.
+const RETURN_WORDS = /(back|return(ing)?|until|till|through|resume|reach(able)?|to|اعود|العوده|عوده|ساعود|حتي|الي|لغايه)(?:\s*(?:on|in|from|the|of|office|by|:))*\s*$/i;
+const WEEKDAYS: Array<[RegExp, number]> = [
+  [/\b(sun(day)?|الاحد)\b/i, 0], [/\b(mon(day)?|الاثنين|الإثنين)\b/i, 1], [/\b(tue(s|sday)?|الثلاثاء)\b/i, 2],
+  [/\b(wed(nesday)?|الاربعاء)\b/i, 3], [/\b(thu(rs|rsday)?|الخميس)\b/i, 4], [/\b(fri(day)?|الجمعه)\b/i, 5], [/\b(sat(urday)?|السبت)\b/i, 6],
+];
+const MONTH_NAMES = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|يناير|فبراير|مارس|ابريل|مايو|يونيو|يوليو|اغسطس|سبتمبر|اكتوبر|نوفمبر|ديسمبر";
+// بلا `\b`: حدود الكلمة في JS لاتينية، فلا تقف عند حرفٍ عربي أبداً.
+const MONTH_RES = MONTHS.map(([re]) => new RegExp(`^(?:${re.source.replace(/\\b/g, "")})$`, "i"));
+const monthIndex = (word: string): number => MONTH_RES.findIndex((re) => re.test(word));
+
+export function oooReturnDate(text: string, now: Date = new Date()): Date | null {
+  // التطبيع العربي نفسه الذي يستعمله المصنّف: همزات، وأرقام مشرقية.
+  const t = text.replace(/[آأإا]/g, "ا").replace(/ة/g, "ه").replace(/[ى]/g, "ي")
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/\r/g, "");
+  const DAY = 86_400_000, y0 = now.getFullYear();
+  const found: Array<{ at: Date; idx: number }> = [];
+  const push = (y: number, m: number, d: number, idx: number) => {
+    if (m < 0 || m > 11 || d < 1 || d > 31) return;
+    const at = new Date(y, m, d, 9);
+    if (at.getMonth() !== m) return;
+    found.push({ at, idx });
+  };
+  let m: RegExpExecArray | null;
+  // ISO: 2026-11-12
+  const iso = /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g;
+  while ((m = iso.exec(t))) push(Number(m[1]), Number(m[2]) - 1, Number(m[3]), m.index);
+  // يوم/شهر(/سنة) — ترتيب الإمارات: اليوم أولاً.
+  const num = /(?<![\d\/.\-])(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](20\d{2}|\d{2}))?(?![\d\/\-]|\.\d)/g;
+  while ((m = num.exec(t))) {
+    const y = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : y0;
+    push(y, Number(m[2]) - 1, Number(m[1]), m.index);
+  }
+  // 12 November / 12th Nov 2026 / ١٢ نوفمبر
+  const dm = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${MONTH_NAMES})(?![a-z])(?:,?\\s*(20\\d{2}))?`, "gi");
+  while ((m = dm.exec(t))) push(m[3] ? Number(m[3]) : y0, monthIndex(m[2]!), Number(m[1]), m.index);
+  // November 12 / Nov 12th, 2026
+  const md = new RegExp(`(?<![a-z])(${MONTH_NAMES})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s*(20\\d{2}))?`, "gi");
+  while ((m = md.exec(t))) push(m[3] ? Number(m[3]) : y0, monthIndex(m[1]!), Number(m[2]), m.index);
+  // يوم الأسبوع بعد كلمة عودة: «back on Monday» — أقرب اثنين قادم.
+  if (!found.length) {
+    for (const [re, wd] of WEEKDAYS) {
+      const w = new RegExp(`(?:back|return(?:ing)?|until|till|on|اعود|حتي|يوم)\\s+(?:on\\s+)?(?:next\\s+)?${re.source}`, "i").exec(t);
+      if (!w) continue;
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9);
+      let diff = (wd - d.getDay() + 7) % 7; if (diff === 0) diff = 7;
+      d.setDate(d.getDate() + diff);
+      found.push({ at: d, idx: w.index });
+      break;
+    }
+    if (/\btomorrow\b|غدا/i.test(t)) found.push({ at: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9), idx: 0 });
+  }
+  // سنةٌ لم تُذكر وتاريخٌ قد مضى: السنة القادمة. وما بعد ثلاثة أشهر ليس عودةً من إجازة.
+  const ok = found.map((f) => {
+    if (f.at.getTime() < now.getTime() - DAY && !/20\d{2}/.test(t.slice(f.idx, f.idx + 24))) f.at.setFullYear(f.at.getFullYear() + 1);
+    return f;
+  }).filter((f) => f.at.getTime() >= now.getTime() - DAY && f.at.getTime() <= now.getTime() + 120 * DAY);
+  if (!ok.length) return null;
+  const after = ok.filter((f) => RETURN_WORDS.test(t.slice(Math.max(0, f.idx - 24), f.idx)));
+  const pool = after.length ? after : ok;
+  return pool.reduce((a, b) => (b.at > a.at ? b : a)).at;
+}
+
+/** أطول غيابٍ نصدّقه، وافتراضُنا حين لا يُذكر تاريخ. */
+const OOO_MAX_DAYS = 45, OOO_DEFAULT_DAYS = 7;
+
+/**
+ * رُدّ آلياً بأنه غائب: تُمهَل الجهة إلى ما بعد عودته بيوم، وما ينتظر من
+ * متابعاتها يُؤجَّل لا يُلغى، ومن سُمّي بديلاً يُكتب في السجل — ولا يُضاف
+ * لقائمةٍ من تلقاء نفسه: كتابته بديلاً أثناء الغياب ليست إذناً بمراسلته.
+ */
+export async function outOfOffice(userId: number, contact: { id: number; email: string; company?: string | null; quietUntil?: Date | null }, text: string, from: string, ourEmail: string | null, inboundId: number): Promise<Date> {
+  const DAY = 86_400_000, now = Date.now();
+  const ret = oooReturnDate(text, new Date(now));
+  let until = ret ? new Date(ret.getTime() + DAY) : new Date(now + OOO_DEFAULT_DAYS * DAY);
+  if (until.getTime() > now + OOO_MAX_DAYS * DAY) until = new Date(now + OOO_MAX_DAYS * DAY);
+  // هدنةٌ أطول قائمةٌ أصلاً («بعد التدقيق») لا تُقصَّر بسبب إجازة.
+  if (contact.quietUntil && new Date(contact.quietUntil).getTime() > until.getTime()) until = new Date(contact.quietUntil);
+  await db.update(emailContactsTable).set({ quietUntil: until, quietReason: "خارج المكتب" }).where(eq(emailContactsTable.id, contact.id));
+  // المتابعات المعلّقة تُدفَع إلى ما بعد العودة — `inTruce` في المصرف يحترم
+  // quietUntil أيضاً، لكن تأجيل الموعد نفسه يُبقي ترتيب السلّم صحيحاً.
+  const resume = new Date(until.getTime() + DAY);
+  await db.update(emailSequenceJobsTable).set({ dueAt: resume })
+    .where(and(eq(emailSequenceJobsTable.userId, userId), eq(emailSequenceJobsTable.contactId, contact.id), eq(emailSequenceJobsTable.status, "pending"), lt(emailSequenceJobsTable.dueAt, resume)));
+  const ours = (ourEmail ?? "").toLowerCase();
+  const alt = [...new Set((text.match(/[a-z0-9._%+\-']+@[a-z0-9.-]+\.[a-z]{2,}/gi) ?? []).map((e) => e.toLowerCase()))]
+    .filter((e) => e !== from && e !== ours && !/^(no-?reply|noreply|mailer-daemon|postmaster)@/.test(e));
+  await activity(userId, "email_replies", "ooo",
+    `خارج المكتب — ${contact.company ?? from}: ${ret ? `يعود ${ret.toLocaleDateString("en-GB")}` : "بلا تاريخ عودة"} — أُمهل حتى ${until.toLocaleDateString("en-GB")}${alt.length ? ` · بديل أثناء الغياب: ${alt.slice(0, 3).join("، ")}` : ""}`,
+    { inboundId, contactId: contact.id, until: until.toISOString(), alternates: alt.slice(0, 3) }).catch(() => {});
+  logger.info({ userId, contactId: contact.id, until, alt }, "خارج المكتب — أُمهلت الجهة");
+  return until;
+}
+
+// ── التصعيد: ردٌّ حار لا يراه أحد ────────────────────────────────
+/**
+ * ردٌّ حار لم يصل خبره (لا تليجرام)، أو مسودته تنتظر ساعتين بلا أحد:
+ * سطرٌ في لوحة الفريق، ورسالةٌ للرئيس، وبريدٌ إلى صندوق صاحب العمل
+ * نفسه إن كان الإرسال مضبوطاً — الصندوق الذي يقرؤه على كل حال.
+ */
+export async function escalate(userId: number, x: { inboundId: number; from: string; company: string | null; text: string; why: string }): Promise<void> {
+  const head = `ردٌّ حار ينتظر — ${x.company ?? x.from}`;
+  await activity(userId, "email_replies", "escalate", `${head}: ${x.why}. «${x.text.slice(0, 160)}» — افتح البريد → الوارد.`, { inboundId: x.inboundId, from: x.from }).catch(() => {});
+  await say({ userId, fromRole: "email_replies", toRole: "chief", kind: "alert", body: `${head} (${x.why}). النص: «${x.text.slice(0, 200)}»` }).catch(() => {});
+  try {
+    const s = await getSettings(userId);
+    if (!s || !isConfigured(s) || !s.fromEmail) return;
+    const body = `${head}\n${x.why}\n\nمن: ${x.from}\n\n${x.text.slice(0, 1500)}\n\nالمسودة في قسم البريد → الوارد.`;
+    await sendEmail(s, {
+      to: s.fromEmail, toName: null, subject: `🔥 ${head}`.slice(0, 200),
+      html: `<div dir="auto" style="font:15px/1.8 Arial,sans-serif;white-space:pre-wrap">${body.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>`,
+      text: body, messageId: messageIdFor(newToken(), s.fromEmail), unsubscribeUrl: null, inReplyTo: null,
+    });
+  } catch (err: any) {
+    logger.warn({ userId, inboundId: x.inboundId, err: String(err?.message ?? err) }, "تعذّر بريد التصعيد");
+  }
+}
+
+/**
+ * المسح كل ربع ساعة: مسودات ردودٍ حارة بقيت «مسودة» بلا إرسالٍ آلي
+ * ولا إنسان لساعتين — تُصعَّد مرةً واحدة (السجل يشهد). الحرارة على
+ * وسم الجهة، حيث وضعتها ليلى.
+ */
+export async function escalateStaleHotDrafts(now = new Date()): Promise<number> {
+  const since = new Date(now.getTime() - HOT_STALE_MS), floor = new Date(now.getTime() - 7 * 86_400_000);
+  const rows = (await db.execute<{ id: number; user_id: number; from_email: string; text: string | null; company: string | null }>(sql`
+    SELECT i.id, i.user_id, i.from_email, i.text, c.company
+    FROM email_inbound i JOIN email_contacts c ON c.id = i.contact_id
+    WHERE i.state = 'drafted' AND i.auto_send_at IS NULL AND i.kind = 'reply'
+      AND i.received_at < ${since} AND i.received_at > ${floor}
+      AND c.tags @> '["hot"]'::jsonb
+      AND NOT EXISTS (SELECT 1 FROM email_agent_activity a WHERE a.user_id = i.user_id AND a.action = 'escalate' AND (a.ref->>'inboundId')::int = i.id)
+    LIMIT 20`)).rows;
+  for (const r of rows) {
+    await escalate(Number(r.user_id), { inboundId: Number(r.id), from: r.from_email, company: r.company, text: r.text ?? "", why: "مسودة الرد تنتظر أكثر من ساعتين بلا إرسال" }).catch(() => {});
+  }
+  return rows.length;
+}
+
 // ── The salesman answers ──────────────────────────────────────────
 export async function draftReply(userId: number, inboundId: number): Promise<{ subject: string; body: string; summary: string } | null> {
   const [inb] = await db.select().from(emailInboundTable).where(and(eq(emailInboundTable.id, inboundId), eq(emailInboundTable.userId, userId))).limit(1);
@@ -322,13 +511,17 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
   const hist = contact ? await thread(userId, contact.id, 20).catch(() => null) : null;
   const brief = hist ? threadBrief(hist, { turns: 6, chars: 260 }) : "";
   const openings = hist ? openingsUsed(hist.turns).slice(-3) : [];
+  // الرسالة التي ردّ عليها بنصّها الكامل (حتى ١٥٠٠ حرف)، لا ٢٦٠ حرفاً من
+  // الموجز: ما وعدنا به وما سألناه هو ما يردّ عليه، والمسودة تُبنى عليه.
+  const original = inb.messageId ? await sentBody(inb.messageId, 1500).catch(() => "") : "";
 
   const [facts, skills, replySkills, memory, docs] = await Promise.all([
     retrieve(userId, `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 500), 4).catch(() => []),
     skillsFor(userId, "sales", inb.intent as any || "question").catch(() => []),
     // ليلى's craft — reading the reply and writing English B2B — whoever answers.
     skillsFor(userId, "email_replies", "internal").catch(() => []),
-    memoryPreamble(userId, "sales").catch(() => ""),
+    // ذاكرة من يردّ على البريد — لا ذاكرة مندوب الواتساب.
+    memoryPreamble(userId, "email_replies").catch(() => ""),
     // What the owner uploaded about the company and the field, the passages that bear on this message.
     passages(userId, `${inb.subject ?? ""} ${inb.text ?? ""}`.slice(0, 500), { sectors: contact?.sector ? [contact.sector] : [], limit: 3 }).catch(() => []),
   ]);
@@ -373,6 +566,7 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
       contact?.company ? `الشركة: ${contact.company}` : "",
       inb.fromName ? `الاسم: ${inb.fromName}` : "",
       ours?.subject ? `رسالتنا التي ردّ عليها: ${ours.subject}` : "",
+      original ? `نص رسالتنا تلك:\n${original}\n— انتهت رسالتنا —` : "",
       `عنوان رده: ${inb.subject ?? ""}`,
       `رده:\n${inb.text ?? ""}`,
     ].filter(Boolean).join("\n") },
@@ -529,13 +723,46 @@ export async function pollAllMailboxes(): Promise<void> {
 }
 
 /** Drafts whose moment has come. A person who edited or sent one first has already moved it out of "drafted". */
+/**
+ * لماذا لا تُرسَل مسودةٌ حان وقتها — إن كان ثمة سبب. تُسأل لحظة الإرسال
+ * لا لحظة الجدولة: بين الاثنتين قد يُلغي الشخص اشتراكه، أو يكتب رسالةً
+ * ثانية تنسخ الأولى («تجاهلوا بريدي السابق»)، أو يُمهَل، أو تُنسى المسودة
+ * يومين فتخرج على سياقٍ مات. ردٌّ خاطئ أسوأ من لا ردّ.
+ */
+export async function autoSendBlocker(inb: { id: number; userId: number; contactId: number | null; fromEmail: string; receivedAt: Date }, now = new Date()): Promise<string | null> {
+  if (now.getTime() - new Date(inb.receivedAt).getTime() > DRAFT_MAX_AGE_MS) return "المسودة أقدم من ٤٨ ساعة";
+  if (inb.contactId) {
+    const [c] = await db.select({ status: emailContactsTable.status, quietUntil: emailContactsTable.quietUntil, quietReason: emailContactsTable.quietReason })
+      .from(emailContactsTable).where(eq(emailContactsTable.id, inb.contactId)).limit(1);
+    if (!c) return "الجهة لم تعد موجودة";
+    if (c.status !== "active") return `الجهة لم تعد نشطة (${c.status})`;
+    if (c.quietUntil && new Date(c.quietUntil).getTime() > now.getTime()) return `الجهة في هدنة حتى ${new Date(c.quietUntil).toLocaleDateString("en-GB")}${c.quietReason ? ` — ${c.quietReason}` : ""}`;
+  }
+  const [newer] = await db.select({ id: emailInboundTable.id }).from(emailInboundTable)
+    .where(and(eq(emailInboundTable.userId, inb.userId), sql`${emailInboundTable.id} <> ${inb.id}`, gt(emailInboundTable.receivedAt, new Date(inb.receivedAt)),
+      inb.contactId ? sql`(${emailInboundTable.contactId} = ${inb.contactId} or lower(${emailInboundTable.fromEmail}) = ${inb.fromEmail.toLowerCase()})` : sql`lower(${emailInboundTable.fromEmail}) = ${inb.fromEmail.toLowerCase()}`))
+    .limit(1);
+  if (newer) return "وصلت منه رسالةٌ أحدث بعد هذه — الرد عليها هو الذي يُكتب";
+  return null;
+}
+
+/** Drafts whose moment has come. A person who edited or sent one first has already moved it out of "drafted". */
 export async function sendDueAutoReplies(now = new Date()): Promise<number> {
-  const due = await db.select({ id: emailInboundTable.id, userId: emailInboundTable.userId }).from(emailInboundTable)
+  const due = await db.select({ id: emailInboundTable.id, userId: emailInboundTable.userId, contactId: emailInboundTable.contactId, fromEmail: emailInboundTable.fromEmail, receivedAt: emailInboundTable.receivedAt }).from(emailInboundTable)
     .where(and(eq(emailInboundTable.state, "drafted"), isNotNull(emailInboundTable.autoSendAt), lt(emailInboundTable.autoSendAt, now))).limit(20);
   let n = 0;
   for (const d of due) {
-    try { await sendReply(d.userId, d.id); n++; logger.info({ userId: d.userId, inboundId: d.id }, "أُرسل رد البريد تلقائياً"); }
-    catch (err: any) {
+    try {
+      // يُعاد السؤال لحظة الإرسال، لا لحظة الجدولة.
+      const why = await autoSendBlocker(d, now);
+      if (why) {
+        await db.update(emailInboundTable).set({ state: "held", autoSendAt: null }).where(eq(emailInboundTable.id, d.id));
+        await activity(d.userId, "email_replies", "hold", `أُمسك الرد الآلي على ${d.fromEmail}: ${why}. المسودة تنتظر شخصاً.`, { inboundId: d.id, why }).catch(() => {});
+        logger.info({ userId: d.userId, inboundId: d.id, why }, "أُمسك الرد الآلي");
+        continue;
+      }
+      await sendReply(d.userId, d.id); n++; logger.info({ userId: d.userId, inboundId: d.id }, "أُرسل رد البريد تلقائياً");
+    } catch (err: any) {
       await db.update(emailInboundTable).set({ autoSendAt: null }).where(eq(emailInboundTable.id, d.id));
       logger.warn({ inboundId: d.id, err: String(err?.message ?? err) }, "تعذّر الرد التلقائي — ينتظر شخصاً");
     }
@@ -548,6 +775,8 @@ export function startInboundPolling(): void {
     void pollAllMailboxes();
     setInterval(() => void pollAllMailboxes(), 2 * 60_000);
     setInterval(() => void sendDueAutoReplies().catch(() => {}), 60_000);
+    // ردٌّ حار مسودته تنتظر ساعتين بلا أحد: يُصعَّد.
+    setInterval(() => void escalateStaleHotDrafts().catch(() => {}), 15 * 60_000);
   }, 50_000);
   logger.info("قارئ البريد الوارد بدأ");
 }

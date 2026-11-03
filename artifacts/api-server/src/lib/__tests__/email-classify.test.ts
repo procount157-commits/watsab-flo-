@@ -172,5 +172,42 @@ const nl = kindOf({ from: "x@example.com", subject: "Re: x", text: "الغاء �
 check("إيقاف · يُرفع مع النشرة والإعلان أيضاً",
   asksToStop("Re: x", "الغاء الاشتراك") && nl.kind !== "reply", `النوع: ${KIND_AR[nl.kind]}`);
 
+
+// ── القصير الحار: «Call me» ليست تحية ───────────────────────────
+// كان كل نصٍّ دون اثني عشر حرفاً «تحية» تُجاب بسؤال تأهيل، فصار من
+// يقول «اتصل بي» ينتظر سؤالاً بدل مكالمة.
+for (const t of ["Call me", "Send price", "Pricing?", "Interested", "Let's talk", "send me the proposal", "Quote pls", "اتصل بي", "كلمني", "السعر؟", "مهتم", "ارسل العرض"]) {
+  const v = emailIntent("", t);
+  check(`قصير حار · «${t}»`, v.intent === "interested" && v.confidence >= 0.8, `${INTENT_AR[v.intent].label} ${v.confidence}`);
+}
+check("قصير · «Thanks» تبقى تحية", emailIntent("", "Thanks").intent === "greeting");
+check("قصير · «ok» تبقى تحية", emailIntent("", "ok").intent === "greeting");
+check("قصير · رفضٌ قصير يبقى رفضاً", emailIntent("", "Not interested").intent === "not_interested");
+check("قصير · إيقافٌ قصير يبقى إيقافاً", emailIntent("", "unsubscribe").intent === "opt_out");
+
+// ── المقتبس: ما كتبه هو، لا ما كتبناه نحن ──────────────────────
+const { replyOnly, AUTO_INTENTS, AUTO_MIN_CONFIDENCE } = await import("../email/inbound");
+const quoted: Array<[string, string]> = [
+  ["جيميل", "Yes please call me\n\nOn Mon, 3 Nov 2026 at 10:02, Pro Count <info@pro-count.ae> wrote:\n> Our AML offer"],
+  ["جيميل الهاتف بسطرين", "Yes please call me\n\nOn Mon, 3 Nov 2026 at 10:02 Pro Count <info@pro-count.ae>\nwrote:\n> Our AML offer"],
+  ["فرنسي", "Yes please call me\n\nLe lun. 3 nov. 2026, Pro Count a écrit :\n> offre"],
+  ["Original Message", "Yes please call me\n\n----- Original Message -----\nFrom: Pro Count\nOur AML offer"],
+  ["Outlook From/Sent", "Yes please call me\n\nFrom: Pro Count <info@pro-count.ae>\nSent: Monday, November 3, 2026 10:02 AM\nTo: x\nOur AML offer"],
+  ["Outlook عربي «في … كتب»", "Yes please call me\n\nفي الإثنين، 3 نوفمبر 2026، كتب Pro Count:\nعرضنا"],
+  ["«بتاريخ … كتب»", "Yes please call me\n\nبتاريخ 3 نوفمبر 2026، كتب Pro Count:\nعرضنا"],
+  ["الرسالة الأصلية", "Yes please call me\n\n----- الرسالة الأصلية -----\nعرضنا"],
+  ["Forwarded message", "Yes please call me\n\n---------- Forwarded message ---------\nOur AML offer"],
+];
+for (const [name, raw] of quoted) {
+  const t = replyOnly(raw);
+  check(`مقتبس · ${name}`, t === "Yes please call me", JSON.stringify(t.slice(0, 40)));
+}
+check("مقتبس · نصٌّ بلا مقتبس يبقى كما هو", replyOnly("Line one\nLine two") === "Line one\nLine two");
+
+// ── بوابة الرد الآلي: «غير واضح» لإنسانٍ دائماً ────────────────
+check("بوابة · «غير واضح» لا يُرد عليه آلياً", !AUTO_INTENTS.has("unclear"));
+check("بوابة · الشكوى والرفض لا يُرد عليهما آلياً", !["complaint", "not_interested", "opt_out", "referral", "wrong_person"].some((i) => AUTO_INTENTS.has(i)));
+check("بوابة · علامة استفهامٍ وحدها (٠٫٥٥) دون الحد", emailIntent("", "Hmm, what about the second point we discussed?").confidence < AUTO_MIN_CONFIDENCE);
+
 console.log(`\n${pass}/${total} ${pass === total ? "✅" : "❌ فشل"}`);
 if (pass !== total) process.exit(1);

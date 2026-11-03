@@ -89,15 +89,34 @@ export async function enforceTargeting(userId: number): Promise<string[]> {
 }
 
 /** ٤ · الدروس: ما نجح وما فشل يُكتب في ذاكرة الكاتبة، فتقرؤه قبل الحملة القادمة. */
+/**
+ * درسٌ واحد لكل زاوية، يُحدَّث في مكانه. النص يحمل أرقاماً حيّة («٣ ردود
+ * من ٢١٠»)، والتفرّد على md5(content) — فكانت كل دورة ست ساعات تُدخل صفاً
+ * شبه مكرّر يُزيح غيره من ذاكرة الكاتبة. الآن يُحذف كل درسٍ قديم بالبادئة
+ * الثابتة نفسها (الزاوية والقطاع) — ربحاً كان أو خسارة، فالحكم الجديد
+ * ينسخ القديم — ويُحمَل عدد مرّاته إلى الجديد.
+ */
+async function rememberAngleLesson(userId: number, kind: "win" | "loss", prefix: string, text: string, topic: string): Promise<void> {
+  const body = text.trim().slice(0, 500);
+  const old = (await db.execute<{ times: number }>(sql`
+    DELETE FROM agent_memory WHERE user_id = ${userId} AND role = 'email' AND kind IN ('win','loss')
+      AND left(content, ${prefix.length}) = ${prefix} AND content <> ${body}
+    RETURNING times`)).rows;
+  await rememberLesson(userId, kind, body, topic);
+  const carried = old.reduce((t, r) => t + Number(r.times ?? 1), 0);
+  if (carried) await db.execute(sql`UPDATE agent_memory SET times = times + ${carried} WHERE user_id = ${userId} AND role = 'email' AND kind = ${kind} AND content = ${body}`);
+}
+
 async function recordLessons(userId: number, r: ResultsReport): Promise<number> {
   let n = 0;
   for (const a of r.angles) {
     const meta = angleById(a.key);
     if (!meta) continue;
+    const prefix = `زاوية «${meta.label}» لقطاع ${meta.sector}`;
     if (a.verdict === "scale") {
-      await rememberLesson(userId, "win", `زاوية «${meta.label}» لقطاع ${meta.sector} (${TRACK_AR[meta.track]}) جلبت ${a.positive} رداً نافعاً من ${a.sent} شركة. اكتبي القادم لهذا القطاع على نمطها.`, meta.sector); n++;
+      await rememberAngleLesson(userId, "win", prefix, `${prefix} (${TRACK_AR[meta.track]}) جلبت ${a.positive} رداً نافعاً من ${a.sent} شركة. اكتبي القادم لهذا القطاع على نمطها.`, meta.sector); n++;
     } else if (a.verdict === "rewrite") {
-      await rememberLesson(userId, "loss", `زاوية «${meta.label}» لقطاع ${meta.sector} لم تنفع: ${a.why}. لا تعيدي صياغتها — غيّري المدخل كله.`, meta.sector); n++;
+      await rememberAngleLesson(userId, "loss", prefix, `${prefix} لم تنفع: ${a.why}. لا تعيدي صياغتها — غيّري المدخل كله.`, meta.sector); n++;
     }
   }
   if (r.decisions.some((d) => d.kind === "policy")) {
