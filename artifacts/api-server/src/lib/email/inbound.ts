@@ -482,9 +482,17 @@ export async function escalateStaleHotDrafts(now = new Date()): Promise<number> 
     WHERE i.state = 'drafted' AND i.auto_send_at IS NULL AND i.kind = 'reply'
       AND i.received_at < ${since} AND i.received_at > ${floor}
       AND c.tags @> '["hot"]'::jsonb
-      AND NOT EXISTS (SELECT 1 FROM email_agent_activity a WHERE a.user_id = i.user_id AND a.action = 'escalate' AND (a.ref->>'inboundId')::int = i.id)
-    LIMIT 20`)).rows;
+      -- وسم «حار» على الجهة قد يكون من ردٍّ قديم؛ الرسالة نفسها يجب أن تحمل نيّة.
+      -- أول تشغيل نبّه على إقرارٍ آلي من خدمة عملاء (unclear) كأنه عميل ينتظر.
+      AND i.intent IN ('interested', 'question', 'considering', 'later', 'referral')
+      -- تنبيهٌ واحد للشخص في ثلاثة أيام، لا واحدٌ لكل رسالةٍ منه.
+      AND NOT EXISTS (SELECT 1 FROM email_agent_activity a WHERE a.user_id = i.user_id AND a.action = 'escalate'
+        AND ((a.ref->>'inboundId')::int = i.id OR (lower(a.ref->>'from') = lower(i.from_email) AND a.created_at > ${new Date(now.getTime() - 3 * 86_400_000)})))
+    ORDER BY i.received_at DESC LIMIT 20`)).rows;
+  const seen = new Set<string>();
   for (const r of rows) {
+    if (seen.has(r.from_email.toLowerCase())) continue;
+    seen.add(r.from_email.toLowerCase());
     await escalate(Number(r.user_id), { inboundId: Number(r.id), from: r.from_email, company: r.company, text: r.text ?? "", why: "مسودة الرد تنتظر أكثر من ساعتين بلا إرسال" }).catch(() => {});
   }
   return rows.length;
