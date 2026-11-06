@@ -474,7 +474,7 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000, opts?
 export const ENGLISH_ONLY_MODELS = /nemotron-3-super-120b|nemotron-3\.5-lightning|dots-3/i;
 export function routeByTask<T extends { provider: string; model: string }>(ordered: T[], role: string | null): T[] {
   const english = (c: T) => ENGLISH_ONLY_MODELS.test(c.model);
-  const emailTeam = !!role && (role === "email" || role.startsWith("email_"));
+  const emailTeam = !!role && (role === "email" || role.startsWith("email_") || role === "accounts_writer");
   if (emailTeam) return [...ordered.filter(english), ...ordered.filter((c) => !english(c))];
   return ordered.filter((c) => !english(c));
 }

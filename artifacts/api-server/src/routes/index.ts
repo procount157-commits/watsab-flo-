@@ -41,6 +41,7 @@ import groupsRouter from "./groups";
 import aiRouter from "./ai";
 import settingsRouter from "./settings";
 import diagnosticsRouter from "./diagnostics";
+import accountsRouter from "./accounts";
 
 const router: IRouter = Router();
 
@@ -86,5 +87,6 @@ router.use("/groups", groupsRouter);
 router.use("/ai", aiRouter);
 router.use("/settings", settingsRouter);
 router.use("/diagnostics", diagnosticsRouter);
+router.use("/accounts", accountsRouter);
 
 export default router;

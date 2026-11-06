@@ -101,14 +101,21 @@ export async function pullNextRung(userId: number, contactId: number, hours: num
  * The thread a follow-up joins: every mail already sent to this contact with
  * a Message-ID, oldest first. The subject is the first one's with «Re:».
  */
-export async function threadFor(userId: number, contactId: number, exceptId: number): Promise<{ subject: string; inReplyTo: string; references: string[] } | null> {
+export async function threadFor(userId: number, contactId: number, exceptId: number, sequenceJobId?: number | null): Promise<{ subject: string; inReplyTo: string; references: string[] } | null> {
+  // تسلسلات مكتب الحسابات رسالةٌ شخصية جديدة: خيطها رسائلها هي فقط، لا حملةٌ قديمة وصلت info@ نفسه.
+  const own = sequenceJobId ? (await db.execute<{ id: number }>(sql`SELECT s.id FROM email_sequence_jobs j JOIN email_sequences s ON s.id = j.sequence_id
+    WHERE j.id = ${sequenceJobId} AND s.name LIKE ${ACCOUNTS_SEQUENCE_PREFIX + "%"}`)).rows[0]?.id ?? null : null;
   const prev = await db.select({ hdr: emailMessagesTable.messageIdHdr, subject: emailMessagesTable.subject }).from(emailMessagesTable)
     .where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.contactId, contactId), eq(emailMessagesTable.status, "sent"),
-      sql`${emailMessagesTable.messageIdHdr} is not null`, sql`${emailMessagesTable.id} <> ${exceptId}`))
+      sql`${emailMessagesTable.messageIdHdr} is not null`, sql`${emailMessagesTable.id} <> ${exceptId}`,
+      own ? sql`${emailMessagesTable.sequenceJobId} in (select id from email_sequence_jobs where sequence_id = ${own})` : sql`true`))
     .orderBy(asc(emailMessagesTable.sentAt)).limit(20);
   if (!prev.length) return null;
   return { subject: replySubject(prev[0]!.subject), inReplyTo: prev[prev.length - 1]!.hdr!, references: prev.map((p) => p.hdr!) };
 }
+
+/** اسم كل تسلسلٍ ينشئه مكتب الحسابات المستهدفة يبدأ به (lib/accounts/pipeline.ts). */
+export const ACCOUNTS_SEQUENCE_PREFIX = "مكتب الحسابات · ";
 
 /** «Re: » once, however many times the subject has been answered. Pure. */
 export function replySubject(subject: string): string {
@@ -559,7 +566,7 @@ async function drainOne(userId: number): Promise<boolean> {
   // A follow-up is a reply in the thread she already has: «Re:» the first
   // subject, under the same conversation in her inbox — not a fresh mail
   // that reads like one more advert.
-  const thread = m.sequenceJobId && m.contactId ? await threadFor(userId, m.contactId, m.id) : null;
+  const thread = m.sequenceJobId && m.contactId ? await threadFor(userId, m.contactId, m.id, m.sequenceJobId) : null;
   if (thread) subject = thread.subject;
 
   lastSentAt.set(userId, now);

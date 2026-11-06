@@ -21,6 +21,7 @@ import { sweepQuietOutcomes } from "./lib/agent-memory";
 import { startEmailWorkers } from "./lib/email/service";
 import { startInboundPolling } from "./lib/email/inbound";
 import { startMissionWorker } from "./lib/email/missions";
+import { startAccountsDesk } from "./lib/accounts/desk";
 import { startAutopilotWorker } from "./lib/email/autopilot";
 import { startBounceGuard } from "./lib/email/bounce-guard";
 import { startImageSense } from "./lib/image-sense";
@@ -164,6 +165,8 @@ function startListening() {
     startEmailWorkers();
     startInboundPolling();
     startMissionWorker();
+    // مكتب الحسابات المستهدفة: عشر شركات عقارية كل صباح عمل، 08:30 دبي.
+    startAccountsDesk();
     startOptOutSweep();
     startSmartFollowUps();
     startCaretaker();

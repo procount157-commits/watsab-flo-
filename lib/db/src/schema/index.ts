@@ -34,3 +34,4 @@ export * from "./media";
 export * from "./wa_autopilot";
 export * from "./wa_firewall";
 export * from "./contact_vetting";
+export * from "./accounts";
