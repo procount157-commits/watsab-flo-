@@ -12,7 +12,7 @@ import { Link, useRoute, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Mail, Upload, Users, Megaphone, ListOrdered, FileText, Inbox, Settings2, Loader2, Play, Pause,
-  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, ListChecks, Stethoscope, Users2, ShieldCheck,
+  CheckCircle2, AlertTriangle, Eye, MousePointerClick, Reply, ShieldAlert, RefreshCw, Trash2, Plus, Send, Sparkles, Rocket, FolderOpen, BookOpen, LayoutDashboard, ListChecks, Stethoscope, Users2, ShieldCheck, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, input } from "@/components/AgentPanel";
@@ -27,6 +27,7 @@ import { RegisterTab } from "./EmailRegister";
 import { SentTab } from "./EmailSent";
 import { EmailTeamDesk } from "./EmailTeamDesk";
 import { ReachTab } from "./EmailReach";
+import { AccountsTab } from "./EmailAccounts";
 import { WarmupCard } from "@/components/EmailHygiene";
 import { EmailSenders } from "@/components/EmailSenders";
 
@@ -44,6 +45,7 @@ const pct = (n?: number | null) => (n === null || n === undefined ? "—" : `${n
 
 const TABS = [
   { key: "dashboard", label: "لوحة المتابعة", icon: LayoutDashboard },
+  { key: "accounts",  label: "الحسابات المستهدفة", icon: Building2 },
   { key: "diagnose",  label: "التشخيص",       icon: Stethoscope },
   { key: "reach",     label: "الوصول",         icon: ShieldCheck },
   { key: "overview",  label: "ما يحدث الآن",  icon: Mail },
@@ -109,6 +111,7 @@ export default function EmailMarketing() {
       </div>
 
       {tab === "dashboard" && (employee ? <EmailEmployee role={employee} /> : <DashboardTab goMissions={() => navigate("/email/missions")} />)}
+      {tab === "accounts"  && <AccountsTab />}
       {tab === "diagnose"  && <EmailDiagnose />}
       {tab === "overview"  && <Overview ov={ov} />}
       {tab === "import"    && <Import />}

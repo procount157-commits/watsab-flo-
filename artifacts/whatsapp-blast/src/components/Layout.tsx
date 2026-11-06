@@ -36,6 +36,7 @@ const NAV = [
   { href: "/follow-ups",    label: "المتابعة وإعادة الاستهداف", icon: Clock, badge: "جديد" },
   { href: "/email-auto",    label: "تشغيل البريد",       icon: Mail, badge: "جديد" },
   { href: "/email",         label: "التسويق بالبريد",    icon: Mail },
+  { href: "/email/accounts", label: "الحسابات المستهدفة", icon: Building2, badge: "جديد" },
   { href: "/instagram",     label: "إنستجرام",           icon: Instagram },
   { href: "/tiktok",        label: "تيك توك",            icon: Music2, badge: "جديد" },
   { href: "/knowledge",     label: "معرفة البوت",        icon: Brain },
@@ -155,7 +156,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         {/* Navigation */}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {NAV.map(({ href, label, icon: Icon, badge }) => {
-            const active = href === "/" ? location === "/" : location.startsWith(href);
+            const active = href === "/" ? location === "/" : location.startsWith(href) && !NAV.some((o) => o.href.length > href.length && o.href.startsWith(href) && location.startsWith(o.href));
             return (
               <Link key={href} href={href} className={cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer",
