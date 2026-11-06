@@ -97,6 +97,8 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
   const inThisCountry = useMemo(() => inCountry(lists, shownCountry), [lists, shownCountry]);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"new" | "size" | "name" | "engaged">("new");
+  // 172 قائمة مرحلة يصنعها يوسف وحده، 78 منها فارغة (٦ نوفمبر): كانت تغطّي القوائم الحقيقية. تُخفى حتى تُطلب.
+  const [stages, setStages] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const inv = () => { for (const k of ["email-lists", "folders", "email-overview", "email-audience", "email-facets"]) qc.invalidateQueries({ queryKey: [k] }); };
@@ -134,7 +136,7 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
   });
 
   const shown = useMemo(() => {
-    let r = inFolder(inThisCountry, folder);
+    let r = inFolder(inThisCountry, folder).filter((l) => !l.parentListId || (stages && l.count > 0));
     if (q.trim()) r = r.filter((l) => l.name.toLowerCase().includes(q.trim().toLowerCase()));
     const by: Record<typeof sort, (a: EmailList, b: EmailList) => number> = {
       new: (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt),
@@ -143,7 +145,8 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
       engaged: (a, b) => (b.opened + b.replied * 3) - (a.opened + a.replied * 3),
     };
     return [...r].sort(by[sort]);
-  }, [inThisCountry, folder, q, sort]);
+  }, [inThisCountry, folder, q, sort, stages]);
+  const stageCount = useMemo(() => inFolder(inThisCountry, folder).filter((l) => l.parentListId && l.count > 0).length, [inThisCountry, folder]);
 
   const totals = useMemo(() => shown.reduce((t, l) => ({ count: t.count + l.count, sendable: t.sendable + l.sendable, replied: t.replied + l.replied, withPhone: t.withPhone + l.withPhone }), { count: 0, sendable: 0, replied: 0, withPhone: 0 }), [shown]);
 
@@ -157,6 +160,11 @@ export function ListsTab({ onCampaign }: { onCampaign: (listId: number) => void 
         <select className={cn(input, "w-36 text-xs")} value={sort} onChange={(e) => setSort(e.target.value as any)}>
           <option value="new">الأحدث</option><option value="size">الأكبر</option><option value="engaged">الأكثر تفاعلاً</option><option value="name">بالاسم</option>
         </select>
+        {stageCount > 0 && (
+          <button onClick={() => setStages((v) => !v)} className={cn(ghost, "text-xs", stages && "border-purple-500/40 text-purple-400")} title="قوائم المراحل يصنعها يوسف وحده من كل قائمة: فتحوا ولم يردّوا، نقروا، ردّوا، لم يفتحوا">
+            🔁 {stages ? "إخفاء" : "إظهار"} قوائم المراحل ({n(stageCount)})
+          </button>
+        )}
         <CountryCodeSelect value={country} onChange={setCountry} className="w-40" />
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ""; }} />
         <button onClick={() => fileRef.current?.click()} disabled={uploading} className={cn(ghost, "border-primary/40 text-primary")}>
