@@ -45,7 +45,7 @@ import { lastOutreach, outreachPreamble, savedName } from "./outreach-context";
 import { retrieve } from "./knowledge";
 import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
 import { opsVerdict, FOLLOWUP_ROLE } from "./followup-officer";
-import { isWithinSendingHours, timeNote, fixGreeting } from "./sending-hours";
+import { isWithinSendingHours, timeNote, fixGreeting, SENDING_TZ, SENDING_HOUR_START, SENDING_HOUR_END, SENDING_HOURS_ENABLED } from "./sending-hours";
 import { getDailyRemaining } from "./daily-limit";
 import { assertCanSend } from "./plans";
 import { sendMessage, getStatus } from "./whatsapp";
@@ -268,7 +268,7 @@ export async function modeOf(userId: number): Promise<Mode> {
   return m === "live" || m === "off" || m === "approve" ? m : "dry";
 }
 
-type Turn = { fromMe: boolean; text: string; at: Date };
+type Turn = { fromMe: boolean; text: string; at: Date; voice?: boolean };
 
 /** Word overlap of two messages, 0–1 — a near-copy of an earlier follow-up is not a new one. */
 export function overlap(a: string, b: string): number {
@@ -283,7 +283,7 @@ export function overlap(a: string, b: string): number {
  * Who is due, and at which rung. Pure: the thread, the rungs already taken
  * since their last message, and the time.
  */
-export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.now(), opts: { ladder?: readonly number[]; scope?: "spoke" | "all" } = {}): { rung: number; dueAt: number } | null {
+export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.now(), opts: { ladder?: readonly number[]; scope?: "spoke" | "all"; stretch?: number } = {}): { rung: number; dueAt: number } | null {
   const lastIn = [...turns].reverse().find((t) => !t.fromMe);
   const lastOut = [...turns].reverse().find((t) => t.fromMe);
   if (!lastOut) return null;
@@ -296,8 +296,228 @@ export function dueRung(turns: Turn[], taken: Date[], warm: boolean, now = Date.
   const ladder = opts.ladder?.length ? opts.ladder : (warm ? LADDER.warm : LADDER.cold);
   if (rung >= ladder.length) return null;
   const base = Math.max(lastOut.at.getTime(), ...since.map((d) => d.getTime()));
-  const dueAt = base + ladder[rung]! * H;
+  const dueAt = base + ladder[rung]! * H * Math.max(1, opts.stretch ?? 1);
   return dueAt <= now ? { rung, dueAt } : null;
+}
+
+// ── Adaptive follow-ups (the owner, 2026-11-06: «المتابعات متكيّفة») ──────
+// The ladder above is the same clock for everyone. These read the person:
+// when they write, how fast they answered before, how they write, what they
+// said about timing. All pure, so all tested; every check above stays as it is.
+
+const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩";
+/** 12 → «١٢». Pure. */
+export const arDigits = (n: number | string) => String(n).replace(/[0-9]/g, (d) => AR_DIGITS[Number(d)]!);
+/** The hour in a timezone, 0–23. Pure. */
+export function hourIn(at: Date | number, tz = SENDING_TZ): number {
+  const h = Number(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(new Date(at)));
+  return h === 24 ? 0 : h;
+}
+/** «٨ مساءً». Pure. */
+export function hourAr(h: number): string {
+  const x = ((h % 24) + 24) % 24, twelve = x % 12 === 0 ? 12 : x % 12;
+  const part = x < 5 ? "فجراً" : x < 12 ? "صباحاً" : x < 15 ? "ظهراً" : x < 18 ? "عصراً" : x < 23 ? "مساءً" : "ليلاً";
+  return `${arDigits(twelve)} ${part}`;
+}
+const circ = (a: number, b: number) => { const d = Math.abs(a - b) % 24; return Math.min(d, 24 - d); };
+
+export type PersonalHours = { best: number; usual: number[]; from: number; to: number; n: number };
+/**
+ * When this person usually writes, from their own messages: the hours that
+ * hold 70% of what they sent, the commonest one, and the arc they span.
+ * Fewer than three messages is too little to read. Pure.
+ */
+export function bestHourFor(turns: Array<{ fromMe: boolean; at: Date }>, tz = SENDING_TZ): PersonalHours | null {
+  const hours = turns.filter((t) => !t.fromMe).map((t) => hourIn(t.at, tz));
+  if (hours.length < 3) return null;
+  const count = new Map<number, number>();
+  for (const h of hours) count.set(h, (count.get(h) ?? 0) + 1);
+  const ranked = [...count.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+  const usual: number[] = [];
+  let covered = 0;
+  for (const [h, c] of ranked) { usual.push(h); covered += c; if (covered >= hours.length * 0.7) break; }
+  usual.sort((a, b) => a - b);
+  // The arc: start after the widest empty gap around the clock.
+  let gapAt = 0, gap = -1;
+  for (let i = 0; i < usual.length; i++) {
+    const a = usual[i]!, b = usual[(i + 1) % usual.length]!;
+    const g = usual.length === 1 ? 24 : ((b - a + 24) % 24);
+    if (g > gap) { gap = g; gapAt = i; }
+  }
+  const from = usual[(gapAt + 1) % usual.length]!, to = usual[gapAt]!;
+  return { best: ranked[0]![0], usual, from, to, n: hours.length };
+}
+
+/** Whether an hour sits within ±slack of the person's usual hours (no reading → yes). Pure. */
+export function withinPersonalWindow(hour: number, p: PersonalHours | null, slack = 2): boolean {
+  if (!p || p.n < 3) return true;
+  return p.usual.some((u) => circ(hour, u) <= slack);
+}
+
+const inGlobal = (h: number, start = SENDING_HOUR_START, end = SENDING_HOUR_END) =>
+  !SENDING_HOURS_ENABLED ? true : start <= end ? h >= start && h < end : h >= start || h < end;
+
+/**
+ * The next hour, after this one, inside both their window and the sending
+ * hours — or null when the two never meet (then their hours are not a reason
+ * to hold anything). Pure.
+ */
+export function nextPersonalHour(hourNow: number, p: PersonalHours | null, start = SENDING_HOUR_START, end = SENDING_HOUR_END, slack = 2): number | null {
+  if (!p) return null;
+  for (let k = 1; k <= 24; k++) {
+    const h = (hourNow + k) % 24;
+    if (inGlobal(h, start, end) && withinPersonalWindow(h, p, slack)) return h;
+  }
+  return null;
+}
+
+/** «تكتب عادة بين ٧ و١٠ مساءً». Pure. */
+export function usualHoursAr(p: PersonalHours, fem = true): string {
+  const verb = fem ? "تكتب" : "يكتب";
+  return p.from === p.to ? `${verb} عادة حوالي ${hourAr(p.from)}` : `${verb} عادة بين ${hourAr(p.from)} و${hourAr(p.to)}`;
+}
+
+/** The timing decision for this round: send now, or wait for their hours. Pure. */
+export function personalTiming(now: number, p: PersonalHours | null, fem = true, tz = SENDING_TZ, start = SENDING_HOUR_START, end = SENDING_HOUR_END):
+  { ok: true; why: string } | { ok: false; at: number; why: string } {
+  const h = hourIn(now, tz);
+  if (!p) return { ok: true, why: "" };
+  if (withinPersonalWindow(h, p)) return { ok: true, why: `توقيت: الساعة ${hourAr(h)} — ${usualHoursAr(p, fem)}` };
+  const next = nextPersonalHour(h, p, start, end);
+  if (next == null) return { ok: true, why: `توقيت: ساعاتها المعتادة خارج ساعات الإرسال، فتُرسل الآن (${usualHoursAr(p, fem)})` };
+  const at = now + ((next - h + 24) % 24 || 24) * H - (now % H);
+  return { ok: false, at, why: `توقيت: أُجّلت إلى الساعة ${hourAr(next)} — ${usualHoursAr(p, fem)}` };
+}
+
+/**
+ * How they engage. Their reply delay is measured on every message of theirs
+ * that answered one of ours; the streak is the follow-ups sent since they
+ * last wrote (and since a pause, if one was taken).
+ *
+ *   quick before (median < 2h)        → the ladder as it is
+ *   two follow-ups unanswered         → a 30-day pause («drop»)
+ *     …unless ريم reads them hot      → one more, its gap ×2
+ *   inside a pause                    → nothing, silently
+ * Pure.
+ */
+export const PAUSE_DAYS = 30;
+export const PAUSE_TAG = "إيقاف ٣٠ يوماً";
+const HOT_LABELS = ["hot", "interested", "order"];
+export type Engagement = { action: "keep" | "stretch" | "pause" | "paused"; stretch: number; streak: number; medianReplyH: number | null; why: string };
+export function engagementPlan(turns: Array<{ fromMe: boolean; at: Date }>, sentAt: number[], opts: { label?: string | null; pausedAt?: number | null; now?: number; fem?: boolean } = {}): Engagement {
+  const now = opts.now ?? Date.now();
+  const delays: number[] = [];
+  for (let i = 1; i < turns.length; i++) if (!turns[i]!.fromMe && turns[i - 1]!.fromMe) delays.push((turns[i]!.at.getTime() - turns[i - 1]!.at.getTime()) / H);
+  delays.sort((a, b) => a - b);
+  const medianReplyH = delays.length ? (delays.length % 2 ? delays[(delays.length - 1) / 2]! : (delays[delays.length / 2 - 1]! + delays[delays.length / 2]!) / 2) : null;
+  const lastIn = Math.max(0, ...turns.filter((t) => !t.fromMe).map((t) => t.at.getTime()));
+  const pausedAt = opts.pausedAt && opts.pausedAt > lastIn ? opts.pausedAt : null;
+  if (pausedAt && now - pausedAt < PAUSE_DAYS * 86_400_000) return { action: "paused", stretch: 1, streak: 0, medianReplyH, why: "في فترة الإيقاف المؤقت" };
+  const streak = sentAt.filter((t) => t > Math.max(lastIn, pausedAt ?? 0)).length;
+  const pron = opts.fem === false ? "يرد" : "ترد";
+  if (medianReplyH != null && medianReplyH < 2) return { action: "keep", stretch: 1, streak, medianReplyH, why: streak ? `${pron} عادة بسرعة (خلال ${medianReplyH < 1 ? "أقل من ساعة" : "ساعتين"}) — السلّم كما هو` : "" };
+  if (streak >= 2) {
+    if (streak === 2 && HOT_LABELS.includes(String(opts.label ?? ""))) return { action: "stretch", stretch: 2, streak, medianReplyH, why: `لم ${pron} على متابعتين، لكن ريم تراها مهتمة — متابعة واحدة أخرى بفاصل مضاعف` };
+    return { action: "pause", stretch: 1, streak, medianReplyH, why: `${PAUSE_TAG}: لم ${pron} على آخر متابعتين متتاليتين — نتوقف ونعود بعد شهر` };
+  }
+  return { action: "keep", stretch: 1, streak, medianReplyH, why: "" };
+}
+
+/**
+ * How they write, for the writer to mirror — in the prompt only; the code's
+ * checks do not move. Pure.
+ */
+export function styleNote(turns: Array<{ fromMe: boolean; text: string; voice?: boolean }>, fem = true): string {
+  const theirs = turns.filter((t) => !t.fromMe);
+  const texts = theirs.map((t) => String(t.text ?? "").replace(AD_PREFILL, "").trim()).filter((t) => t.length > 0);
+  if (!texts.length) return "";
+  const p = fem ? { writes: "تكتب", her: "رسائلها", sends: "ترسل" } : { writes: "يكتب", her: "رسائله", sends: "يرسل" };
+  const avg = Math.round(texts.reduce((n, t) => n + t.length, 0) / texts.length);
+  const voices = theirs.filter((t) => t.voice).length;
+  const emoji = texts.filter((t) => /\p{Extended_Pictographic}/u.test(t)).length;
+  const lang = followupLanguage(texts);
+  const out: string[] = [];
+  out.push(lang === "en" ? `${p.writes} بالإنجليزية — اكتب بالإنجليزية.` : `${p.writes} بالعربية — اكتب بالعربية.`);
+  if (voices && voices * 3 >= theirs.length) out.push(`${p.sends} رسائل صوتية — سطر واحد قصير فقط.`);
+  else if (avg < 40) out.push(`${p.her} قصيرة (حوالي ${arDigits(avg)} حرفاً) — رد بسطر واحد.`);
+  else if (avg > 150) out.push(`${p.her} مفصّلة — يجوز سطران، بلا إطالة.`);
+  out.push(emoji ? `${p.writes} بالإيموجي — إيموجي واحد على الأكثر.` : `لا ${p.writes} إيموجي — لا تضع إيموجي.`);
+  return out.join(" ");
+}
+
+/**
+ * A time they named in their last words — «بكرة»، «بعد العيد»، «next week»،
+ * «after the 15th»، «الشهر الجاي» — read from when they said it, at ten in the
+ * morning of that day, never more than 45 days out. Null when there is none. Pure.
+ */
+export const CUE_CAP_DAYS = 45;
+/** The first day of each Eid (UAE), so «بعد العيد» lands after it. */
+export const EID_DAYS = ["2026-03-20", "2026-05-27", "2027-03-10", "2027-05-16", "2028-02-27", "2028-05-05", "2029-02-14", "2029-04-24"];
+const WEEKDAYS: Array<[RegExp, number]> = [
+  [/الأحد|الاحد|sunday/i, 0], [/الاثنين|الإثنين|الاتنين|monday/i, 1], [/الثلاثاء|الثلاثا|tuesday/i, 2], [/الأربعاء|الاربعاء|الاربعا|wednesday/i, 3],
+  [/الخميس|thursday/i, 4], [/الجمعة|الجمعه|friday/i, 5], [/السبت|saturday/i, 6],
+];
+function tzOffsetMs(at: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(at));
+  const n = (t: string) => Number(parts.find((x) => x.type === t)?.value ?? 0);
+  return Date.UTC(n("year"), n("month") - 1, n("day"), n("hour") % 24, n("minute"), n("second")) - (at - (at % 1000));
+}
+/** Local calendar parts of an instant in tz. */
+function localDay(at: number, tz: string) {
+  const d = new Date(at + tzOffsetMs(at, tz));
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate(), wd: d.getUTCDay() };
+}
+/** 10:00 local on (y, m, d) as an instant. */
+function localAt(y: number, m: number, d: number, tz: string, hour = 10): number {
+  const guess = Date.UTC(y, m, d, hour);
+  return guess - tzOffsetMs(guess, tz);
+}
+const NUM_WORDS: Record<string, number> = { "واحد": 1, "يوم": 1, "يومين": 2, "ثلاث": 3, "ثلاثة": 3, "ثلاثه": 3, "تلات": 3, "اربع": 4, "أربع": 4, "أربعة": 4, "اربعة": 4, "خمس": 5, "خمسة": 5, "ست": 6, "ستة": 6, "a": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "couple": 2, "few": 3 };
+export function timeCue(text: string, saidAt: number, tz = SENDING_TZ): { at: number; phrase: string } | null {
+  const t = String(text ?? "").replace(/[٠-٩]/g, (d) => String(AR_DIGITS.indexOf(d))).toLowerCase();
+  if (!t.trim()) return null;
+  const today = localDay(saidAt, tz);
+  const day = (add: number) => localAt(today.y, today.m, today.d + add, tz);
+  const cap = (at: number, phrase: string) => ({ at: Math.min(at, saidAt + CUE_CAP_DAYS * 86_400_000), phrase });
+  let m: RegExpMatchArray | null;
+  if ((m = t.match(/بعد\s*(بكر[ةهاى]|باكر|غد[اًا]?)(?![\u0621-\u064A])|day after tomorrow/))) return cap(day(2), m[0]);
+  if ((m = t.match(/(?<![\u0621-\u0647\u0649-\u064A])(بكر[ةهاى]|باكر|غد[اًا]?)(?![\u0621-\u064A])|\btomorrow\b|\btmrw?\b/))) return cap(day(1), m[0]);
+  if ((m = t.match(/بعد\s*(ال)?عيد|after\s*(the\s*)?eid/))) {
+    const eid = EID_DAYS.map((s) => { const [y, mo, d] = s.split("-").map(Number); return localAt(y!, mo! - 1, d!, tz); }).find((e) => e + 4 * 86_400_000 > saidAt);
+    return eid ? cap(eid + 4 * 86_400_000, m[0]) : cap(day(CUE_CAP_DAYS), m[0]);
+  }
+  if ((m = t.match(/بعد\s*(ال)?راتب|بعد\s*ما\s*(ينزل|يجي)\s*(ال)?راتب|after\s*(my\s*)?(salary|payday)/))) return cap(localAt(today.y, today.m + 1, 1, tz), m[0]);
+  if ((m = t.match(/(after|from)\s*(the\s*)?(\d{1,2})(st|nd|rd|th)\b|بعد\s*(يوم\s*|تاريخ\s*|ال)?(\d{1,2})(?!\s*(يوم|ايام|أيام|ساع|اسبوع|أسبوع|شهر|دق|\d))/))) {
+    const n = Number(m[3] ?? m[6]);
+    if (n >= 1 && n <= 31) {
+      let at = localAt(today.y, today.m, n + 1, tz);
+      if (at <= saidAt) at = localAt(today.y, today.m + 1, n + 1, tz);
+      return cap(at, m[0]);
+    }
+  }
+  if ((m = t.match(/(?:بعد|خلال)\s*(\d{1,2}|[؀-ۿ]+)?\s*(يومين|يوم|ايام|أيام)|in\s*(\d{1,2}|a|one|two|three|four|five|six|couple of|few)\s*days?/))) {
+    const raw = (m[1] ?? m[3] ?? "").replace(" of", "");
+    const n = m[2] === "يومين" ? 2 : Number(raw) || NUM_WORDS[raw] || (m[2] === "يوم" ? 1 : 3);
+    return cap(day(n), m[0]);
+  }
+  if ((m = t.match(/(?:بعد|خلال)\s*(\d{1,2}|[؀-ۿ]+)?\s*(اسبوعين|أسبوعين|اسبوع|أسبوع|اسابيع|أسابيع)|in\s*(\d{1,2}|a|one|two|three|couple of|few)\s*weeks?/))) {
+    const raw = (m[1] ?? m[3] ?? "").replace(" of", "");
+    const n = /سبوعين/.test(m[2] ?? "") ? 2 : Number(raw) || NUM_WORDS[raw] || 1;
+    return cap(day(7 * n), m[0]);
+  }
+  if ((m = t.match(/(?:بعد|خلال)\s*(شهرين|شهر)|in\s*(a|one|two)\s*months?/))) return cap(day(m[1] === "شهرين" || m[2] === "two" ? 60 : 30), m[0]);
+  if ((m = t.match(/(ال)?شهر\s*(الجاي|الياي|القادم|الجاي|اللي\s*جاي)|next\s*month/))) return cap(localAt(today.y, today.m + 1, 1, tz), m[0]);
+  if ((m = t.match(/(ال)?(اسبوع|أسبوع)\s*(الجاي|الياي|القادم|اللي\s*جاي)|next\s*week/))) return cap(day(((1 - today.wd + 7) % 7) || 7), m[0]);
+  if ((m = t.match(/(الويكند|الويك\s*اند|نهاية\s*(ال)?(اسبوع|أسبوع)|آخر\s*(ال)?(اسبوع|أسبوع)|(this|the|on the)\s*weekend)/))) return cap(day(((6 - today.wd + 7) % 7) || 7), m[0]);
+  for (const [re, wd] of WEEKDAYS) {
+    if ((m = t.match(new RegExp(`(يوم\\s*)?(${re.source})|(on|next|this)\\s+(${re.source})`, "i")))) return cap(day(((wd - today.wd + 7) % 7) || 7), m[0]);
+  }
+  return null;
+}
+
+/** «الأحد ٨ نوفمبر». Pure. */
+export function dayAr(at: number, tz = SENDING_TZ): string {
+  return new Intl.DateTimeFormat("ar-AE-u-nu-arab", { timeZone: tz, weekday: "long", day: "numeric", month: "long" }).format(new Date(at));
 }
 
 /** The account's ladder and scope. */
@@ -308,11 +528,11 @@ async function ladderOf(userId: number): Promise<{ ladder: number[] | null; scop
 }
 
 async function thread(userId: number, phone: string, limit = 14): Promise<Turn[]> {
-  const rows = await db.select({ fromMe: waThreadMessagesTable.fromMe, text: waThreadMessagesTable.text, at: waThreadMessagesTable.createdAt })
+  const rows = await db.select({ fromMe: waThreadMessagesTable.fromMe, text: waThreadMessagesTable.text, at: waThreadMessagesTable.createdAt, kind: waThreadMessagesTable.msgType })
     .from(waThreadMessagesTable)
     .where(and(eq(waThreadMessagesTable.userId, userId), eq(waThreadMessagesTable.phone, phone), sql`coalesce(${waThreadMessagesTable.text}, '') <> ''`))
     .orderBy(desc(waThreadMessagesTable.createdAt)).limit(limit);
-  return rows.reverse().map((r) => ({ fromMe: !!r.fromMe, text: r.text ?? "", at: new Date(r.at) }));
+  return rows.reverse().map((r) => ({ fromMe: !!r.fromMe, text: r.text ?? "", at: new Date(r.at), voice: r.kind === "voice" }));
 }
 
 /** Conversations where we spoke last, they had spoken in the last month, and the quiet has lasted at least four hours. */
@@ -332,8 +552,23 @@ async function candidates(userId: number, scope: "spoke" | "all", days = 30): Pr
 type Draft = { send: boolean; text: string | null; reason: string; retry?: boolean; photo?: { path: string; caption: string } | null };
 
 /** خالد writes the rung, or declines. */
-async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null, style = "rich"): Promise<Draft> {
-  if (style === "service" || style === "sales") return composeService(userId, phone, turns, rung, earlier, rungs, style);
+/** What the round learned about this person, for the writer: how they write, and what we last sent them. */
+export type Adapt = { styleNote?: string; lastSent?: string[] };
+/** A draft too close to one of our last three sent follow-ups to this person. Pure. */
+export const REPEAT_LIMIT = 0.6;
+export function repeatsSent(text: string, lastSent: string[] = []): boolean {
+  return lastSent.slice(0, 3).some((e) => !!e && textOverlap(e, text) >= REPEAT_LIMIT);
+}
+/** The prompt's part of the adaptation: mirror them, and take an angle the last two did not. Pure. */
+export function adaptLines(a: Adapt = {}): string {
+  return [
+    a.styleNote ? `═══ اكتب بطريقته هو — طولاً ولغة ونبرة ═══\n${a.styleNote}` : "",
+    a.lastSent?.length ? `═══ آخر متابعتين أرسلناهما له — خذ زاوية مختلفة تماماً (لا الفكرة نفسها ولا الكلمات) ═══\n${a.lastSent.slice(0, 2).map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null, style = "rich", adapt: Adapt = {}): Promise<Draft> {
+  if (style === "service" || style === "sales") return composeService(userId, phone, turns, rung, earlier, rungs, style, undefined, adapt);
   const angle = angleFor(rung, rungs, vertical);
   const [[me], [profile], card, company] = await Promise.all([
     db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, FOLLOWUP_ROLE))).limit(1),
@@ -370,6 +605,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
       vertical === "jewelry" ? "ممنوع منعاً باتاً: وزن أو عيار أو سعر أو توفر لا يوجد نصاً في المعلومات المرفقة. إن لم يكن عندك الرقم فلا تذكره، واعرض أن تتأكد وترد." : "",
       "صمته بعد سؤالنا هو سبب المتابعة لا مانعها: لا تعد السؤال نفسه — أحضر الجديد من الزاوية المطلوبة ومن معرفة الشركة (معلومة، صورة، قطعة أو خدمة تناسبه، سعر محدث، خطوة أسهل). من يُستبعد من المتابعة استُبعد قبل أن تصلك، فلا تقرر أنت ذلك.",
       profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
+      adaptLines(adapt),
     ],
     context: [
       outreach,
@@ -422,6 +658,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
   if (fi.length) return { send: false, text, reason: `أُوقفت: ${fi[0]}`, retry: true };
   const copy = earlier.find((e) => overlap(e, text) > 0.6);
   if (copy) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة" };
+  if (repeatsSent(text, adapt.lastSent)) return { send: false, text, reason: "تكرار لمتابعة سابقة" };
   return { send: true, text, reason: q.issues.length ? `أُرسلت مع ملاحظات: ${q.issues.map((i) => i.note).join("، ")}`.slice(0, 300) : "جاهزة", photo: shop?.photo && shop.piece && normalizeArabic(text).includes(normalizeArabic(shop.piece.name.split(" ").slice(0, 2).join(" "))) ? shop.photo : null };
 }
 
@@ -431,7 +668,7 @@ async function compose(userId: number, phone: string, turns: Turn[], rung: numbe
  * nothing to add, so nothing can be invented — and the code check refuses
  * an endearment, a number, a price word or a link even if he writes one.
  */
-async function composeService(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs: number, style = "service", angleOverride?: string): Promise<Draft> {
+async function composeService(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs: number, style = "service", angleOverride?: string, adapt: Adapt = {}): Promise<Draft> {
   const sales = style === "sales";
   const angle = angleOverride ?? angleFor(rung, rungs, null, style);
   const lang = followupLanguage(turns.filter((t) => !t.fromMe).map((t) => t.text));
@@ -488,6 +725,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
       : "She writes to us in English herself, so write in natural, warm English.",
     profile?.guardrails ? `تعليمات صاحب العمل: ${profile.guardrails}` : "",
     earlier.length ? `═══ ما قلناه لها في المتابعات السابقة — اكتب شيئاً مختلفاً ═══\n${earlier.map((e, i) => `${i + 1}. ${e}`).join("\n")}` : "",
+    adaptLines(adapt),
     "أعد نص الرسالة وحده، بلا علامات اقتباس ولا شرح.",
   ].filter(Boolean).join("\n\n");
   const transcript = whole.slice(-14).map((t) => `${t.fromMe ? "نحن" : "الزبونة"}: ${t.text.slice(0, 300)}`).join("\n");
@@ -509,6 +747,7 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
   }
   if (issues.length) return { send: false, text, reason: `أُوقفت: ${issues[0]}`, retry: true };
   if (earlier.find((e) => overlap(e, text) > 0.6)) return { send: false, text, reason: "تكاد تكون نسخة من متابعة سابقة", retry: true };
+  if (repeatsSent(text, adapt.lastSent)) return { send: false, text, reason: "تكرار لمتابعة سابقة" };
   if (others.find((e) => textOverlap(e, text) > 0.75)) return { send: false, text, reason: "تشبه رسالة كُتبت لزبونة أخرى — تُكتب من جديد في الجولة القادمة", retry: true };
   const focus = a?.last_question ? ` — ترد على: «${String(a.last_question).slice(0, 80)}»` : last.question ? ` — ترد على: «${last.question.slice(0, 80)}»` : "";
   return { send: true, text, reason: (sales ? `جاهزة — أسلوب بيعي (${lang === "ar" ? "بالعربية" : "بالإنجليزية لأنها كتبت بها"})` : "جاهزة — أسلوب الخدمة فقط") + focus, photo: null };
@@ -532,13 +771,13 @@ const running = new Set<number>();
 /** One round for one account. */
 export async function runSmartFollowUps(userId: number, now = Date.now()) {
   const mode = await modeOf(userId);
-  const result = { mode, considered: 0, drafted: 0, sent: 0, declined: 0 };
+  const result = { mode, considered: 0, drafted: 0, sent: 0, declined: 0, deferred: 0 };
   if (running.has(userId)) return result;
   running.add(userId);
   try { return await runRound(userId, now, mode, result); } finally { running.delete(userId); }
 }
 
-async function runRound(userId: number, now: number, mode: Mode, result: { mode: Mode; considered: number; drafted: number; sent: number; declined: number }) {
+async function runRound(userId: number, now: number, mode: Mode, result: { mode: Mode; considered: number; drafted: number; sent: number; declined: number; deferred: number }) {
   if (mode === "off") return result;
   if (!isWithinSendingHours(new Date(now))) return result;
   if (mode === "live" && !getStatus(userId).connected) return result;
@@ -574,9 +813,13 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   // The rungs already taken, per phone.
   // A draft waiting for the owner (or approved and not yet sent) holds its person: no second draft beside it.
   const waiting = new Set((await db.execute<{ phone: string }>(sql`SELECT DISTINCT phone FROM followup_deliberations WHERE user_id = ${userId} AND verdict IN ('pending', 'approved', 'sending')`)).rows.map((r) => r.phone));
-  const takenRows = await db.select({ phone: followupDeliberationsTable.phone, at: followupDeliberationsTable.createdAt, draft: followupDeliberationsTable.draft, verdict: followupDeliberationsTable.verdict })
+  const takenRows = await db.select({ phone: followupDeliberationsTable.phone, at: followupDeliberationsTable.createdAt, draft: followupDeliberationsTable.draft, verdict: followupDeliberationsTable.verdict, reason: followupDeliberationsTable.reason })
     .from(followupDeliberationsTable)
     .where(and(eq(followupDeliberationsTable.userId, userId), inArray(followupDeliberationsTable.phone, phones), sql`${followupDeliberationsTable.step} >= ${STEP_BASE}`, gt(followupDeliberationsTable.createdAt, new Date(now - 60 * 86_400_000))));
+
+  // ريم's warm ones may get one more follow-up after two unanswered (engagementPlan).
+  const hotLabel = new Map((await db.execute<{ phone: string; label: string }>(sql`SELECT phone, label FROM conversation_reviews WHERE user_id = ${userId} AND label IN ('hot','interested','order')`).catch(() => ({ rows: [] as Array<{ phone: string; label: string }> }))).rows.map((r) => [r.phone, r.label]));
+  const fem = style === "sales" || style === "service";
 
   let ops: { ok: boolean; view: string } | null = null;
   // The batch is an hourly ceiling: what went in the last hour counts against it, whichever round sent it.
@@ -591,15 +834,22 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
   for (const phone of phones) {
     if (result.drafted >= batch || (mode === "live" && left <= 0)) break;
     if (skip.has(phone) || waiting.has(phone)) continue;
-    const turns = await thread(userId, phone);
+    // The longer history is read once: their hours, their reply speed and their way of writing come from it.
+    const history = await thread(userId, phone, 60);
+    const turns = history.slice(-14);
     // A thread whose every word from them is a machine's is not a conversation.
     const fromThem = turns.filter((t) => !t.fromMe);
     if (fromThem.length && fromThem.every((t) => detectAutoresponder(t.text).isAuto)) continue;
     if (!fromThem.length && scope !== "all") continue;
 
     const mine = takenRows.filter((r) => r.phone === phone && (r.verdict === "send" || r.verdict === "drop"));
+    // How they engage: a pause after two unanswered, a stretched gap for ريم's warm ones.
+    const pausedAt = Math.max(0, ...mine.filter((r) => r.verdict === "drop" && (r.reason ?? "").startsWith(PAUSE_TAG)).map((r) => new Date(r.at).getTime())) || null;
+    const sentRows = mine.filter((r) => r.verdict === "send").sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+    const eng = engagementPlan(history, sentRows.map((r) => new Date(r.at).getTime()), { label: hotLabel.get(phone) ?? null, pausedAt, now, fem });
+    if (eng.action === "paused") continue;
     const card = await getCard(userId, phone).catch(() => null);
-    const due = dueRung(turns, mine.map((r) => new Date(r.at)), (card?.stage ?? 1) >= 5, now, { ladder: ladder ?? undefined, scope });
+    const due = dueRung(turns, mine.map((r) => new Date(r.at)), (card?.stage ?? 1) >= 5, now, { ladder: ladder ?? undefined, scope, stretch: eng.stretch });
     if (!due) continue;
     result.considered++;
     if (await isHumanHeld(userId, phone)) continue;
@@ -612,12 +862,27 @@ async function runRound(userId: number, now: number, mode: Mode, result: { mode:
     // Belt and braces: a follow-up already went to this number in the last two hours.
     const recent = mine.find((r) => r.verdict === "send" && now - new Date(r.at).getTime() < 2 * H);
     if (recent) continue;
+    if (eng.action === "pause") { await record(userId, phone, due.rung, "drop", eng.why, null, false, "تكيّف المتابعة"); result.declined++; continue; }
+    // Their time, not the ladder's: a time they named, then the hours they write in. Noted once every six hours, not every round.
+    const noteHold = async (why: string) => {
+      result.deferred++;
+      if (takenRows.some((r) => r.phone === phone && r.verdict === "hold" && (r.reason ?? "").startsWith("توقيت:") && now - new Date(r.at).getTime() < 6 * H)) return;
+      await record(userId, phone, due.rung, "hold", why, null, false, "تكيّف المتابعة");
+    };
+    const herLastTurn = [...history].reverse().find((t) => !t.fromMe);
+    const cue = herLastTurn ? timeCue(herLastTurn.text, herLastTurn.at.getTime()) : null;
+    if (cue && cue.at > now) { await noteHold(`توقيت: أُجّلت إلى ${dayAr(cue.at)} — ${fem ? "قالت" : "قال"} «${cue.phrase}»`); continue; }
+    const timing = personalTiming(now, bestHourFor(history), fem);
+    if (!timing.ok) { await noteHold(timing.why); continue; }
+    const whyTiming = [timing.why, cue ? `انتظرنا ما ${fem ? "قالته" : "قاله"}: «${cue.phrase}»` : "", eng.why].filter(Boolean).join(" · ");
     const lastIn = [...turns].reverse().find((t) => !t.fromMe)?.at.getTime() ?? 0;
     // ريم reads the conversation first when it moved since she last did; her label can take the person out.
     const reading = await freshReview(userId, phone, vertical, turns);
     if (reading && OUT_LABELS.includes(reading.label)) { await record(userId, phone, due.rung, "drop", `ريم صنّفتها «${reading.label}» — لا متابعة`, null, false, "ريم"); result.declined++; continue; }
     const earlier = mine.filter((r) => new Date(r.at).getTime() > lastIn && r.draft).map((r) => r.draft!);
-    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length, vertical, style));
+    const adapt: Adapt = { styleNote: styleNote(history, fem), lastSent: sentRows.map((r) => r.draft ?? "").filter(Boolean).slice(0, 3) };
+    const d = await asAgent(userId, FOLLOWUP_ROLE, () => compose(userId, phone, turns, due.rung, earlier, (ladder ?? LADDER.cold).length, vertical, style, adapt));
+    if (whyTiming) d.reason = `${d.reason} — ${whyTiming}`;
     result.drafted++;
     if (!d.send || !d.text) {
       // A model that did not answer, or refused, costs this round only: «hold»
