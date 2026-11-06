@@ -107,5 +107,13 @@ check("فك عنوانٍ محميّ", P.decodeCfEmail("ef86818980af998e839b869c9
 check("العناوين المحمية تُستخرج من الصفحة", P.extractEmails('<a href="/cdn-cgi/l/email-protection#ef86818980af998e839b869c9f9d809f8a9d9b868a9cc18c8082">x</a>').includes("info@valtisproperties.com"));
 check("سلسلة تالفة لا تُنتج عنواناً", P.decodeCfEmail("zz12") === null && P.decodeCfEmail("abc") === null);
 
+// ── ما رآه أول تشغيلٍ حي (٦ نوفمبر) ─────────────────────────────
+check("قائمة الموقع ليست إشارة", P.isMenuText("Best Real Estate Company in Dubai – Buy or Invest in Property Skip to content"));
+check("سطر قوائم بلا جملة ليس إشارة", P.isMenuText("Buy Rent Commercial Off-plan Luxury International Services Insights"));
+check("جملة حقيقية إشارة", !P.isMenuText("We have launched a new off-plan tower in Dubai Hills with handover in 2027."));
+check("لا إشارة من قائمة", P.extractSignal([{ url: "u", text: "Buy Rent Commercial Off-plan Luxury International Services Insights" }]) === null);
+check("توقيع هند يُحذف من ملاحظة LinkedIn", P.stripNoteSignature("I am curious how you manage the shift to active AML compliance. Hind, Pro Count.") === "I am curious how you manage the shift to active AML compliance.");
+check("ملاحظة بلا توقيع تبقى", P.stripNoteSignature("Curious how you manage CDD across projects.") === "Curious how you manage CDD across projects.");
+
 console.log(`\n${pass}/${total} ${pass === total ? "✅" : "❌"}`);
 process.exit(pass === total ? 0 : 1);

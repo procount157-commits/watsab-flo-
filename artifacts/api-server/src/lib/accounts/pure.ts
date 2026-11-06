@@ -100,11 +100,33 @@ export function extractSignal(pages: Array<{ url: string; text: string }>): Sign
       const m = s.re.exec(p.text);
       if (!m) continue;
       const text = sentenceAround(p.text, m.index);
-      if (text.split(/\s+/).length < 3) continue;
+      if (text.split(/\s+/).length < 3 || isMenuText(text)) continue;
       return { kind: s.kind, label: s.label, text, source: p.url };
     }
   }
   return null;
+}
+
+/**
+ * A site's menu read as a sentence: «Best Real Estate Company in Dubai – Buy
+ * or Invest in Property Skip to…» was famproperties.com's first «signal».
+ * A real sentence has small words between its nouns; a menu is a row of
+ * capitalised labels. Pure.
+ */
+export function isMenuText(text: string): boolean {
+  const words = text.replace(/[^\p{L}\s'-]/gu, " ").split(/\s+/).filter((w) => /^[A-Za-z]/.test(w));
+  if (words.length < 5) return false;
+  const caps = words.filter((w) => /^[A-Z]/.test(w)).length / words.length;
+  const glue = words.filter((w) => /^(the|is|are|was|were|our|we|has|have|with|to|and|of|a|an|for|will|its|this|that|now|from|by)$/i.test(w)).length;
+  return /\bskip to\b|\bmenu\b|\blog ?in\b|\bsign up\b/i.test(text) || (caps > 0.6 && glue < 2);
+}
+
+/** «Hind, Pro Count» at the end of a LinkedIn note: the owner sends it from his own profile, so it carries no signature. Pure. */
+export function stripNoteSignature(text: string): string {
+  const t = text.trim();
+  // The last sentence, if it is only a name and the firm («Hind, Pro Count.», «— Mohamed from Pro Count»), goes.
+  const m = /^([\s\S]*?[.!?])\s*[—–-]?\s*((?:best|regards|thanks|cheers)[,!]?\s*)?[\p{L} .'-]{0,40}?,?\s*(?:from\s+)?pro ?count\.?$/iu.exec(t);
+  return m && m[1]!.trim().length > 20 ? m[1]!.trim() : t;
 }
 
 /** How a signal reads in the account card. Pure. */

@@ -19,7 +19,7 @@ import { getSettings, enrolInSequence, ACCOUNTS_SEQUENCE_PREFIX } from "../email
 import { accountsVoice, deskActivity } from "./team";
 import {
   pickPages, visibleText, extractSignal, signalLine, groundPeople, extractEmails, domainPattern,
-  emailCandidates, personalMatch, roleAddress, nameInSource, clampNote, writingIssues, readWritten,
+  emailCandidates, personalMatch, roleAddress, nameInSource, clampNote, stripNoteSignature, writingIssues, readWritten,
   type Signal, type FoundPerson, type Written,
 } from "./pure";
 
@@ -188,7 +188,7 @@ export async function writeFor(userId: number, acc: TargetAccount, person: Found
     o.fallback ? `This goes to the company's general mailbox. The body's FIRST line must be exactly: "Attn: ${person.name}${person.title ? `, ${person.title}` : ""}" — then speak to him.` : "",
     `Greeting: "Hi ${first}," then the text. Sign off with: "${o.senderFirst}, Pro Count".`,
     "Email 1: subject 2–5 words; body 50–90 words; one verifiable AML fact for real estate ONLY from the knowledge below (no other numbers); ONE question as the call to action; no meeting or call request, no links.",
-    "Follow-up 2 (day 3): a new angle, ≤60 words. Follow-up 3 (day 7): a polite close, ≤40 words. LinkedIn connection note: ≤280 characters, no pitch, mentions the signal.",
+    "Follow-up 2 (day 3): a new angle, ≤60 words. Follow-up 3 (day 7): a polite close, ≤40 words. LinkedIn connection note: ≤280 characters, no pitch, mentions the signal, NO signature and no name at the end (the owner sends it from his own profile).",
     "Plain paragraphs separated by blank lines. English only.",
     "Return ONLY JSON:",
     `{"subject":"","body":"","followup2":{"subject":"","body":""},"followup3":{"subject":"","body":""},"linkedin":""}`,
@@ -206,7 +206,7 @@ export async function writeFor(userId: number, acc: TargetAccount, person: Found
     if (!out) { issues = ["لم يرد أي نموذج"]; continue; }
     const w = readWritten(parseLoose(out.text));
     if (!w) { issues = ["الرد ليس JSON بالشكل المطلوب"]; continue; }
-    w.linkedin = clampNote(w.linkedin);
+    w.linkedin = clampNote(stripNoteSignature(w.linkedin));
     if (o.fallback && !/^attn:/i.test(w.body)) w.body = `Attn: ${person.name}${person.title ? `, ${person.title}` : ""}\n\n${w.body}`;
     last = w;
     const allowed = `${knowledge}\n${o.signal?.text ?? ""}\n${o.siteFacts}`;
