@@ -37,6 +37,8 @@ export type MemoryKind = "instruction" | "win" | "loss" | "gap" | "playbook";
  */
 export async function remember(
   userId: number, role: string, kind: MemoryKind, content: string, phone?: string,
+  /** نصٌّ كتبه نموذج: يبقى معلّقاً، ولا يدخل prompt حتى يعتمده صاحب العمل (org.ts /lessons). */
+  opts: { pending?: boolean } = {},
 ): Promise<void> {
   const text = content.trim().slice(0, 500);
   if (!text) return;
@@ -45,8 +47,8 @@ export async function remember(
   // select-then-update instead would lose the atomicity, and two messages
   // arriving together is the normal case here.
   await db.execute(sql`
-    INSERT INTO agent_memory (user_id, role, kind, content, phone)
-    VALUES (${userId}, ${role}, ${kind}, ${text}, ${phone ?? null})
+    INSERT INTO agent_memory (user_id, role, kind, content, phone, approval_status)
+    VALUES (${userId}, ${role}, ${kind}, ${text}, ${phone ?? null}, ${opts.pending ? "pending" : "approved"})
     ON CONFLICT (user_id, role, kind, md5(content))
     DO UPDATE SET times = agent_memory.times + 1, updated_at = NOW()
   `);
@@ -166,7 +168,7 @@ const MAX_PER_KIND = { instruction: 12, win: 5, loss: 5, gap: 4, playbook: 1 } a
 
 export async function memoryFor(userId: number, role: string): Promise<Record<MemoryKind, AgentMemory[]>> {
   const rows = await db.select().from(agentMemoryTable)
-    .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, role)))
+    .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, role), eq(agentMemoryTable.approvalStatus, "approved")))
     .orderBy(desc(agentMemoryTable.times), desc(agentMemoryTable.updatedAt));
 
   const out: Record<MemoryKind, AgentMemory[]> = { instruction: [], win: [], loss: [], gap: [], playbook: [] };

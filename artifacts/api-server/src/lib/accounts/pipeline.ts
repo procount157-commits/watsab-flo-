@@ -17,6 +17,8 @@ import { brief, toHtml } from "../email/agent";
 import { guardCheck, formatIssues } from "../email/team";
 import { getSettings, enrolInSequence, ACCOUNTS_SEQUENCE_PREFIX } from "../email/service";
 import { accountsVoice, deskActivity } from "./team";
+import { runAs } from "../org/runtime";
+import { finishWorkflow, qualityFeedback, recordQualityFeedback, startWorkflow, workflowStep } from "../org/handoffs";
 import {
   pickPages, visibleText, extractSignal, signalLine, groundPeople, extractEmails, domainPattern,
   emailCandidates, personalMatch, roleAddress, nameInSource, clampNote, stripNoteSignature, writingIssues, readWritten,
@@ -180,6 +182,7 @@ export async function writeFor(userId: number, acc: TargetAccount, person: Found
   const knowledge = await brief(userId, [acc.sector ?? "عقارات"], 2500, { lessons: false, query: "real estate AML compliance brokers developers goAML" }).catch(() => "");
   const system = await accountsVoice(userId, "accounts_writer");
   const first = person.name.split(/\s+/)[0]!;
+  const notes = await qualityFeedback(userId, "accounts_writer").catch(() => [] as string[]);
   const signalFor = o.signal && o.signal.kind !== "engaged" ? `${o.signal.text} (source: ${o.signal.source})` : null;
   const base = [
     `Write to ONE person. Recipient: ${person.name}${person.title ? `, ${person.title}` : ""} at ${acc.company} (${acc.domain}), a UAE real-estate company${acc.city ? ` in ${acc.city}` : ""}.`,
@@ -190,6 +193,7 @@ export async function writeFor(userId: number, acc: TargetAccount, person: Found
     "Email 1: subject 2–5 words; body 50–90 words; one verifiable AML fact for real estate ONLY from the knowledge below (no other numbers); ONE question as the call to action; no meeting or call request, no links.",
     "Follow-up 2 (day 3): a new angle, ≤60 words. Follow-up 3 (day 7): a polite close, ≤40 words. LinkedIn connection note: ≤280 characters, no pitch, mentions the signal, NO signature and no name at the end (the owner sends it from his own profile).",
     "Plain paragraphs separated by blank lines. English only.",
+    notes.length ? `The quality guard stopped your earlier drafts for these — do not repeat them:\n- ${notes.join("\n- ")}` : "",
     "Return ONLY JSON:",
     `{"subject":"","body":"","followup2":{"subject":"","body":""},"followup3":{"subject":"","body":""},"linkedin":""}`,
     "",
@@ -264,7 +268,17 @@ export function senderFirstName(fromName: string | null | undefined): string {
   return /^[A-Za-z][A-Za-z'\-]{1,20}$/.test(first) ? first : "The team";
 }
 
+export const ACCOUNTS_WORKFLOW = "accounts_desk";
+
+/** شركةٌ واحدة: سير عملٍ بحدثٍ لكل خطوة. «sent» يبقى مفتوحاً حتى تخرج الرسالة فعلاً (desk.syncAccounts). */
 export async function processAccount(userId: number, acc: TargetAccount, o: { key: string | null; engaged: boolean }): Promise<string> {
+  const wf = await startWorkflow(userId, ACCOUNTS_WORKFLOW, { accountId: acc.id, company: acc.company, domain: acc.domain });
+  const st = await processSteps(userId, acc, o, wf);
+  if (st !== "sent") await finishWorkflow(wf, st === "needs_review" ? "failed" : "cancelled", { status: st });
+  return st;
+}
+
+async function processSteps(userId: number, acc: TargetAccount, o: { key: string | null; engaged: boolean }, wf: number | null): Promise<string> {
   try {
     // ١ — فهد
     const r = await research(acc, o);
@@ -272,10 +286,12 @@ export async function processAccount(userId: number, acc: TargetAccount, o: { ke
     await deskActivity(userId, "accounts_researcher", "research", r.site
       ? `فهد قرأ ${r.pages.length} صفحة من موقع ${acc.company}${r.signal ? ` — الإشارة: ${r.signal.label}` : " — لا إشارة"}.`
       : `فهد: موقع ${acc.company} (${acc.domain}) لا يفتح.`, { accountId: acc.id });
+    await workflowStep(userId, wf, "accounts_researcher", "research", { site: r.site, pages: r.pages.length, signal: r.signal?.kind ?? null });
     if (!r.site && !r.hits.length) { await setAcc(acc.id, { status: "no_site", notes: "الموقع لا يفتح ولا بحث على الويب" }); return "no_site"; }
 
     // ٢ — نوف
-    const { people, answered } = await findPeople(userId, acc, r);
+    const { people, answered } = (await runAs(userId, "accounts_analyst", { kind: "find_people", respect: "none" }, () => findPeople(userId, acc, r)))!;
+    await workflowStep(userId, wf, "accounts_analyst", "decision_maker", { answered, people: people.length, decisionMaker: people.find((p) => p.isDecisionMaker)?.name ?? null });
     if (!answered) { await setAcc(acc.id, { status: "needs_review", notes: "لم يرد أي نموذج لقراءة الأسماء — يُعاد غداً" }); return "needs_review"; }
     if (!people.length) {
       await setAcc(acc.id, { status: r.site ? "no_person" : "no_site", notes: "لا اسم مكتوب لصاحب قرار في المصادر" });
@@ -290,10 +306,12 @@ export async function processAccount(userId: number, acc: TargetAccount, o: { ke
     const known = await knownOnDomain(userId, acc.domain);
     const ids = new Map<FoundPerson, number>();
     const found = new Map<FoundPerson, Found>();
-    for (const p of people) {
-      const f = await findEmail(userId, acc.domain, p, { siteEmails: r.emails, known, from: es?.fromEmail ?? null, probe: p === dm });
-      found.set(p, f);
-    }
+    await runAs(userId, "accounts_email", { kind: "find_email", respect: "none" }, async () => {
+      for (const p of people) {
+        const f = await findEmail(userId, acc.domain, p, { siteEmails: r.emails, known, from: es?.fromEmail ?? null, probe: p === dm });
+        found.set(p, f);
+      }
+    });
     const dmFound = found.get(dm)!;
     const personal = dmFound.email && (dmFound.status === "published" || dmFound.status === "verified") ? dmFound.email : null;
     const role = personal ? null : roleAddress([...r.emails, ...known.filter((k) => k.status === "active").map((k) => k.email)], acc.domain);
@@ -310,11 +328,16 @@ export async function processAccount(userId: number, acc: TargetAccount, o: { ke
     await deskActivity(userId, "accounts_email", "email", to
       ? `سالم: ${personal ? `بريد ${dm.name} ${statusAr[dmFound.status!]} (${personal})` : `بريد ${dm.name} ${dmFound.status ? statusAr[dmFound.status] : "غير معروف"} — يذهب إلى ${role} بعبارة Attn`}.`
       : `سالم لم يجد عنواناً يُرسل إليه في ${acc.company}.`, { accountId: acc.id });
+    await workflowStep(userId, wf, "accounts_email", "email", { to, status: dmFound.status, fallback: !personal });
     if (!to) { await setAcc(acc.id, { status: "no_email", notes: "لا بريد متحقَّق له ولا عنوان عام للشركة" }); return "no_email"; }
 
     // ٤ — هند
     const siteFacts = r.pages.map((p) => p.text.slice(0, 900)).join("\n").slice(0, 2500);
-    const { written, issues } = await writeFor(userId, acc, dm, { fallback: !personal, signal: r.signal, senderFirst: senderFirstName(es?.fromName), siteFacts });
+    const { written, issues } = (await runAs(userId, "accounts_writer", { kind: "write_email", respect: "none" }, () => writeFor(userId, acc, dm, { fallback: !personal, signal: r.signal, senderFirst: senderFirstName(es?.fromName), siteFacts })))!;
+    await workflowStep(userId, wf, "accounts_writer", "write", { written: !!written, subject: written?.subject ?? null });
+    // حكم ماجد داخل writeFor (guardCheck وformatIssues): خطوته في السجل، وما رفضه يصل هند في كتابتها التالية.
+    await workflowStep(userId, wf, "email_guard", "quality", { pass: !!written && !issues.length, issues: issues.slice(0, 6) });
+    if (issues.length) await recordQualityFeedback(userId, "accounts_writer", issues, { accountId: acc.id }).catch(() => {});
     const draft = written ? { emailTo: to, emailSubject: written.subject.slice(0, 300), emailBody: written.body, emailFollowups: written.followups, linkedinMessage: written.linkedin || null } : { emailTo: to };
     if (!written || issues.length) {
       await setAcc(acc.id, { ...draft, status: "needs_review", notes: `ماجد أوقف المسودة: ${issues.join("؛ ")}`.slice(0, 1500) });
@@ -326,6 +349,7 @@ export async function processAccount(userId: number, acc: TargetAccount, o: { ke
 
     // ٥ — الطابور
     const q = await enqueue(userId, acc, ids.get(dm)!, dm, to, !personal, written);
+    await workflowStep(userId, wf, "email_queue", "queued", { ok: q.ok, why: q.why ?? null, sequenceId: q.sequenceId ?? null });
     if (!q.ok) {
       await setAcc(acc.id, { status: q.why?.includes("مرسل") ? "ready" : "needs_review", notes: q.why ?? null, contactId: q.contactId ?? null, sequenceId: q.sequenceId ?? null });
       return "ready";

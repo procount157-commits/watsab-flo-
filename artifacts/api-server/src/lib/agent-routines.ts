@@ -140,7 +140,7 @@ export async function runRoutine(r: AgentRoutine): Promise<{ output?: string; er
   // every future conversation.
   for (const line of out.text.split("\n")) {
     const m = /^\s*قاعدة\s*[:：]\s*(.+)$/.exec(line);
-    if (m?.[1]) await remember(r.userId, r.role, "instruction", m[1]);
+    if (m?.[1]) await remember(r.userId, r.role, "instruction", m[1], undefined, { pending: true });
   }
 
   return { output: out.text };

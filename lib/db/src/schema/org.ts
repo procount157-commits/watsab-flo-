@@ -8,7 +8,7 @@
 
 import { sql } from "drizzle-orm";
 import {
-  bigserial, boolean, check, index, integer, jsonb, numeric, pgTable, primaryKey, serial,
+  bigint, bigserial, boolean, check, index, integer, jsonb, numeric, pgTable, primaryKey, serial,
   text, timestamp, uniqueIndex, unique, varchar,
 } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
@@ -81,6 +81,15 @@ export const employeeHeartbeatsTable = pgTable("employee_heartbeats", {
   nextBeatAt:  at("next_beat_at"),
   lastError:   text("last_error"),
   detail:      jsonb("detail"),
+  // last_beat_at هو آخر نبض، وnext_beat_at موعد التشغيل التالي. لا صفّ إلا من تشغيلٍ حقيقي (lib/org/runtime.ts).
+  lastStartedAt:   at("last_started_at"),
+  lastCompletedAt: at("last_completed_at"),
+  lastSuccessAt:   at("last_success_at"),
+  lastFailureAt:   at("last_failure_at"),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  lastExecutionId: bigint("last_execution_id", { mode: "number" }),
+  workerId:    varchar("worker_id", { length: 80 }),
+  intervalSec: integer("interval_sec"),
 }, (t) => [
   primaryKey({ columns: [t.userId, t.employeeKey] }),
   check("employee_heartbeats_status", sql`${t.status} IN ('idle','running','stalled','halted','failed')`),
@@ -101,8 +110,14 @@ export const employeeExecutionsTable = pgTable("employee_executions", {
   outputRef:   jsonb("output_ref"),
   startedAt:   at("started_at").defaultNow().notNull(),
   finishedAt:  at("finished_at"),
+  kind:        varchar("kind", { length: 60 }),
+  durationMs:  integer("duration_ms"),
+  modelCalls:  integer("model_calls").notNull().default(0),
+  workerId:    varchar("worker_id", { length: 80 }),
 }, (t) => [
   index("idx_employee_executions_user").on(t.userId, t.employeeKey, t.startedAt),
+  index("idx_employee_executions_running").on(t.startedAt).where(sql`status = 'running'`),
+  index("idx_employee_executions_started").on(t.startedAt),
   check("employee_executions_status", sql`${t.status} IN ('running','succeeded','failed','halted','cancelled')`),
 ]);
 
@@ -131,6 +146,7 @@ export const employeeTasksTable = pgTable("employee_tasks", {
   leaseExpiresAt: at("lease_expires_at"),
   nextAttemptAt:  at("next_attempt_at"),
   deadLetter:     boolean("dead_letter").notNull().default(false),
+  expiresAt:      at("expires_at"),
   createdAt:      created(),
   updatedAt:      at("updated_at").defaultNow().notNull(),
 }, (t) => [
@@ -138,6 +154,10 @@ export const employeeTasksTable = pgTable("employee_tasks", {
   index("idx_employee_tasks_queue").on(t.userId, t.status, t.nextAttemptAt, t.priority),
   index("idx_employee_tasks_owner").on(t.userId, t.ownerRole, t.status),
   index("idx_employee_tasks_parent").on(t.parentTaskId),
+  index("idx_employee_tasks_due").on(t.priority, t.nextAttemptAt).where(sql`status = 'queued'`),
+  index("idx_employee_tasks_lease").on(t.leaseExpiresAt).where(sql`status = 'running'`),
+  index("idx_employee_tasks_expiry").on(t.expiresAt).where(sql`expires_at IS NOT NULL`),
+  index("idx_employee_tasks_inbox").on(t.userId, t.ownerRole, t.taskType, t.status),
   check("employee_tasks_status", sql`${t.status} IN ('pending','queued','running','waiting_for_dependency','waiting_for_approval','completed','failed','cancelled','expired')`),
   check("employee_tasks_approval", sql`${t.approvalStatus} IS NULL OR ${t.approvalStatus} IN ('pending','approved','rejected')`),
 ]);
@@ -262,6 +282,7 @@ export const executionEventsTable = pgTable("execution_events", {
 }, (t) => [
   index("idx_execution_events_user").on(t.userId, t.createdAt),
   index("idx_execution_events_workflow").on(t.workflowId),
+  index("idx_execution_events_created").on(t.createdAt),
 ]);
 
 export const integrationHealthTable = pgTable("integration_health", {

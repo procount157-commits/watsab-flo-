@@ -152,7 +152,7 @@ export async function runPipeline(userId: number, listId: number): Promise<{ ana
     const brief = [r.goal, "", `موجز سلمى: ${r.why}.`, r.insight ? `من هم وما الزاوية: ${r.insight}` : ""].filter(Boolean).join("\n");
     const m = await createMission(userId, {
       name: `${r.sector} — ${list.name}`.slice(0, 160), goal: brief,
-      filter: { listIds: [listId], sectors: [r.sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take: cfg.waveSize },
+      filter: { listIds: [listId], sectors: [r.sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take: cfg.waveSize, notReserved: true },
       language: cfg.language, requireApproval: cfg.mode !== "auto", followAfterHours: cfg.followAfterHours,
       agentRole: "email", sourceListId: listId,
     });

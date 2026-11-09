@@ -32,6 +32,8 @@ import { count } from "./segments";
 import { createMission } from "./missions";
 import { activity, ensureEmailTeam, onDuty } from "./team";
 import { accountHalted } from "../org/controls";
+import { runAs } from "../org/runtime";
+import { approvedRetargets, markUsed, orderByPriority, strategistDirective, strategistSubjects } from "../org/handoffs";
 
 export const STAGES = {
   opened:   "فتحوا ولم يردّوا",
@@ -222,6 +224,13 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
   const cfg = await getAutopilot(userId);
   const done = { ran: false, waves: 0, nurtures: 0, stages: 0 };
   if (!cfg.enabled && !opts.force) return { ...done, why: "الطيار الآلي متوقف" };
+  // الجولة تسأل عن كل موظف فيها على حدة (يوسف، سلمى، ماجد)؛ والمفتاح هنا للحساب وحده، وللتشغيل اليدوي لا مفتاح كما كان.
+  const r = await runAs(userId, "email_strategist", { kind: "autopilot_round", respect: opts.force ? "none" : "account" }, () => autopilotRound(userId, cfg, done));
+  return r ?? { ...done, why: "الحساب موقوف" };
+}
+
+type RoundResult = { ran: boolean; why?: string; waves: number; nurtures: number; stages: number };
+async function autopilotRound(userId: number, cfg: EmailAutopilot, done: RoundResult): Promise<RoundResult> {
   await ensureEmailTeam(userId);
   await db.update(emailAutopilotTable).set({ lastRunAt: new Date() }).where(eq(emailAutopilotTable.userId, userId));
 
@@ -254,7 +263,10 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
   // ── ما يحكم التخطيط هذه الجولة: النسبة، وما حكم به المحلّل ──
   const mix = await mixState(userId);
   const res = await resultsReport(userId).catch(() => null);
-  const avoidAngles = res?.avoidAngles ?? [];
+  // ما سلّمه منصور: زوايا تُتجنَّب وقطاعات تتقدّم. وما سلّمته حصّة: أنماط عناوين تدخل موجز الموجة.
+  const directive = strategist ? await strategistDirective(userId) : null;
+  const subjects = strategist ? await strategistSubjects(userId) : null;
+  const avoidAngles = [...new Set([...(res?.avoidAngles ?? []), ...(directive?.avoidAngles ?? [])])];
   const roleFirst = !!res?.decisions.some((d) => d.kind === "role_first");
   // قرار صاحب العمل (١٩ أكتوبر): «AML أولاً، والخدمات تملأ اليوم حين لا
   // تخرج موجة AML». كان السقف يُرفع فقط حين لا يبقى لـAML جمهور، فإذا
@@ -287,17 +299,20 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
   const runningBy = new Map<number, number>();
   const launchWave = async (list: (typeof lists)[number], sector: string, pick: { track: Track; take: number | null; why: string }): Promise<boolean> => {
     const take = Math.min(waveCap, pick.take ?? waveCap);
-    const filter: SegmentFilter = { listIds: [list.id], sectors: [sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take, ...(roleFirst ? { roleFirst: true } : {}) };
+    const filter: SegmentFilter = { listIds: [list.id], sectors: [sector], engagement: ["never_sent"], maxTouches: cfg.maxTouches, take, notReserved: true, ...(roleFirst ? { roleFirst: true } : {}) };
     const n = await count(userId, filter, true);
     if (!n) return false;
     const angle = nextAngle(pick.track, sector, await anglesUsed(userId, pick.track, sector), avoidAngles);
     if (!angle) return false;
     const m = await createMission(userId, {
       name: `${sector} — ${TRACK_AR[pick.track]} — ${angle.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
-      goal: angle.goal, filter, language: CAMPAIGN_LANGUAGE, requireApproval,
+      goal: subjects ? `${angle.goal}\n\n${subjects.line}` : angle.goal, filter, language: CAMPAIGN_LANGUAGE, requireApproval,
       followAfterHours: cfg.followAfterHours, agentRole: "email", sourceListId: list.id,
       track: pick.track, angle: angle.id,
     });
+    // خرجت موجةٌ بهما: الآن فقط يُعدّان مستعملين.
+    if (directive) await markUsed(userId, directive.taskId, { by: "email_strategist", missionId: m.id, angle: angle.id }).catch(() => {});
+    if (subjects) await markUsed(userId, subjects.taskId, { by: "email_strategist", missionId: m.id }).catch(() => {});
     mix[pick.track] += n;
     if (pick.track === "aml") amlLaunched++;
     done.waves++;
@@ -331,7 +346,7 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
       const skipped = all.filter((s) => !isTargeted(s.sector));
       if (skipped.length) await sayOnce(userId, "email_strategist", "skip",
         `«${list.name}»: ${skipped.map((s) => `${s.sector} (${s.n})`).join("، ")} خارج الاستهداف — لا موجة لها. المستهدف: AML للعقارات والمحامين والذهب، والمحاسبة للمطاعم والمقاولات والعقارات.`, 24);
-      const sectors = all.filter((s) => isTargeted(s.sector));
+      const sectors = orderByPriority(all.filter((s) => isTargeted(s.sector)), directive?.prioritySectors);
       let running = 0;
       for (const s of sectors) if (await busy(list.id, s.sector)) running++;
       for (const s of sectors) {
@@ -352,7 +367,7 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
       const rank = (x: { stage: string | null }) => (x.stage === "clicked" ? 0 : 1);
       for (const sl of stageLists.sort((a, b) => rank(a) - rank(b))) {
         if (await busy(sl.id)) continue;
-        const filter: SegmentFilter = { listIds: [sl.id], quietDays: cfg.quietDays, maxTouches: cfg.maxTouches };
+        const filter: SegmentFilter = { listIds: [sl.id], quietDays: cfg.quietDays, maxTouches: cfg.maxTouches, notReserved: true };
         const n = await count(userId, filter, true);
         if (!n) continue;
         const plan = await campaignFor(list.id);
@@ -382,6 +397,24 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
     }
     if (filled) await sayOnce(userId, "email_strategist", "fill", "لا موجة AML ممكنة الآن (لا جمهور) — أُطلقت موجة خدمات بدل الانتظار", 6);
   }
+  // ما وافق عليه صاحب العمل من مقترحات مريم: موجته تُنشأ الآن، بالبوابات نفسها.
+  if (strategist && healthy) {
+    for (const t of await approvedRetargets(userId).catch(() => [])) {
+      const p = t.input;
+      const filter: SegmentFilter = { engagement: p.engagement, quietDays: cfg.quietDays, maxTouches: cfg.maxTouches, take: Math.min(waveCap, p.eligible), notReserved: true };
+      const n = await count(userId, filter, true);
+      if (!n) { await markUsed(userId, t.taskId, { by: "email_strategist", none: true }); continue; }
+      const m = await createMission(userId, {
+        name: `إعادة استهداف — ${p.label} — ${new Date().toLocaleDateString("en-GB")}`.slice(0, 160),
+        goal: [p.angle.brief, `العنوان: ${p.angle.subjectHint}`, `الدعوة: ${p.angle.cta}`].join("\n"),
+        filter, language: CAMPAIGN_LANGUAGE, requireApproval, followAfterHours: cfg.followAfterHours, agentRole: "email_followup",
+      });
+      await markUsed(userId, t.taskId, { by: "email_strategist", missionId: m.id, audience: n });
+      done.waves++;
+      await activity(userId, "email_strategist", "wave", `موجة إعادة استهداف «${p.label}» لـ ${n} جهة — اقترحتها مريم ووافق صاحب العمل.`, { missionId: m.id, taskId: t.taskId, cohort: p.cohort });
+    }
+  }
+
   // ما بقي بلا موجة بعد ذلك ينتظر — ويُقال مرةً في اليوم.
   for (const { list, sector } of missed) {
     if (await busy(list.id, sector)) continue;

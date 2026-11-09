@@ -27,6 +27,7 @@ import { logger } from "../logger";
 import { ACTION_KINDS, COUNTS_AS, PLATFORM, capsFor, gulfHour, type ActionKind, type SocialPlatform } from "./platforms";
 import { driverFor, hasDriver, DRIVEN } from "./drivers";
 import { accountHalted, isHalted } from "../org/controls";
+import { runAs } from "../org/runtime";
 import { human } from "./drivers/common";
 import { activity, onDuty, roleOf, type Job } from "./team";
 import * as agent from "./agent";
@@ -486,18 +487,22 @@ export async function runRound(userId: number, p: SocialPlatform) {
   const key = `${userId}:${p}`;
   if (busy.has(key)) return { busy: true };
   busy.add(key);
+  // لكل موظف له خطوة نبضُ خطوته: كل عشرين دقيقة نبض، وسطر تنفيذ في الساعة على الأكثر. المفتاح سُئل قبل الجولة،
+  // والبوابة تسأل قبل كل فعل. من لا خطوة له (الناقل، المحلل) لا يُكتب له نبضٌ لم يعمله.
+  const step = <T>(job: Job, kind: string, fn: () => Promise<T>) => runAs(userId, roleOf(p, job), { kind, respect: "none", sampleMin: 60 }, fn) as Promise<T>;
   try {
-    const guard = await guardCheck(userId, p);
-    if (guard.state !== "logged_in") return { guard };
-    await discoverPosts(userId, p).catch(() => 0);
-    const collected = await collectComments(userId, p);
-    const processed = await processComments(userId, p);
-    const inbox = await syncInbox(userId, p);
-    const outreach = await prepareOutreach(userId, p);
-    const followups = (await agent.shopMode(userId)) ? await prepareShopFollowups(userId, p) : await prepareFollowups(userId, p);
-    const sent = await sendApproved(userId, p);
-    await db.update(socialAccountsTable).set({ lastRunAt: new Date() }).where(and(eq(socialAccountsTable.userId, userId), eq(socialAccountsTable.platform, p)));
-    return { guard, collected, processed, inbox, outreach, followups, sent };
+    return await step("manager", "social_round", async () => {
+      const guard = await step("guard", "social_guard", () => guardCheck(userId, p));
+      if (guard.state !== "logged_in") return { guard };
+      const collected = await step("watcher", "social_watch", async () => { await discoverPosts(userId, p).catch(() => 0); return collectComments(userId, p); });
+      const processed = await step("triage", "social_comments", () => processComments(userId, p));
+      const inbox = await step("dm", "social_inbox", () => syncInbox(userId, p));
+      const outreach = await step("prospector", "social_outreach", () => prepareOutreach(userId, p));
+      const followups = await step("followup", "social_followup", async () => (await agent.shopMode(userId)) ? prepareShopFollowups(userId, p) : prepareFollowups(userId, p));
+      const sent = await sendApproved(userId, p);
+      await db.update(socialAccountsTable).set({ lastRunAt: new Date() }).where(and(eq(socialAccountsTable.userId, userId), eq(socialAccountsTable.platform, p)));
+      return { guard, collected, processed, inbox, outreach, followups, sent };
+    });
   } finally { busy.delete(key); }
 }
 

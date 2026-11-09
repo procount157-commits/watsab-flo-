@@ -460,12 +460,9 @@ export async function runMeeting(userId: number, kind: "daily" | "pipeline" | "p
         continue;
       }
 
-      decisions.push({ role: who.role, name: who.name, rule, status: "طُبِّق" });
-      // A behaviour decision lands in that employee's own memory, which is what
-      // makes a meeting change anything instead of producing minutes.
-      await remember(userId, who.role, "instruction", rule);
-      await say({ userId, fromRole: CHAIR, toRole: who.role, kind: "directive",
-        body: `قرار اجتماع اليوم: ${rule}` }).catch(() => {});
+      // نصٌّ كتبه نموذج في اجتماع: يصل ذاكرة الموظف معلّقاً، ولا يدخل prompt قبل اعتماد صاحب العمل.
+      decisions.push({ role: who.role, name: who.name, rule, status: "معلّق بانتظار اعتمادك" });
+      await remember(userId, who.role, "instruction", rule, undefined, { pending: true });
     }
   }
 

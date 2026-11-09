@@ -21,6 +21,7 @@ import { normalizePhone } from "./phone-import";
 import { checkNumbers, getStatus } from "./whatsapp";
 import { key9 } from "./wa-firewall-rules";
 import { logger } from "./logger";
+import { runAs } from "./org/runtime";
 import { accountHalted } from "./org/controls";
 
 export const VETTER_ROLE = "vetter";
@@ -261,6 +262,9 @@ export async function vetList(userId: number, groupId: number, trigger: Trigger,
 
 /** Every list of the account with numbers waiting for a verdict — on connect, and daily. */
 export async function vetPending(userId: number, trigger: Trigger = "connect"): Promise<number> {
+  return (await runAs(userId, VETTER_ROLE, { kind: `vet_${trigger}`, respect: "none" }, () => vetPendingLists(userId, trigger))) ?? 0;
+}
+async function vetPendingLists(userId: number, trigger: Trigger): Promise<number> {
   const groups = await db.selectDistinct({ id: contactsTable.groupId }).from(contactsTable)
     .innerJoin(contactGroupsTable, eq(contactGroupsTable.id, contactsTable.groupId))
     .where(and(eq(contactGroupsTable.userId, userId), sql`(${contactsTable.verdict} IS NULL OR ${contactsTable.verdict} = 'hold' OR ${contactsTable.status} = 'pending')`));

@@ -36,6 +36,8 @@ import { logger } from "../logger";
 import { recordEvent, getSettings, cancelSequencesFor, stopCompany } from "./service";
 import { EmailHalted, sendEmail, messageIdFor, isConfigured } from "./provider";
 import { accountHalted } from "../org/controls";
+import { runAs } from "../org/runtime";
+import { handoffDeliveryFailure, recordReplyOutcome } from "../org/handoffs";
 import { newToken, htmlToText } from "./tracking";
 import { updateCard } from "../lead-card";
 import { replyVoice } from "./agent";
@@ -163,7 +165,10 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   if (v.kind === "bounce") {
     // الشدّة قبل الحكم: العنوان الميت وحده يُخرج الجهة (classify.ts).
     const severity = bounceSeverity(`${mail.subject ?? ""}\n${raw}`);
-    if (matched && severity === "hard") await recordEvent(userId, matched.id, "bounce", { meta: { subject: mail.subject } });
+    if (matched && severity === "hard") {
+      await recordEvent(userId, matched.id, "bounce", { meta: { subject: mail.subject } });
+      await handoffDeliveryFailure(userId, "address", { messageId: matched.id, via: "inbound_bounce" });
+    }
     else if (matched && severity !== "delay" && severity !== "report") {
       await recordEvent(userId, matched.id, "failed", { meta: { subject: mail.subject, severity } });
       // صندوقٌ ممتلئ يُعطى ثلاثة أيام ثم يُراسَل؛ ورفض السياسة لا يمسّ الجهة.
@@ -254,6 +259,8 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   // قائمة الحارّين في اللوحة وقوائم المتابعة.
   const shared = toSharedIntent(v.intent!);
   const temp = temperature(text, shared);
+  // نتيجة الرد لجاسم، معلّقةً بمهمتها وزاويتها.
+  await recordReplyOutcome(userId, { messageId: matched?.id ?? null, inboundId: row.id, contactId: contact?.id ?? null, intent: v.intent, temperature: temp }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "نتيجة رد لم تُسجَّل"));
   if (temp === "hot") dealFromHotLead(userId, { channel: "email", ref: from, email: from, phone: contact?.phone ?? null, company: contact?.company ?? null, contactName: mail.fromName ?? contact?.name ?? null, notes: `ردّ: ${text.slice(0, 200)}` });
   if (contact) {
     const tags = ((contact.tags as string[] | null) ?? []).filter((t) => !["hot", "warm", "cold"].includes(t));
@@ -739,9 +746,10 @@ async function pollInbox(ib: Inbox): Promise<number> {
 export async function pollAllMailboxes(): Promise<void> {
   const rows = await db.select().from(emailSettingsTable).where(sql`${emailSettingsTable.imapHost} is not null and coalesce(nullif(${emailSettingsTable.imapUser}, ''), ${emailSettingsTable.smtpUser}) is not null`);
   // الموقوف لا يُقرأ بريده الآن، فلا يُصنَّف بلا نموذج ولا يضيع: lastUid يكمل حين يعود.
-  for (const s of rows) { if (await accountHalted(s.userId, "email.poll")) continue; await pollMailbox(s).catch(() => {}); }
+  // كل دقيقتين: نبضٌ مجمَّع، وسطر تنفيذ كل ربع ساعة على الأكثر.
+  for (const s of rows) { if (await accountHalted(s.userId, "email.poll")) continue; await runAs(s.userId, "email_replies", { kind: "inbound_poll", respect: "none", sampleMin: 15 }, () => pollMailbox(s)).catch(() => {}); }
   const extra = await db.select().from(emailSendersTable).where(and(isNotNull(emailSendersTable.imapHost), sql`${emailSendersTable.status} <> 'paused'`)).catch(() => []);
-  for (const x of extra) { if (await accountHalted(x.userId, "email.poll")) continue; await pollSenderInbox(x).catch(() => {}); }
+  for (const x of extra) { if (await accountHalted(x.userId, "email.poll")) continue; await runAs(x.userId, "email_replies", { kind: "inbound_poll", respect: "none", sampleMin: 15 }, () => pollSenderInbox(x)).catch(() => {}); }
 }
 
 /** Drafts whose moment has come. A person who edited or sent one first has already moved it out of "drafted". */

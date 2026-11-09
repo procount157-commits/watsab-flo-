@@ -25,7 +25,6 @@ import {
 } from "@workspace/db";
 import { complete } from "./llm";
 import { remember } from "./agent-memory";
-import { say } from "./agent-comms";
 import { skillsFor, skillsPreamble } from "./agent-skills";
 import { notify, esc } from "./telegram";
 import { logger } from "./logger";
@@ -154,15 +153,8 @@ async function coachOne(userId: number, p: Performance, manager: typeof botEmplo
   }
   if (rules.length === 0) return null;
 
-  for (const rule of rules) await remember(userId, p.role, "instruction", rule);
-
-  // Told to them as well as stored: a rule that appears in their memory with
-  // no explanation is an order from nowhere, and the manager saying it is what
-  // makes her a manager rather than a config file.
-  await say({
-    userId, fromRole: COACH_ROLE, toRole: p.role, kind: "directive",
-    body: [`راجعت أداءك هذا الأسبوع. من الآن:`, ...rules.map((r) => `- ${r}`)].join("\n"),
-  }).catch(() => {});
+  // كتبها نموذج: تبقى معلّقة حتى يعتمدها صاحب العمل.
+  for (const rule of rules) await remember(userId, p.role, "instruction", rule, undefined, { pending: true });
 
   return { role: p.role, name: p.name, rules, note };
 }

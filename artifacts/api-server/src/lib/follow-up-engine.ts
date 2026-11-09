@@ -25,6 +25,7 @@ import {
   type FollowUpStep,
 } from "@workspace/db";
 import { logger } from "./logger";
+import { beat } from "./org/runtime";
 import { isWithinSendingHours, fixGreeting } from "./sending-hours";
 import { getDailyRemaining } from "./daily-limit";
 import { classify, INTENT_LABELS_AR, type Intent } from "./intent";
@@ -513,6 +514,8 @@ async function autoReplyIfAppropriate(
     if (shop?.photo && shop.piece && ["piece", "ad_lead", "photo", "interested", "weight_price"].includes(answer.reading?.situation ?? "")) {
       await sendMessage(userId, phone, shop.photo.caption, "image", shop.photo.path, undefined, undefined, { kind: "reply" }).catch((err) => logger.warn({ userId, phone, err: String(err?.message ?? err).slice(0, 120) }, "تعذّر إرسال صورة القطعة"));
     }
+    // ردٌّ خرج: نبض الموظف الذي كتبه. لا موعد له، فلا «تأخّر» إن لم يكتب أحد.
+    await beat(userId, routing?.agent.role ?? "sales", { kind: "auto_reply" });
     await logAutoReply({ userId, phone, incoming: text, reply: answer.reply, provider: answer.provider, kbIds: answer.kbIds, intent, agentRole: routing?.agent.role, quality: answer.quality, reading: answer.reading });
     // They declined and we closed politely: nobody follows them up after this.
     if (answer.reading?.closes) {

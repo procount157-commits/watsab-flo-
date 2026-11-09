@@ -43,6 +43,8 @@ import { runDesk, type DeskReport } from "../data-desk/desk";
 import { evaluateDesk, evaluationFacts, type Evaluation } from "../team/evaluate";
 import { verdictFor } from "./service";
 import { accountHalted } from "../org/controls";
+import { runAs } from "../org/runtime";
+import { directiveFrom, issueDirectives } from "../org/handoffs";
 
 /** الإصلاحات التي يأذن بها المدير بلا رجوع: كلها تُعيد السجل إلى ما حدث فعلاً. */
 const SAFE_REPAIRS: Array<NonNullable<LedgerFinding["repair"]>> = ["resync_counters", "cancel_orphans", "mark_bounced", "restore_policy_rejected"];
@@ -280,7 +282,11 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
   // المدير موظف: إن أوقفه صاحب العمل توقّفت حلقته، وبقي الطيار كما كان.
   await ensureEmailTeam(userId);
   if (!(await onDuty(userId, "email_manager")) && !opts.force) return null;
+  // الحلقة سألت مفتاح الحساب، والتشغيل اليدوي قرار صاحب العمل: كما كان.
+  return runAs(userId, "email_manager", { kind: "manager_cycle", respect: "none" }, () => managerCycle(userId, opts));
+}
 
+async function managerCycle(userId: number, opts: { brief?: boolean; notifyOwner?: boolean; force?: boolean }): Promise<CycleResult | null> {
   const staffing = await staff(userId);
   if (staffing.hired.length) await activity(userId, "email_manager", "hire", `عيّنتُ: ${staffing.hired.join("، ")}.`);
 
@@ -313,11 +319,11 @@ export async function runManagerCycle(userId: number, opts: { brief?: boolean; n
   const o = results.overall;
   await tell(userId, "email_analyst", "email_manager", "report",
     `حكمي على آخر ${results.days} يوماً: ${o.sent} شركة راسلناها، ${o.positive} ردّاً نافعاً، ارتداد ${o.bounceRate}٪${o.rejected ? `، والمزوّد رفض ${o.rejected} رسالة` : ""}. ${results.decisions.length ? results.decisions.slice(0, 2).map((d) => d.text).join(" ") : "لا قرار جديد: العيّنات لم تكتمل."}`);
-  for (const a of results.angles.filter((x) => x.verdict === "scale" || x.verdict === "rewrite").slice(0, 2)) {
-    await tell(userId, "email_analyst", "email", "directive", `زاوية «${a.label}»: ${VERDICT_AR[a.verdict].label} — ${a.why}. ${a.verdict === "scale" ? "اكتبي القادم لقطاعها على نمطها." : "لا تعيدي صياغتها: غيّري المدخل كله."}`);
-  }
-  if (goal) await tell(userId, "email_manager", "email_strategist", "directive",
-    `خطة هذه الدورة: ${goal.plan.perDay} شركة في اليوم، وموجة بحجم ${goal.plan.waveSize ?? "—"}. النسبة الآن AML ${Math.round(mixShare(results.mix.state).aml * 100)}٪ والمستهدف ${MIX.aml * 100}٪.${results.avoidAngles.length ? ` تجنّبي زوايا حكم عليها جاسم بالفشل (${results.avoidAngles.length}).` : ""}`);
+  // توجيه منصور مهمةٌ يقرؤها الكود: سلمى في اختيار الموجة أدناه، ونورة في prompt كتابتها.
+  // كان رسالةً في agent_messages لا يقرؤها أي prompt في البريد.
+  await issueDirectives(userId, directiveFrom(results, goal ? { perDay: goal.plan.perDay, waveSize: goal.plan.waveSize } : null)).catch((err) => {
+    logger.warn({ userId, err: String(err?.message ?? err) }, "توجيه المدير لم يُكتب");
+  });
 
   // ٤ب · التقييم — درجةٌ لكل موظف من أرقامه، ومهمةٌ تصله من المدير.
   const evaluations = await evaluateDesk(userId, {

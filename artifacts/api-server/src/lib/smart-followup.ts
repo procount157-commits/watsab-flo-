@@ -50,6 +50,7 @@ import { getDailyRemaining } from "./daily-limit";
 import { assertCanSend } from "./plans";
 import { sendMessage, getStatus } from "./whatsapp";
 import { logger } from "./logger";
+import { runAs } from "./org/runtime";
 import { receipt } from "./graph/receipts";
 import { dialectOf, dialectLine } from "./reply-brain";
 import { shopContext } from "./catalog/shop-context";
@@ -1239,7 +1240,7 @@ export function startSmartFollowUps() {
     const users = await db.execute(sql`SELECT user_id FROM business_profile WHERE smart_followup <> 'off' AND NOT team_paused`).catch(() => ({ rows: [] }));
     for (const u of users.rows as Array<{ user_id: number }>) {
       if (await accountHalted(u.user_id, "smart_followup")) continue;
-      await runSmartFollowUps(u.user_id).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "smart follow-up round failed"));
+      await runAs(u.user_id, "followup", { kind: "smart_followup", respect: "none" }, () => runSmartFollowUps(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "smart follow-up round failed"));
     }
   };
   setTimeout(() => void run(), 3 * 60_000).unref();

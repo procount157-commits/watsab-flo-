@@ -32,6 +32,7 @@ import { isConfigured } from "./provider";
 import { activity, onDuty } from "./team";
 import { logger } from "../logger";
 import { accountHalted } from "../org/controls";
+import { runAs } from "../org/runtime";
 
 const n = (x: number) => x.toLocaleString("en");
 
@@ -67,6 +68,10 @@ export async function caretakerRound(userId: number) {
   const s = await getSettings(userId);
   if (!isConfigured(s)) return { ran: false };
   if (!(await onDuty(userId, "email_guard"))) return { ran: false };
+  return (await runAs(userId, "email_guard", { kind: "caretaker_round", respect: "none" }, () => caretakerWork(userId, s!))) ?? { ran: false };
+}
+
+async function caretakerWork(userId: number, s: NonNullable<Awaited<ReturnType<typeof getSettings>>>) {
   const fixed: string[] = [], owner: string[] = [];
 
   // 1. Mail servers nobody has asked about yet.

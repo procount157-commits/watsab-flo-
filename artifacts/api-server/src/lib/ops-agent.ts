@@ -30,6 +30,7 @@ import { getDailySentCount, getEffectiveDailyLimit, numberAgeDays, engagement7d 
 import { scoreRisk, RISK_LEVEL_AR, type RiskSignals } from "./risk";
 import { complete } from "./llm";
 import { logger } from "./logger";
+import { runAs } from "./org/runtime";
 import { say } from "./agent-comms";
 import { skillsFor, skillsPreamble } from "./agent-skills";
 import { asWorker } from "./agent-context";
@@ -433,7 +434,8 @@ export function startOpsAgent(): void {
   const sweep = async () => {
     try {
       for (const { userId } of waManager.allStates()) {
-        await runOpsAgent(userId).catch((err) =>
+        // معفى من المفاتيح عمداً (AUDIT-P0): عين صاحب العمل عند الإيقاف بالذات.
+        await runAs(userId, OPS_ROLE, { kind: "ops_sweep", respect: "none" }, () => runOpsAgent(userId)).catch((err) =>
           logger.error({ userId, err: String(err?.message ?? err) }, "فشلت جولة مسؤول التشغيل"));
       }
     } catch (err) {

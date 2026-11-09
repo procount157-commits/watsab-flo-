@@ -272,6 +272,8 @@ export const emailMessagesTable = pgTable("email_messages", {
   repliedAt:     timestamp("replied_at", { withTimezone: true }),
   bouncedAt:     timestamp("bounced_at", { withTimezone: true }),
   error:         text("error"),
+  /** رسالةٌ أقدم من أسبوع لا تخرج إلا بعد مراجعة صاحب العمل (lib/org/queue.ts). */
+  staleReleasedAt: timestamp("stale_released_at", { withTimezone: true }),
   createdAt:     timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("idx_email_messages_queue").on(t.userId, t.status, t.createdAt),
@@ -393,6 +395,8 @@ export interface SegmentFilter {
   take?: number;
   /** عناوين الأقسام (info@، sales@) قبل عناوين الأشخاص: ترتدّ أقل بأربعة أضعاف في بيانات هذا الحساب. */
   roleFirst?: boolean;
+  /** موجةٌ عادية: لا تمسّ نطاق شركةٍ حجزها مكتب الحسابات لرسالةٍ شخصية (lib/org/queue.ts). */
+  notReserved?: boolean;
 }
 
 // ── What the owner taught the email section ──────────────────────

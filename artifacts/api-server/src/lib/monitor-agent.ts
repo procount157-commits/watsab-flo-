@@ -22,6 +22,7 @@ import { waManager } from "./whatsapp";
 import { assessAccountHealth } from "./delivery-health";
 import { getDailySentCount, getEffectiveDailyLimit } from "./daily-limit";
 import { logger } from "./logger";
+import { runAs } from "./org/runtime";
 
 export const MONITOR_INTERVAL_MS = 20 * 60_000;
 
@@ -282,7 +283,7 @@ async function watchedUsers(): Promise<number[]> {
 
 export async function runMonitorSweep() {
   for (const userId of await watchedUsers()) {
-    await runMonitorFor(userId).catch((err) => logger.warn({ err, userId }, "monitor run failed"));
+    await runAs(userId, "monitor", { kind: "monitor_sweep", respect: "none" }, () => runMonitorFor(userId)).catch((err) => logger.warn({ err, userId }, "monitor run failed"));
   }
 }
 

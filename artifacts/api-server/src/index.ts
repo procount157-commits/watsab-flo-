@@ -54,6 +54,10 @@ import { startOrganizing } from "./lib/organize";
 import { startEngineerRounds } from "./lib/graph/engineer";
 import { ensureOrgTables } from "./lib/org/schema";
 import { startGateFlusher } from "./lib/org/gateway";
+import { backfillRegistry } from "./lib/org/registry";
+import { registerOrgHandlers } from "./lib/org/handoffs";
+import { startTaskWorker } from "./lib/org/tasks";
+import { startWatchdog } from "./lib/org/watchdog";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -144,6 +148,12 @@ function startListening() {
 
     logger.info({ port }, "Server listening");
     startGateFlusher();
+    // تشغيل الموظفين: المفاتيح الثابتة، طابور المهام، والحارس.
+    registerOrgHandlers();
+    startTaskWorker();
+    startWatchdog();
+    // بعد أن يوظّف كلٌّ فريقه (ensureEmailAgent بعد ٢٥ ثانية).
+    setTimeout(() => void backfillRegistry().catch((err) => logger.warn({ err: String(err?.message ?? err) }, "تعذّر ملء سجل الموظفين")), 45_000);
 
     // Restore all saved WhatsApp sessions from DB — no QR needed after restart or deployment
     void restoreAllSessions();

@@ -35,6 +35,8 @@ import { warmupCap } from "./health";
 import { activity, guardCheck, formatIssues, repairDraft, onDuty, tooSimilar, leadOf, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
 import { accountHalted } from "../org/controls";
+import { beat, runAs } from "../org/runtime";
+import { recordQualityFeedback } from "../org/handoffs";
 
 async function log(missionId: number, text: string, kind = "note") {
   await db.insert(emailMissionLogTable).values({ missionId, kind, text: text.slice(0, 2000) });
@@ -273,6 +275,8 @@ export async function runMission(m: EmailMission): Promise<void> {
         ...(twin ? [`نص شبه مطابق لموجة سابقة: «${twin.slice(0, 80)}…»`] : []),
       ];
       if (issues.length) {
+        // وما رفضه ماجد يصل كاتبه في الكتابة التالية، مرةً لكل عيب.
+        await recordQualityFeedback(m.userId, role, issues, { missionId: m.id }).catch(() => {});
         // The owner asked for everything to run by itself: what ماجد finds goes
         // back to the writer, twice, before it is the owner's to read.
         const holds = Number(((await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM email_mission_log WHERE mission_id = ${m.id} AND text LIKE 'أوقفها حارس الجودة%'`)).rows[0] as any)?.n ?? 0);
@@ -437,11 +441,21 @@ async function finish(m: EmailMission) {
 export async function runMissions(): Promise<void> {
   const active = await db.select().from(emailMissionsTable)
     .where(and(eq(emailMissionsTable.status, "active"), sql`(${emailMissionsTable.stage} in ('draft','sending','following_up') or (${emailMissionsTable.stage} = 'awaiting_approval' and not ${emailMissionsTable.requireApproval}))`));
-  for (const m of active) {
-    if (await accountHalted(m.userId, "email_missions")) continue;
-    try { await runMission(m); }
-    catch (err) { await log(m.id, `خطأ: ${String((err as any)?.message ?? err).slice(0, 300)}`, "error").catch(() => {}); }
+  const byUser = new Map<number, EmailMission[]>();
+  for (const m of active) byUser.set(m.userId, [...(byUser.get(m.userId) ?? []), m]);
+  for (const [userId, missions] of byUser) {
+    if (await accountHalted(userId, "email_missions")) continue;
+    await runAs(userId, "email", { kind: "mission_sweep", respect: "none" }, async () => {
+      for (const m of missions) {
+        try { await runMission(m); }
+        catch (err) { await log(m.id, `خطأ: ${String((err as any)?.message ?? err).slice(0, 300)}`, "error").catch(() => {}); }
+      }
+      return missions.length;
+    }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err) }, "جولة المهام تعذّرت"));
   }
+  // مرّ ولم يجد مهمة: العامل حي، وهذا ليس غياباً. ولمن له مُرسِل مضبوط فقط.
+  const idle = await db.execute<{ user_id: number }>(sql`SELECT user_id FROM email_settings WHERE from_email IS NOT NULL`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
+  for (const u of idle.rows) if (!byUser.has(Number(u.user_id))) await beat(Number(u.user_id), "email", { kind: "mission_sweep_empty" });
 }
 
 export function startMissionWorker(): void {

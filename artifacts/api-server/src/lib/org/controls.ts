@@ -13,6 +13,9 @@ import { logger } from "../logger";
 import { currentAgent } from "../agent-context";
 import { offDuty } from "../graph/switch";
 import { ensureOrgTables } from "./schema";
+import { departmentOf, employeeNames, haltNames } from "./departments";
+
+export { departmentOf };
 
 export const SCOPES = ["global", "account", "channel", "department", "employee"] as const;
 export type Scope = (typeof SCOPES)[number];
@@ -39,18 +42,6 @@ export const CLEAR: Halt = { halted: false, scope: null, reason: null };
 export const UNAVAILABLE: Halt = { halted: true, scope: "controls", reason: "controls unavailable" };
 export const isUnavailable = (h: Halt) => h.scope === "controls";
 
-const BY_ROLE: Array<[RegExp, string]> = [
-  [/^email($|_)/, "email"],
-  [/^accounts_/, "accounts"],
-  [/^(ig|tt|li)_|^social_/, "social"],
-  [/^(sales|support|followup|wa_|groups|intake|chat_lead|vetter)/, "whatsapp"],
-];
-/** قسم الموظف من دوره. Pure. دورٌ لا يُعرف قسمه لا يُوقفه مفتاح قسم، ويوقفه مفتاحه هو. */
-export function departmentOf(role: string | null | undefined): string | null {
-  if (!role) return null;
-  for (const [re, d] of BY_ROLE) if (re.test(role)) return d;
-  return "operations";
-}
 /** القسم الذي تنتمي إليه القناة نفسها، فمفتاح قسم البريد يوقف البريد أيّاً كان مرسله. Pure. */
 export const departmentOfChannel = (channel: string): string => (channel === "email" || channel === "whatsapp" ? channel : "social");
 
@@ -78,13 +69,15 @@ export function decideHalt(rows: ControlRow[], q: HaltQuery, legacy: { teamPause
     const c = on.find((r) => r.scope === "channel" && r.target === q.channel && mine(r));
     if (c) return { halted: true, scope: "channel", reason: why(c, `قناة ${q.channel} موقوفة`) };
   }
-  const depts = (Array.isArray(q.department) ? q.department : [q.department]).filter((d): d is string => !!d);
+  // كل الأسماء من خريطةٍ واحدة (departments.ts)، فأي نقطة تسأل هنا — complete وgateSend وrunAs — تتوقف بالاسم نفسه.
+  const depts = [...new Set([...(Array.isArray(q.department) ? q.department : [q.department]), q.channel, ...haltNames(q.role)].filter((d): d is string => !!d))];
   if (depts.length) {
     const d = on.find((r) => r.scope === "department" && depts.includes(r.target) && mine(r));
     if (d) return { halted: true, scope: "department", reason: why(d, `قسم ${d.target} موقوف`) };
   }
   if (q.role) {
-    const e = on.find((r) => r.scope === "employee" && r.target === q.role && mine(r));
+    const names = employeeNames(q.role);
+    const e = on.find((r) => r.scope === "employee" && names.includes(r.target) && mine(r));
     if (e) return { halted: true, scope: "employee", reason: why(e, "الموظف موقوف") };
     if (legacy.employeeOff) return { halted: true, scope: "employee", reason: "الموظف موقوف", legacy: true };
   }

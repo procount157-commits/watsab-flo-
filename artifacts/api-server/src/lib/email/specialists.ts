@@ -27,6 +27,8 @@ import { opensReport } from "./opens";
 import { trackingState } from "./public-url";
 import { resultsReport, resultsFacts } from "./results";
 import { accountHalted } from "../org/controls";
+import { runAs } from "../org/runtime";
+import { handoffRetarget, handoffReviewResults, handoffSubjectGuidance, replyOutcomeFacts } from "../org/handoffs";
 
 export type SpecialistRole = "email_registrar" | "email_data" | "email_retarget" | "email_opens" | "email_analyst";
 
@@ -82,7 +84,9 @@ export async function factsFor(userId: number, role: SpecialistRole): Promise<{ 
     }
     case "email_analyst": {
       const r = await resultsReport(userId);
-      return { raw: r, text: resultsFacts(r) };
+      // ما سجّلته ليلى من ردود، بالزاوية: يُقرأ هنا، فالتسليم يصل من يحكم.
+      const replies = await replyOutcomeFacts(userId).catch(() => [] as string[]);
+      return { raw: r, text: [resultsFacts(r), ...replies].join("\n") };
     }
     case "email_opens": {
       const o = await opensReport(userId);
@@ -136,18 +140,35 @@ export async function runSpecialist(userId: number, role: SpecialistRole, opts: 
     logger.info({ userId, role }, "أخصائي موقوف — تُخطّى دورته");
     return null;
   }
+  try {
+    return await runAs(userId, role, { kind: "specialist_report" }, () => specialistRun(userId, role, opts));
+  } catch (err) {
+    if (err instanceof NoAnswer) { logger.warn({ userId, role }, "الأخصائي لم يستجب"); return null; }
+    throw err;
+  }
+}
+
+/** لم يرد نموذج: جولةٌ فشلت في النبض، وnull للمستدعي كما كان. */
+class NoAnswer extends Error { constructor() { super("لم يرد أي نموذج"); } }
+
+/** ما يسلّمه الأخصائي للتالي. محسوبٌ من وقائعه لا من نص النموذج، فانقطاع النموذج لا يقطع السلسلة. */
+async function handOn(userId: number, role: SpecialistRole, raw: any): Promise<void> {
+  if (role === "email_analyst") await handoffReviewResults(userId, raw);
+  if (role === "email_opens") await handoffSubjectGuidance(userId, raw);
+  if (role === "email_retarget") await handoffRetarget(userId, raw?.plans ?? []);
+}
+
+async function specialistRun(userId: number, role: SpecialistRole, opts: { notifyOwner?: boolean }): Promise<SpecialistReport> {
   const spec = SPECIALISTS[role];
   const [voice, facts] = await Promise.all([teamVoice(userId, role), factsFor(userId, role)]);
+  await handOn(userId, role, facts.raw).catch((err) => logger.warn({ userId, role, err: String(err?.message ?? err) }, "تسليم أخصائي تعذّر"));
 
   const out = await asAgent(userId, role, () => complete([
     { role: "system", content: [voice, "", LIMITS, "", SHAPE].join("\n") },
     { role: "user", content: [`السؤال: ${spec.question}`, "", "وقائعك اليوم:", facts.text].join("\n") },
   ], 60_000));
 
-  if (!out?.text) {
-    logger.warn({ userId, role }, "الأخصائي لم يستجب");
-    return null;
-  }
+  if (!out?.text) throw new NoAnswer();
   const grab = (re: RegExp) => re.exec(out.text)?.[1]?.trim() ?? "";
   const verdict = grab(/الحكم\s*[:：]\s*(.+)/);
   const top = grab(/الأهم\s*[:：]\s*(.+)/);

@@ -28,6 +28,7 @@ import { notify, esc } from "./telegram";
 import { say } from "./agent-comms";
 import { receipt } from "./graph/receipts";
 import { logger } from "./logger";
+import { runAs } from "./org/runtime";
 import { runDeskAll, type DeskReport } from "./data-desk/desk";
 import { bucketOf, BUCKET_AR, targetsBrief, type Bucket } from "./data-desk/classify";
 import { evaluateDesk, evaluationFacts, type Evaluation } from "./team/evaluate";
@@ -312,7 +313,7 @@ export function startWaManagerLoop(): void {
       const userId = Number(u.user_id);
       if (await accountHalted(userId, "wa_manager")) continue;
       const due = Date.now() - (lastBrief.get(userId) ?? 0) > 20 * 3_600_000;
-      const r = await runWaManagerCycle(userId, { brief: due, notifyOwner: due }).catch((err) => { logger.warn({ userId, err: String(err?.message ?? err) }, "دورة مديرة الواتساب تعذّرت"); return null; });
+      const r = await runAs(userId, WA_MANAGER_ROLE, { kind: "wa_manager_cycle", respect: "none" }, () => runWaManagerCycle(userId, { brief: due, notifyOwner: due })).catch((err) => { logger.warn({ userId, err: String(err?.message ?? err) }, "دورة مديرة الواتساب تعذّرت"); return null; });
       if (r?.brief) lastBrief.set(userId, Date.now());
     }
   };

@@ -36,6 +36,7 @@ import { AUTOPILOT_MARK, AUTOPILOT_FOLDER } from "./folders";
 import { TARGETS, MIX } from "./email/policy";
 import { pieceUrl, shopName } from "./catalog/floret";
 import { logger } from "./logger";
+import { runAs } from "./org/runtime";
 import { parseLoose } from "./loose-json";
 import { strictSector } from "./email/sector";
 import { WA_DOCTRINE } from "./wa-doctrine";
@@ -439,7 +440,7 @@ export function startWaAutopilot(): void {
   if (timer) return;
   const run = async () => {
     const rows = await db.select({ userId: waAutopilotTable.userId }).from(waAutopilotTable).where(eq(waAutopilotTable.enabled, true)).catch(() => []);
-    for (const r of rows) if (!(await accountHalted(r.userId, "wa_autopilot"))) await runCycle(r.userId).catch((err) => logger.warn({ userId: r.userId, err: String(err?.message ?? err) }, "دورة طيار واتساب تعذّرت"));
+    for (const r of rows) if (!(await accountHalted(r.userId, "wa_autopilot"))) await runAs(r.userId, WRITER_ROLE, { kind: "wa_autopilot_cycle", respect: "none" }, () => runCycle(r.userId)).catch((err) => logger.warn({ userId: r.userId, err: String(err?.message ?? err) }, "دورة طيار واتساب تعذّرت"));
   };
   setTimeout(() => void run(), 3 * 60_000).unref();
   timer = setInterval(() => void run(), 30 * 60_000);

@@ -9,11 +9,13 @@
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db, accountsDeskSettingsTable, targetAccountsTable, targetPeopleTable, emailAgentActivityTable, type TargetAccount, type TargetPerson } from "@workspace/db";
 import { logger } from "../logger";
-import { FREE_MAIL } from "../email/service";
+import { COMPANY_GAP_DAYS, FREE_MAIL } from "../email/service";
 import { ACCOUNTS_TEAM, ensureAccountsTeam, deskActivity, nameOf } from "./team";
-import { processAccount } from "./pipeline";
+import { ACCOUNTS_WORKFLOW, processAccount } from "./pipeline";
 import { rankCandidates, shortCompany, dubaiNow, linkedinSearchUrl, type CandidateRow } from "./pure";
 import { accountHalted } from "../org/controls";
+import { runAs } from "../org/runtime";
+import { finishWorkflow, openWorkflowFor, workflowStep } from "../org/handoffs";
 
 // ── الجداول عند الإقلاع ────────────────────────────────────────────
 export const DESK_TABLES_SQL = [
@@ -94,11 +96,13 @@ export async function candidates(userId: number, sectors: string[], emirates: st
       SELECT lower(split_part(email, '@', 2)) AS domain, count(*)::int AS addresses,
         mode() WITHIN GROUP (ORDER BY company) AS company, mode() WITHIN GROUP (ORDER BY city) AS city, max(sector) AS sector,
         bool_or(last_opened_at IS NOT NULL) AS opened, bool_or(last_replied_at IS NOT NULL) AS replied,
-        bool_or(status IN ('unsubscribed', 'complained')) AS stopped, bool_or(status = 'active') AS any_active
+        bool_or(status IN ('unsubscribed', 'complained')) AS stopped, bool_or(status = 'active') AS any_active, max(last_sent_at) AS last_sent
       FROM email_contacts WHERE user_id = ${userId} AND sector IN (${secs})
       GROUP BY 1)
     SELECT d.* FROM d
     WHERE NOT d.replied AND NOT d.stopped AND d.any_active AND d.domain LIKE '%.%' AND d.domain NOT IN (${free})
+      -- موجةٌ خرجت إليها قبل أيام تؤخّر الرسالة الشخصية بفاصل الشركة: تُختار حين ينقضي.
+      AND (d.last_sent IS NULL OR d.last_sent < now() - make_interval(days => ${COMPANY_GAP_DAYS}))
       AND NOT EXISTS (SELECT 1 FROM target_accounts t WHERE t.user_id = ${userId} AND t.domain = d.domain)
       AND NOT EXISTS (SELECT 1 FROM email_inbound i WHERE i.user_id = ${userId} AND lower(split_part(i.from_email, '@', 2)) = d.domain)`)).rows;
   const clicked = new Set((await db.execute<{ domain: string }>(sql`
@@ -127,7 +131,7 @@ export async function startRun(userId: number, opts: { manual: boolean }): Promi
   const remaining = Math.max(0, s.perDay - Number(n) - stale.filter((x) => x.runDate === today).length);
   if (!remaining && !stale.length) return { started: false, why: `اكتملت شركات اليوم (${s.perDay})` };
   running.add(userId);
-  void runDesk(userId, s, remaining, stale, opts.manual).catch((e) => logger.warn({ userId, err: String(e?.message ?? e) }, "مكتب الحسابات: التشغيل فشل"))
+  void runAs(userId, "accounts_researcher", { kind: "desk_run", respect: "none" }, () => runDesk(userId, s, remaining, stale, opts.manual)).catch((e) => logger.warn({ userId, err: String(e?.message ?? e) }, "مكتب الحسابات: التشغيل فشل"))
     .finally(() => running.delete(userId));
   return { started: true };
 }
@@ -190,6 +194,11 @@ export async function syncAccounts(userId?: number) {
     if (replied && a.status === "sent") v.status = "replied";
     if (!Object.keys(v).length) continue;
     await db.update(targetAccountsTable).set({ ...v, updatedAt: new Date() }).where(eq(targetAccountsTable.id, a.id));
+    // خرجت فعلاً: هنا فقط يكتمل سير الشركة. دخول الطابور ليس إرسالاً.
+    if (v.sentAt) {
+      const wf = await openWorkflowFor(a.userId, ACCOUNTS_WORKFLOW, a.id).catch(() => null);
+      if (wf) { await workflowStep(a.userId, wf, "email_queue", "delivered", { sentAt: v.sentAt }); await finishWorkflow(wf, "succeeded", { status: "sent", sentAt: v.sentAt }); }
+    }
     if (v.status === "replied") await deskActivity(a.userId, "accounts_writer", "replied", `ردّ صاحب القرار في ${a.company} على رسالة هند.`, { accountId: a.id });
   }
 }

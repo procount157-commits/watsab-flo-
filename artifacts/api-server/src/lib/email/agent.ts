@@ -31,6 +31,7 @@ import { teamVoice, onDuty, type EmailRole } from "./team";
 import { asLanguage, languageRule } from "./language";
 import { INTENSITY, FOLLOW_PROMPT, asIntensity } from "./intensity";
 import { isShop } from "./seed";
+import { markUsed, writerGuidance } from "../org/handoffs";
 
 export const EMAIL_ROLE = "email";
 const KNOWLEDGE = "knowledge";
@@ -61,12 +62,13 @@ export async function rememberKnowledge(userId: number, content: string, topic: 
   `);
 }
 
-export async function rememberLesson(userId: number, kind: "win" | "loss" | "instruction", content: string, topic: string | null) {
+/** `pending`: نصٌّ كتبه نموذج لا حسبه كود. يبقى معلّقاً ولا يصل أي prompt حتى يُعتمد. */
+export async function rememberLesson(userId: number, kind: "win" | "loss" | "instruction", content: string, topic: string | null, opts: { pending?: boolean } = {}) {
   const text = content.trim().slice(0, 500);
   if (!text) return;
   await db.execute(sql`
-    INSERT INTO agent_memory (user_id, role, kind, content, topic)
-    VALUES (${userId}, ${EMAIL_ROLE}, ${kind}, ${text}, ${topic})
+    INSERT INTO agent_memory (user_id, role, kind, content, topic, approval_status)
+    VALUES (${userId}, ${EMAIL_ROLE}, ${kind}, ${text}, ${topic}, ${opts.pending ? "pending" : "approved"})
     ON CONFLICT (user_id, role, kind, md5(content))
     DO UPDATE SET times = agent_memory.times + 1, updated_at = NOW()
   `);
@@ -106,7 +108,7 @@ export function overlap(text: string, words: string[]): number {
  */
 export async function brief(userId: number, sectors: string[] = [], budget = 3500, opts: { lessons?: boolean; query?: string } = {}) {
   const rows = await db.select().from(agentMemoryTable)
-    .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, EMAIL_ROLE),
+    .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, EMAIL_ROLE), eq(agentMemoryTable.approvalStatus, "approved"),
       sectors.length ? or(isNull(agentMemoryTable.topic), inArray(agentMemoryTable.topic, sectors))! : sql`true`))
     .orderBy(desc(agentMemoryTable.times), desc(agentMemoryTable.updatedAt));
   const words = queryWords(opts.query ?? "");
@@ -353,6 +355,8 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
   const audience = { description: describe(input.filter), count: n, sample };
   const lessons = await lessonsFor(userId, input.role ?? "email", input.goal).catch(() => "");
   const more = await companyKnowledge(userId, `${input.goal} ${sectors.join(" ")}`, { limit: 3, exclude: ["kb", "docs", "facts"] }).catch(() => []);
+  // ما سلّمه الفريق للكاتب: توجيه منصور، عناوين حصّة، وما أوقفه ماجد.
+  const guidance = await writerGuidance(userId, input.role ?? "email").catch(() => ({ block: "", taskIds: [] as number[] }));
 
   const out = await asAgent(userId, input.role ?? "email", () => complete([
     { role: "system", content: [
@@ -371,6 +375,7 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
       (input.role ?? "email") === "email_followup" ? FOLLOWUP_CRAFT : "المتابعات [متابعة] أدناه: كلٌّ تحمل شيئاً لم يكن في الرسالة الأولى، أقصر منها، بطلبٍ واحد — وبلا «just following up» ولا «checking in» ولا اعتذار عن المتابعة.",
       "",
       priorWavesBlock(input.priorWaves, input.angle, input.usedAngles),
+      guidance.block,
       "",
       // One complete, valid answer: a weak model copies a shape far more reliably than it follows a description of one.
       WRITER_EXAMPLE,
@@ -429,6 +434,8 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
   if (!out?.text) return null;
   const draft = parseDraft(out.text);
   if (!draft) { logger.warn({ userId, sample: out.text.slice(0, 300) }, "مسودة نورة لم تُقرأ"); return null; }
+  // كُتبت بها فعلاً: الآن فقط تُعدّ مستعملة.
+  for (const id of guidance.taskIds) await markUsed(userId, id, { by: input.role ?? "email", subject: draft.subjects[0] ?? null }).catch(() => {});
   // A button's link: WhatsApp with the request written, else the website, else a reply.
   const s = await getSettings(userId).catch(() => null);
   const wa = (s?.phone ?? "").replace(/\D/g, "");
@@ -462,7 +469,8 @@ export async function learnFrom(userId: number, sectors: string[], report: unkno
   const lessons = (out?.text ?? "").split("\n").map((l) => /الدرس\s*[:：]\s*(.+)/.exec(l)?.[1]?.trim()).filter((x): x is string => !!x).slice(0, 4);
   // A model's reading of a report is a win or a loss, never an «instruction»:
   // that kind is rendered as the owner's own order («التزم بها حرفياً»).
-  for (const l of lessons) await rememberLesson(userId, lessonKind(l), l, sectors.length === 1 ? sectors[0]! : null);
+  // والنص نصّ نموذج ولو قرأ أرقاماً صحيحة: معلّقٌ حتى يُعتمد. دروس المدير والعنوان محسوبةٌ بالكود فتمرّ.
+  for (const l of lessons) await rememberLesson(userId, lessonKind(l), l, sectors.length === 1 ? sectors[0]! : null, { pending: true });
   return lessons;
 }
 

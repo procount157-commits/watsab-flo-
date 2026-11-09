@@ -45,6 +45,8 @@ r = await startCampaign(USER, camp!.id);
 check("starting again does not double up", r.queued === 0);
 
 // ── A subject test ───────────────────────────────────────────────
+// The first campaign is over: a company in an active campaign does not enter a second one.
+await db.update(emailCampaignsTable).set({ status: "completed" }).where(eq(emailCampaignsTable.id, camp!.id));
 const [ab] = await db.insert(emailCampaignsTable).values({ userId: USER, name: "اختبار عنوان", listId: list!.id, subject: "A", subjectB: "B", abPct: 20, abWaitHours: 1, html: "<p>x</p>" }).returning();
 await startCampaign(USER, ab!.id);
 const abMsgs = await db.select().from(emailMessagesTable).where(eq(emailMessagesTable.campaignId, ab!.id));

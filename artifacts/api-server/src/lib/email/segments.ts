@@ -8,6 +8,7 @@ import { and, eq, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "d
 import { notFromFailedFile } from "./bounce-guard";
 import { db, emailContactsTable, emailListMembersTable, emailListsTable, type SegmentFilter } from "@workspace/db";
 import { UNCLASSIFIED } from "./sector";
+import { reservedDomains } from "../org/queue";
 
 export const ENGAGEMENT: Record<string, string> = {
   never_sent: "لم يُراسَل بعد",
@@ -31,6 +32,7 @@ export function conditions(userId: number, f: SegmentFilter = {}): SQL[] {
   if (f.cities?.length) out.push(inArray(c.city, f.cities));
   if (f.statuses?.length) out.push(inArray(c.status, f.statuses));
   if (f.hasPhone) out.push(isNotNull(c.phone));
+  if (f.notReserved) out.push(sql`lower(split_part(${c.email}, '@', 2)) NOT IN ${reservedDomains(userId)}`);
   if (f.listIds?.length) {
     // A list that no longer exists (the lists are rebuilt by sector and
     // emirate) narrows nothing: the mission keeps its sector and its rules,
@@ -84,6 +86,7 @@ export function cleanFilter(raw: any): SegmentFilter {
   if (num(raw?.maxTouches, 20)) f.maxTouches = num(raw.maxTouches, 20);
   if (num(raw?.take, 5000)) f.take = num(raw.take, 5000);
   if (raw?.roleFirst === true) f.roleFirst = true;
+  if (raw?.notReserved === true) f.notReserved = true;
   return f;
 }
 

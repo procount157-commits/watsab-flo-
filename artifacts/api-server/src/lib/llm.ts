@@ -15,7 +15,7 @@
 // With none set, callers fall back to answering from the knowledge base
 // directly, which needs no network at all.
 
-import { currentAgent, routedAgent } from "./agent-context";
+import { currentAgent, currentMeter, routedAgent } from "./agent-context";
 import { and, eq } from "drizzle-orm";
 import { db, llmSettingsTable } from "@workspace/db";
 import { logger } from "./logger";
@@ -452,6 +452,8 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000, opts?
   }
   if (!who) noteUnattributedCall();
   const out = await completeInner(messages, timeoutMs, opts);
+  const meter = currentMeter();
+  if (meter) { meter.calls++; meter.tokensIn += tokensOf(charsIn); meter.tokensOut += tokensOf(out?.text.length ?? 0); meter.model = out?.provider ?? meter.model; }
   if (who) receipt({
     userId: who.userId, node: who.role, action: "llm.call", status: out ? "ok" : "failed",
     model: out?.provider ?? null, tokensIn: tokensOf(charsIn), tokensOut: tokensOf(out?.text.length ?? 0), durationMs: Date.now() - t0,

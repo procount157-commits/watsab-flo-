@@ -23,6 +23,7 @@ import { skillsFor, skillsPreamble } from "../agent-skills";
 import { seedSkills } from "../skills";
 import { briefFor, briefLines, noteMessage, teach } from "./training";
 import { logger } from "../logger";
+import { runAs } from "../org/runtime";
 import { corePrompt } from "../prompt-core";
 import type { ParsedGroupMessage } from "./store";
 
@@ -137,7 +138,7 @@ const line = (m: any) => `${who(m)}: ${m.text || (m.msgType === "document" ? `[Ø
 
 /** Her suggestion for what was last said in the group, or nothing when we spoke last or it needs no answer. */
 export async function suggestFor(userId: number, jid: string, opts: { force?: boolean } = {}) {
-  return asAgent(userId, GROUPS_ROLE, () => suggestForInner(userId, jid, opts));
+  return runAs(userId, GROUPS_ROLE, { kind: "group_suggest", respect: "none", sampleMin: 15 }, () => asAgent(userId, GROUPS_ROLE, () => suggestForInner(userId, jid, opts)));
 }
 async function suggestForInner(userId: number, jid: string, opts: { force?: boolean } = {}) {
   const [group] = await db.select().from(waGroupsTable).where(and(eq(waGroupsTable.userId, userId), eq(waGroupsTable.jid, jid))).limit(1);

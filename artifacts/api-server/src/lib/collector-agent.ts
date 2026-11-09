@@ -21,6 +21,7 @@ import { complete } from "./llm";
 import { notify, esc, linkedUsers } from "./telegram";
 import { say } from "./agent-comms";
 import { logger } from "./logger";
+import { runAs } from "./org/runtime";
 import { skillsFor, skillsPreamble } from "./agent-skills";
 import { asWorker } from "./agent-context";
 import { accountHalted } from "./org/controls";
@@ -289,7 +290,7 @@ export function startCollector(): void {
 
     for (const userId of await linkedUsers()) {
       if (await accountHalted(userId, "collector")) continue;
-      await runCollector(userId).catch((err) =>
+      await runAs(userId, COLLECTOR_ROLE, { kind: "collector_round", respect: "none" }, () => runCollector(userId)).catch((err) =>
         logger.error({ userId, err: String(err?.message ?? err) }, "فشلت جولة جامع البيانات"));
     }
   };
