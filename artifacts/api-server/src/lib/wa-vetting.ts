@@ -21,6 +21,7 @@ import { normalizePhone } from "./phone-import";
 import { checkNumbers, getStatus } from "./whatsapp";
 import { key9 } from "./wa-firewall-rules";
 import { logger } from "./logger";
+import { accountHalted } from "./org/controls";
 
 export const VETTER_ROLE = "vetter";
 export const VETTER = {
@@ -328,7 +329,7 @@ export function startVetting(): void {
   setTimeout(() => {
     const tick = async () => {
       const users = await db.selectDistinct({ userId: contactGroupsTable.userId }).from(contactGroupsTable);
-      for (const u of users) if (u.userId && getStatus(u.userId)?.connected) await vetPending(u.userId, "daily").catch(() => {});
+      for (const u of users) if (u.userId && getStatus(u.userId)?.connected && !(await accountHalted(u.userId, "wa_vetting"))) await vetPending(u.userId, "daily").catch(() => {});
     };
     setInterval(() => void tick(), 24 * 3_600_000);
   }, 10 * 60_000);

@@ -36,6 +36,7 @@ import { say } from "./agent-comms";
 import { getDailySentCount, getEffectiveDailyLimit } from "./daily-limit";
 import { logger } from "./logger";
 import { getCard, cardText } from "./lead-card";
+import { asWorker } from "./agent-context";
 
 export const FOLLOWUP_ROLE = "followup";
 
@@ -161,7 +162,7 @@ async function managerVerdict(
     history.length ? `\nآخر ما دار:\n${history.reverse().map((h) => `${h.fromMe ? "نحن" : "العميل"}: ${(h.text ?? "").slice(0, 150)}`).join("\n")}` : "",
   ].filter(Boolean).join("\n");
 
-  const out = await complete([
+  const out = await asWorker(userId, "chief", () => complete([
     { role: "system", content: [
       manager ? `أنت ${manager.name}${manager.title ? `، ${manager.title}` : ""}.` : "أنت مديرة مبيعات.",
       manager?.persona ?? "",
@@ -180,7 +181,7 @@ async function managerVerdict(
       "كل متابعة يجب أن تختلف عمّا قبلها — لا تُعيدي صياغة الرسالة السابقة.",
     ].filter(Boolean).join("\n") },
     { role: "user", content: facts },
-  ]);
+  ]));
 
   if (!out?.text) {
     // A model that cannot be reached must not become an accidental yes.

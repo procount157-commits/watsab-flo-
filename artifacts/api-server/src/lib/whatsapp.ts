@@ -11,6 +11,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import { logger as appLogger } from "./logger";
+import { gateSend } from "./org/gateway";
 import * as firewall from "./wa-firewall";
 import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
@@ -354,7 +355,7 @@ type CarouselCard = CarouselCardDef & { description: string };
 
 // ── Per-user WhatsApp instance ────────────────────────────────────
 
-class WhatsAppInstance {
+export class WhatsAppInstance {
   private userId: number;
   private sessionDir: string;
   private state: WAState = { status: "disconnected", connected: false, phone: null, name: null, qr: null, socket: null };
@@ -973,6 +974,10 @@ class WhatsAppInstance {
     if (cleaned.startsWith("00")) cleaned = cleaned.slice(2);
     const jid = cleaned + "@s.whatsapp.net";
     pass("[5] JID Formatted", jid);
+
+    // «Bypasses everything» meant the anti-ban logic, not the kill switch or a person's no.
+    const gate = await gateSend({ userId: this.userId, channel: "whatsapp", kind: "diagnostic", recipient: phone, role: currentAgent()?.role ?? null });
+    if (!gate.allowed) fail("[5b] Org Gate", gate.why ?? "موقوف");
 
     pass("[6] sock.sendMessage() Called", `jid=${jid}`);
 
@@ -2276,7 +2281,7 @@ class WhatsAppInstance {
         if (!text && audio && !msg.key.fromMe) {
           try {
             const buf = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
-            const t = await transcribe(buf, audio.mimetype ?? "audio/ogg");
+            const t = await transcribe(buf, audio.mimetype ?? "audio/ogg", undefined, this.userId);
             if (t) {
               text = t.text;
               wasVoice = true;
@@ -2299,7 +2304,7 @@ class WhatsAppInstance {
         if (image && !msg.key.fromMe) {
           try {
             const buf = await downloadMediaMessage(msg, "buffer", {}) as Buffer;
-            const seen = await describeImage(buf, image.mimetype ?? "image/jpeg", text);
+            const seen = await describeImage(buf, image.mimetype ?? "image/jpeg", text, undefined, this.userId);
             if (seen) {
               text = photoAsText(seen.text, text);
               wasPhoto = true;
@@ -2382,7 +2387,7 @@ class WhatsAppInstance {
                 sql`${contactsTable.groupId} IN (SELECT id FROM contact_groups WHERE user_id = ${this.userId})`,
               ))
               .catch(() => {});
-            this.sendMessage(phone, STOP_ACK).catch(() => {});
+            this.sendMessage(phone, STOP_ACK, undefined, undefined, undefined, undefined, { kind: "optout_ack" }).catch(() => {});
           } catch (err) {
             this.log.error({ err, phone }, "stop could not be recorded");
           }
@@ -2415,7 +2420,7 @@ class WhatsAppInstance {
             ))
             .catch(() => {});
           // Confirm opt-out to the user
-          this.sendMessage(phone, "تم إلغاء اشتراكك ✅ لن تصلك رسائل منا مرة أخرى.").catch(() => {});
+          this.sendMessage(phone, "تم إلغاء اشتراكك ✅ لن تصلك رسائل منا مرة أخرى.", undefined, undefined, undefined, undefined, { kind: "optout_ack" }).catch(() => {});
           continue;
         }
 
@@ -2428,7 +2433,7 @@ class WhatsAppInstance {
             const ack = matched.action === "interested"
               ? "شكراً لاهتمامك! 🙏 سنتواصل معك قريباً."
               : "تم تسجيل ردك، شكراً لوقتك 🙏";
-            this.sendMessage(phone, ack).catch(() => {});
+            this.sendMessage(phone, ack, undefined, undefined, undefined, undefined, { kind: "reply" }).catch(() => {});
             continue;
           }
         } catch (err) {
@@ -2689,9 +2694,13 @@ class WhatsAppInstance {
     mediaUrl?: string | null,
     buttons?: string | null,
     carousel?: string | null,
-    opts?: { cold?: boolean },
+    opts?: { cold?: boolean; kind?: string; gated?: boolean },
   ): Promise<string | undefined> {
     if (!this.state.socket || !this.state.connected) throw new Error("WhatsApp غير متصل");
+    // The internal acks come straight here, past the exported wrappers: the
+    // gate is inside the method so that nothing can reach the wire without it.
+    const gateKind = opts?.kind ?? "followup";
+    if (!opts?.gated) await waGate(this.userId, phone, gateKind);
 
     // ── WS readyState guard (pre-send check #1) ───────────────────────────────
     // state.connected can remain `true` for up to 10 s after the underlying
@@ -2759,6 +2768,9 @@ class WhatsAppInstance {
       { phone, jid, wsReadyState: _wsStatePost, elapsedMs: Date.now() - sendStartMs },
       "📤 send:pre-baileys (post-sim check passed)",
     );
+    // A cold message can wait minutes in the firewall's line and seconds in the
+    // typing simulation: the kill switch is asked again at the last moment.
+    await waGate(this.userId, phone, gateKind, true);
 
     // Wrap every socket.sendMessage call with a 35-second hard timeout, AND
     // register an abort hook so a mid-send reconnect fails fast instead of
@@ -3282,6 +3294,18 @@ export async function deleteForEveryone(userId: number, phone: string, messageId
 }
 
 /**
+ * The organisation's gate, in the firewall's own language so that every caller
+ * already knows what to do: FIREWALL: stops the round and pauses the campaign,
+ * FIREWALL-REFUSED: skips this person and goes on.
+ */
+async function waGate(userId: number, phone: string, kind: string, recheck = false): Promise<void> {
+  const g = await gateSend({ userId, channel: "whatsapp", kind, recipient: phone, role: currentAgent()?.role ?? null, recheck });
+  if (g.allowed) return;
+  if (g.code === "opted_out") throw new firewall.FirewallRefused(g.why ?? "طلب الإيقاف");
+  throw new firewall.FirewallBlocked(g.why ?? "موقوف");
+}
+
+/**
  * Every outbound message of the app comes through here — campaigns,
  * follow-ups, replies, the owner's own sends — and none reaches the wire
  * without the firewall's leave (lib/wa-firewall.ts): its turn in the
@@ -3295,6 +3319,8 @@ export async function sendMessage(
   opts?: { kind?: firewall.SendKind; running?: boolean },
 ): Promise<string | undefined> {
   const kind: firewall.SendKind = opts?.kind ?? "followup";
+  // Before admit, which spends the number's turn and its counters on what it lets through.
+  await waGate(userId, phone, kind);
   const a = await firewall.admit(userId, phone, kind, opts?.running === undefined ? undefined : { running: opts.running });
   let type = messageType, media = mediaUrl, btns = buttons, cards = carousel, text = message;
   if (!a.interactive && (btns || cards || /button|carousel/.test(type ?? ""))) {
@@ -3302,7 +3328,7 @@ export async function sendMessage(
     type = d.messageType; media = d.mediaUrl; btns = null; cards = null; text = d.message;
   }
   try {
-    const id = await waManager.get(userId).sendMessage(phone, text, type, media, btns, cards, { cold: a.cold });
+    const id = await waManager.get(userId).sendMessage(phone, text, type, media, btns, cards, { cold: a.cold, kind, gated: true });
     await firewall.recordSent(userId, phone, kind, a.cold, id);
     return id;
   } catch (err) {
@@ -3314,9 +3340,10 @@ export async function sendMessage(
 /** The words as a voice note — spoken by the account's voice, with the text as the fallback. */
 export async function sendVoiceNote(userId: number, phone: string, text: string, kind: firewall.SendKind = "reply"): Promise<string | undefined> {
   // A voice note is a message like any other: it passes the same gate.
+  await waGate(userId, phone, kind);
   const a = await firewall.admit(userId, phone, kind);
   try {
-    const id = await waManager.get(userId).sendMessage(phone, text, "voice", undefined, undefined, undefined, { cold: a.cold });
+    const id = await waManager.get(userId).sendMessage(phone, text, "voice", undefined, undefined, undefined, { cold: a.cold, kind, gated: true });
     await firewall.recordSent(userId, phone, kind, a.cold, id);
     return id;
   } catch (err) {

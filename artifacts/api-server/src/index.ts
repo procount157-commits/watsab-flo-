@@ -52,6 +52,8 @@ import { startWaAutopilot } from "./lib/wa-autopilot";
 import { startListKeeper } from "./lib/list-keeper";
 import { startOrganizing } from "./lib/organize";
 import { startEngineerRounds } from "./lib/graph/engineer";
+import { ensureOrgTables } from "./lib/org/schema";
+import { startGateFlusher } from "./lib/org/gateway";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -141,6 +143,7 @@ function startListening() {
     }
 
     logger.info({ port }, "Server listening");
+    startGateFlusher();
 
     // Restore all saved WhatsApp sessions from DB — no QR needed after restart or deployment
     void restoreAllSessions();
@@ -242,7 +245,10 @@ function startListening() {
   });
 }
 
-startListening();
+// The new columns on bot_employees and agent_memory are in the Drizzle schema, so
+// no query may run before they exist. Bounded: a lock that never clears must not
+// keep the server down; sends and model calls fail closed until the tables are there.
+void Promise.race([ensureOrgTables(), new Promise((r) => setTimeout(r, 30_000))]).finally(startListening);
 
 // ── Global Connection Guardian ────────────────────────────────────────
 // Second safety net on top of the per-instance watchdog.

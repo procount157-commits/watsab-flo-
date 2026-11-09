@@ -11,6 +11,7 @@
 // ffmpeg.
 
 import { logger } from "./logger";
+import { modelHalted } from "./org/controls";
 
 const GROQ_TRANSCRIBE = "https://api.groq.com/openai/v1/audio/transcriptions";
 
@@ -38,8 +39,10 @@ const MAX_BYTES = 20 * 1024 * 1024;
 export type Transcript = { text: string; model: string; ms: number } | null;
 
 export async function transcribe(
-  audio: Buffer, mimetype = "audio/ogg", timeoutMs = 45_000,
+  audio: Buffer, mimetype = "audio/ogg", timeoutMs = 45_000, userId?: number,
 ): Promise<Transcript> {
+  // Not through complete(), so the kill switch is asked here.
+  if (await modelHalted(userId)) return null;
   const key = process.env["GROQ_API_KEY"];
   if (!key) {
     logger.warn("لا يوجد مفتاح Groq — لا يمكن تفريغ الرسائل الصوتية");

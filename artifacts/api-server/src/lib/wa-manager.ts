@@ -31,6 +31,7 @@ import { logger } from "./logger";
 import { runDeskAll, type DeskReport } from "./data-desk/desk";
 import { bucketOf, BUCKET_AR, targetsBrief, type Bucket } from "./data-desk/classify";
 import { evaluateDesk, evaluationFacts, type Evaluation } from "./team/evaluate";
+import { accountHalted } from "./org/controls";
 
 export const WA_MANAGER_ROLE = "chief";
 /** من تُديرهم — ومن يغيب منهم يُذكر بأثره لا باسمه. */
@@ -309,6 +310,7 @@ export function startWaManagerLoop(): void {
         AND NOT EXISTS (SELECT 1 FROM email_settings s WHERE s.user_id = e.user_id AND s.guard_hold_until > now() + interval '365 days')`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
     for (const u of rows.rows) {
       const userId = Number(u.user_id);
+      if (await accountHalted(userId, "wa_manager")) continue;
       const due = Date.now() - (lastBrief.get(userId) ?? 0) > 20 * 3_600_000;
       const r = await runWaManagerCycle(userId, { brief: due, notifyOwner: due }).catch((err) => { logger.warn({ userId, err: String(err?.message ?? err) }, "دورة مديرة الواتساب تعذّرت"); return null; });
       if (r?.brief) lastBrief.set(userId, Date.now());

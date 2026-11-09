@@ -26,6 +26,7 @@ import { retargetPlans } from "./retarget";
 import { opensReport } from "./opens";
 import { trackingState } from "./public-url";
 import { resultsReport, resultsFacts } from "./results";
+import { accountHalted } from "../org/controls";
 
 export type SpecialistRole = "email_registrar" | "email_data" | "email_retarget" | "email_opens" | "email_analyst";
 
@@ -220,6 +221,7 @@ export function startSpecialistRounds(): void {
   const run = async () => {
     const rows = await db.execute<any>(sql`SELECT user_id FROM email_settings WHERE from_email IS NOT NULL`);
     for (const u of ((rows as any).rows ?? rows) as any[]) {
+      if (await accountHalted(Number(u.user_id), "email_specialists")) continue;
       // مع مديرٍ على رأس العمل يصل صاحبَ العمل صوتٌ واحد في اليوم: تقريره.
       // وتقارير المتخصّصين تبقى في الواجهة لمن أراد التفصيل. ستُّ رسائل
       // يومياً تُقرأ أولاها وتُكتم الباقية.

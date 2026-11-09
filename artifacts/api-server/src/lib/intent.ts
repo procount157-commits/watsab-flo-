@@ -182,7 +182,11 @@ const AI_LABELS: Record<string, Intent> = {
  * returned unchanged if this is slow, rate-limited or nonsense. The caller
  * decides whether to even try — see FOLLOW_UP_AI_REFINE.
  */
-export async function classifyWithAI(text: string, timeoutMs = 8_000): Promise<IntentResult | null> {
+export async function classifyWithAI(text: string, timeoutMs = 8_000, userId?: number): Promise<IntentResult | null> {
+  // Pollinations directly, not complete(): the kill switch is asked here. A null is the rules' verdict standing.
+  // Imported late: the rules in this file are pure and used without a database.
+  const { modelHalted } = await import("./org/controls");
+  if (await modelHalted(userId)) return null;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {

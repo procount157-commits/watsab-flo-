@@ -22,6 +22,7 @@ import { classifyFailure, NON_RETRYABLE_PATTERN } from "../lib/failure-classifie
 import fs from "fs";
 import path from "path";
 import { withStopButton } from "../lib/opt-out";
+import { accountHalted } from "../lib/org/controls";
 
 // Connection-lost errors that trigger reconnect logic
 // NOTE: "fetch failed" is intentionally excluded — it indicates a media-download
@@ -174,6 +175,9 @@ async function sendWithReconnect(
     } catch (err: any) {
       const msg = String(err?.message ?? err ?? "");
 
+      // The gate's no, first: a switch's free-text reason must not read as a dropped connection.
+      if (isFirewallError(err) || isFirewallRefusal(err)) throw err;
+
       // Media / config error — no retry, skip this contact immediately
       if (MEDIA_ERR.test(msg)) throw err;
 
@@ -303,6 +307,8 @@ async function runWatchdog() {
     const now = Date.now();
     for (const c of running) {
       if (!c.userId) continue;
+      // A stopped account's campaign is not an orphan to bring back; a loop still running hits the gate and pauses.
+      if (await accountHalted(c.userId, "campaign_watchdog")) continue;
       const key = campaignKey(c.userId, c.id);
       const info = activeCampaigns.get(key);
 
@@ -664,6 +670,10 @@ router.post("/", async (req, res) => {
   }
 
   if (!contactGroupId) return res.status(400).json({ error: "يرجى اختيار قائمة أرقام أو لصق الأرقام مباشرة" });
+  // Not another account's list: the id comes from the request, and the send loop reads it unfiltered.
+  // (A list with no owner, from before accounts, stays usable as it was.)
+  const [ownList] = await db.select({ id: contactGroupsTable.id }).from(contactGroupsTable).where(and(eq(contactGroupsTable.id, parseInt(contactGroupId)), sql`(${contactGroupsTable.userId} = ${userId} OR ${contactGroupsTable.userId} IS NULL)`)).limit(1);
+  if (!ownList) return res.status(404).json({ error: "القائمة غير موجودة" });
 
   const [campaign] = await db.insert(campaignsTable).values({
     userId,

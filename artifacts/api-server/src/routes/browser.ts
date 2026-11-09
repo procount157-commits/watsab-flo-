@@ -15,6 +15,7 @@ import {
 import { complete } from "../lib/llm";
 import { say } from "../lib/agent-comms";
 import { logger } from "../lib/logger";
+import { asWorker } from "../lib/agent-context";
 
 const router = Router();
 router.use(requireAuth);
@@ -84,7 +85,7 @@ router.post("/:role/research", async (req, res) => {
 
   try {
     const page = await readPage(userId, role, url);
-    const out = await complete([
+    const out = await asWorker(userId, role, () => complete([
       { role: "system", content: [
         "تقرأ موقع شركة لتجهيز مندوب مبيعات خدمات محاسبية في الإمارات قبل محادثته مع صاحبها.",
         "استخرج فقط ما يُغيّر طريقة الحديث معه، بالعربية، في أسطر قصيرة:",
@@ -95,7 +96,7 @@ router.post("/:role/research", async (req, res) => {
         "لا تخترع ما ليس في الصفحة. إن لم تجد معلومة فقل «غير ظاهر».",
       ].join("\n") },
       { role: "user", content: `${page.title}\n${page.url}\n\n${page.text.slice(0, 6_000)}` },
-    ]);
+    ]));
 
     const brief = out?.text?.trim() ?? null;
     if (brief) {

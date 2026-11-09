@@ -1,4 +1,5 @@
-import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, index, primaryKey } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, serial, integer, varchar, text, boolean, timestamp, jsonb, index, primaryKey, numeric, uniqueIndex } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
 
 // ── Bot employees ─────────────────────────────────────────────────
@@ -30,9 +31,18 @@ export const botEmployeesTable = pgTable("bot_employees", {
   // Lower wins when two agents both match.
   priority:    integer("priority").notNull().default(100),
   notes:     text("notes"),
+  // المنظّمة (072_org.sql، وتُضاف عند الإقلاع في lib/org/schema.ts): مفتاحٌ ثابت
+  // مثل email.copywriter، وقسمه، وكم يطول نبضه، وأي نسخةٍ من تعليماته يعمل بها.
+  employeeKey: varchar("employee_key", { length: 60 }),
+  department:  varchar("department", { length: 40 }),
+  heartbeatIntervalSec: integer("heartbeat_interval_sec"),
+  promptVersion: integer("prompt_version"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-}, (t) => [index("idx_bot_employees_user").on(t.userId)]);
+}, (t) => [
+  index("idx_bot_employees_user").on(t.userId),
+  uniqueIndex("uq_bot_employees_key").on(t.userId, t.employeeKey).where(sql`employee_key IS NOT NULL`),
+]);
 
 export type BotEmployee = typeof botEmployeesTable.$inferSelect;
 
@@ -153,6 +163,13 @@ export const agentMemoryTable = pgTable("agent_memory", {
   phone:     varchar("phone", { length: 50 }),
   /** The uploaded document a fact was drawn from (email_knowledge_docs); deleting it takes the fact with it. */
   docId:     integer("doc_id"),
+  // المنظّمة: من أين جاءت، كم نثق بها، متى تُحقّق منها، وهل اعتُمدت. ما كُتب قبلها معتمَد.
+  sourceReference: text("source_reference"),
+  confidence: numeric("confidence", { precision: 4, scale: 3 }),
+  lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
+  approvalStatus: varchar("approval_status", { length: 20 }).notNull().default("approved"),
+  version:   integer("version").notNull().default(1),
+  expiryAt:  timestamp("expiry_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_agent_memory").on(t.userId, t.role, t.kind)]);

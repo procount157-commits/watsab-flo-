@@ -36,7 +36,7 @@ const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 router.post("/arena/transcribe", audioUpload.single("audio"), async (req, res) => {
   if (!req.file?.buffer?.length) return res.status(400).json({ error: "لم يصل تسجيل" });
   if (!process.env["GROQ_API_KEY"]) return res.status(400).json({ error: "مفتاح Groq غير مضبوط — لا يمكن تفريغ الصوت" });
-  const t = await transcribe(req.file.buffer, req.file.mimetype || "audio/webm");
+  const t = await transcribe(req.file.buffer, req.file.mimetype || "audio/webm", undefined, req.session.userId);
   if (!t?.text) return res.status(422).json({ error: "لم أفهم كلاماً في التسجيل — جرّب مرة أخرى بصوت أوضح" });
   res.json({ text: t.text, model: t.model, ms: t.ms });
 });

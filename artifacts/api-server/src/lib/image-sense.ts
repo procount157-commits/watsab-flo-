@@ -17,6 +17,7 @@ import { db, mediaAssetsTable, type MediaAsset } from "@workspace/db";
 import { getObjectBuffer, objectNameFromUrl, contentTypeForName } from "./storage";
 import { parseLoose } from "./loose-json";
 import { logger } from "./logger";
+import { accountHalted, modelHalted, platformHalted } from "./org/controls";
 
 export const SECTORS = ["عقارات", "ذهب ومجوهرات", "قانونية", "مقاولات", "مطاعم ومقاهي"] as const;
 export const GENERAL = "عام";
@@ -51,6 +52,8 @@ async function askGemini(prompt: string, img: { data: string; mime: string }): P
 async function askOne(model: string, prompt: string, img: { data: string; mime: string }): Promise<any | null> {
   const key = process.env["GEMINI_API_KEY"];
   if (!key) return null;
+  // Gemini directly, not complete(). Thrown, not null: a null is recorded as «seen, nothing there».
+  if (await modelHalted()) throw new Error("gemini vision: موقوف بمفتاح الإيقاف");
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify({
@@ -134,11 +137,13 @@ const unread = () => or(isNull(mediaAssetsTable.visionAt), and(isNull(mediaAsset
 
 /** Pictures not seen yet — the account's, or everyone's — a batch at a time. One failure does not stop the rest. */
 export async function describePending(limit = 12, userId?: number): Promise<number> {
-  const rows = await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url }).from(mediaAssetsTable)
+  if (await platformHalted()) return 0;
+  const rows = await db.select({ id: mediaAssetsTable.id, url: mediaAssetsTable.url, userId: mediaAssetsTable.userId }).from(mediaAssetsTable)
     .where(userId ? and(eq(mediaAssetsTable.userId, userId), unread()) : unread())
     .limit(limit);
   let n = 0;
   for (const r of rows) {
+    if (await accountHalted(r.userId, "image_sense")) continue;
     try { if (await describeAsset(r)) n++; }
     catch (err) { logger.warn({ id: r.id, err: String((err as any)?.message ?? err) }, "وصف الصورة تعذّر"); }
   }

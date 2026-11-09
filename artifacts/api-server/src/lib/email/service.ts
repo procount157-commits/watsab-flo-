@@ -17,7 +17,8 @@ import { isEmailSendingTime, emailWindowNote } from "../sending-hours";
 import { isRoleAddress } from "./importer";
 import { logger } from "../logger";
 import { notify, esc } from "../telegram";
-import { sendEmail, SendError, isConfigured, messageIdFor } from "./provider";
+import { sendEmail, SendError, EmailHalted, EmailSuppressed, isConfigured, messageIdFor } from "./provider";
+import { accountHalted, isHalted, platformHalted } from "../org/controls";
 import { newToken, renderEmail, firstName, companyName, personalize, unsubscribeUrl } from "./tracking";
 import { publicBase, durable } from "./public-url";
 import { brandOf } from "./layout";
@@ -312,6 +313,7 @@ async function stopSequenceIf(jobId: number, flag: "stopOnOpen" | "stopOnReply",
  * up. The rungs stay pending until there is a way out.
  */
 export async function enqueueDueSequenceSteps(now = new Date(), onlyUserId?: number): Promise<number> {
+  if (await platformHalted()) return 0;
   const configured = db.select({ userId: emailSettingsTable.userId }).from(emailSettingsTable)
     .where(sql`${emailSettingsTable.fromEmail} is not null and (${emailSettingsTable.smtpHost} is not null or ${emailSettingsTable.apiKey} is not null)`);
   const due = await db.select().from(emailSequenceJobsTable)
@@ -320,6 +322,8 @@ export async function enqueueDueSequenceSteps(now = new Date(), onlyUserId?: num
     .orderBy(asc(emailSequenceJobsTable.dueAt)).limit(200);
   let n = 0;
   for (const job of due) {
+    // حسابٌ موقوف: الدرجة تبقى pending، وتُعاد حين يعود، ولا تُحسب متأخرة ولا تُسقط.
+    if (await accountHalted(job.userId, "email.sequence")) continue;
     const [seq] = await db.select().from(emailSequencesTable).where(eq(emailSequencesTable.id, job.sequenceId)).limit(1);
     const step = ((seq?.steps as EmailStep[]) ?? [])[job.stepIndex];
     const [contact] = await db.select().from(emailContactsTable).where(eq(emailContactsTable.id, job.contactId)).limit(1);
@@ -436,6 +440,9 @@ export async function drainQueues(): Promise<void> {
 async function drainOne(userId: number): Promise<boolean> {
   const s = await getSettings(userId);
   if (!isConfigured(s)) return stall(userId, "إعدادات البريد غير مكتملة");
+  // مفتاح الإيقاف: الطابور كما هو، والسبب يُرى — ولا تُنتقى رسالة أصلاً.
+  const halt = await isHalted({ userId, channel: "email", department: "email" });
+  if (halt.halted) return stall(userId, `مفتاح الإيقاف: ${halt.reason}`);
 
   const now = Date.now();
   if ((heldUntil.get(userId) ?? 0) > now) return stall(userId, holdNote(heldUntil.get(userId)!));
@@ -575,7 +582,7 @@ async function drainOne(userId: number): Promise<boolean> {
   markSent(userId, pick.sender?.id ?? null, now);
   try {
     const r = await sendEmail(es, { to: m.toEmail, toName: contact?.name, subject, html: rendered.html, text: rendered.text, messageId, unsubscribeUrl: unsubscribeUrl(keep, m.token),
-      inReplyTo: thread?.inReplyTo ?? null, references: thread?.references ?? null });
+      inReplyTo: thread?.inReplyTo ?? null, references: thread?.references ?? null, kind: "campaign" });
     await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId, messageIdHdr: messageId, subject, senderId: pick.sender?.id ?? null }).where(eq(emailMessagesTable.id, m.id));
     if (contact) await db.update(emailContactsTable).set({ lastSentAt: new Date() }).where(eq(emailContactsTable.id, contact.id));
     await afterSend(trialId).catch(() => {});
@@ -584,6 +591,13 @@ async function drainOne(userId: number): Promise<boolean> {
     receipt({ userId, node: "sender", graph: "email", action: "send.email", subject: m.toEmail, inputRef: m.campaignId ? `campaign:${m.campaignId}` : m.sequenceJobId ? `sequence-job:${m.sequenceJobId}` : null, outputRef: `email-message:${m.id}` });
     stalls.delete(userId);
   } catch (err) {
+    // انطفأ المفتاح بين الفحص والسلك: الرسالة تبقى queued كما كانت، ولا عقوبة لأحد.
+    if (err instanceof EmailHalted) return stall(userId, `مفتاح الإيقاف: ${err.message}`);
+    // طلب الإيقاف، كما تُسقَط الجهة غير النشطة: تفشل هذه وحدها، بلا ارتدادٍ ولا حجز.
+    if (err instanceof EmailSuppressed) {
+      await db.update(emailMessagesTable).set({ status: "failed", error: `جهة الاتصال: ${err.message}` }).where(eq(emailMessagesTable.id, m.id));
+      return stall(userId, "جهة طلبت الإيقاف أُسقطت — التالية في المرور القادم");
+    }
     const e = err as SendError;
     // The first mailbox's login refused stops the account as it always did.
     if (!pick.sender && e?.kind === "config") (e as any).kind = "policy";
@@ -671,8 +685,11 @@ async function completeFinishedCampaigns(userId: number) {
 export async function startScheduled(now = new Date()) {
   const due = await db.select().from(emailCampaignsTable)
     .where(and(eq(emailCampaignsTable.status, "scheduled"), lt(emailCampaignsTable.scheduledAt, now)));
-  for (const c of due) await startCampaign(c.userId, c.id).catch((err) =>
-    logger.warn({ campaignId: c.id, err: String(err?.message ?? err) }, "تعذّر بدء حملة مجدولة"));
+  for (const c of due) {
+    if (await accountHalted(c.userId, "email.scheduled")) continue;
+    await startCampaign(c.userId, c.id).catch((err) =>
+      logger.warn({ campaignId: c.id, err: String(err?.message ?? err) }, "تعذّر بدء حملة مجدولة"));
+  }
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────
@@ -771,6 +788,7 @@ export async function decideAbTests(now = new Date(), opts: { tracking?: (userId
       opts.onlyCampaignIds ? inArray(emailCampaignsTable.id, opts.onlyCampaignIds) : sql`true`));
   let decided = 0;
   for (const c of open) {
+    if (await accountHalted(c.userId, "email.ab")) continue;
     const [st] = await db.select({
       pending: sql<number>`count(*) filter (where ${emailMessagesTable.variant} is not null and ${emailMessagesTable.status} = 'queued')`,
       held:    sql<number>`count(*) filter (where ${emailMessagesTable.status} = 'ab_hold')`,

@@ -19,6 +19,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, emailMessagesTable } from "@workspace/db";
 import { type Intent } from "../intent";
 import { complete } from "../llm";
+import { asWorker } from "../agent-context";
 
 /** نوع الرسالة الواردة — سؤالٌ مستقل تماماً عن نيّة كاتبها. */
 export type MailKind =
@@ -423,14 +424,16 @@ const INTENTS: EmailIntent[] = ["interested", "question", "considering", "later"
  * الأول يبقى لإنسان، والثاني قاعدةٌ لا تُراجَع.
  */
 export async function classifyWithModel<V extends { kind: MailKind; intent: EmailIntent | null; intentConfidence: number | null; confidence: number; classifier: "rules" | "rules+ai"; reasons: string[] }>(
-  v: V, input: { subject?: string | null; text?: string | null },
+  v: V, input: { subject?: string | null; text?: string | null }, userId?: number,
 ): Promise<V> {
   if (v.kind !== "reply" || (v.intentConfidence ?? 1) >= 0.7 || v.intent === "opt_out") return v;
   try {
-    const out = await complete([
+    const ask = (): ReturnType<typeof complete> => complete([
       { role: "system", content: `You classify the intent of a business email reply to a B2B outreach. Answer with ONE word only from: ${INTENTS.join(", ")}.` },
       { role: "user", content: `Subject: ${(input.subject ?? "").slice(0, 200)}\n\n${(input.text ?? "").slice(0, 1200)}` },
     ], 12_000);
+    // Named for the switches when the account is known; the route stays what it was.
+    const out = await (userId ? asWorker(userId, "email_replies", ask) : ask());
     const word = (out?.text ?? "").trim().toLowerCase().replace(/[^a-z_]/g, "");
     const intent = INTENTS.find((i) => i === word);
     if (!intent || intent === "unclear") return v;

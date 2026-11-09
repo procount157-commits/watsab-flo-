@@ -29,6 +29,7 @@ import { say } from "./agent-comms";
 import { skillsFor, skillsPreamble } from "./agent-skills";
 import { notify, esc } from "./telegram";
 import { logger } from "./logger";
+import { asWorker } from "./agent-context";
 
 export const COACH_ROLE = "chief";
 
@@ -114,7 +115,7 @@ async function coachOne(userId: number, p: Performance, manager: typeof botEmplo
   // measured outcome becomes a rule someone can follow tomorrow.
   const trade = skillsPreamble(await skillsFor(userId, COACH_ROLE, "internal").catch(() => []));
 
-  const out = await complete([
+  const out = await asWorker(userId, COACH_ROLE, () => complete([
     { role: "system", content: [
       manager ? `أنت ${manager.name}${manager.title ? `، ${manager.title}` : ""}.` : "أنت مديرة مبيعات.",
       manager?.persona ?? "",
@@ -139,7 +140,7 @@ async function coachOne(userId: number, p: Performance, manager: typeof botEmplo
       p.bestReplies.length ? `\n— ردود نجحت —\n${p.bestReplies.join("\n\n")}` : "",
       p.worstReplies.length ? `\n— ردود فشلت —\n${p.worstReplies.join("\n\n")}` : "",
     ].filter(Boolean).join("\n") },
-  ]);
+  ]));
 
   if (!out?.text) return null;
 

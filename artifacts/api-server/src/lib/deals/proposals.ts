@@ -16,7 +16,8 @@ import { companyKnowledge } from "../company-knowledge";
 import { guardCheck, EMAIL_DOCTRINE } from "../email/team";
 import { getSettings } from "../email/service";
 import { newToken, renderEmail } from "../email/tracking";
-import { sendEmail, isConfigured, messageIdFor } from "../email/provider";
+import { sendEmail, EmailHalted, isConfigured, messageIdFor } from "../email/provider";
+import { accountHalted } from "../org/controls";
 import { brandOf } from "../email/layout";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
@@ -107,9 +108,11 @@ async function deliver(userId: number, s: NonNullable<Awaited<ReturnType<typeof 
   const messageId = messageIdFor(token, s.fromEmail!);
   const [row] = await db.insert(emailMessagesTable).values({ userId, toEmail: m.to, subject: m.subject, token, status: "queued", messageIdHdr: messageId }).returning();
   try {
-    const sent = await sendEmail(s, { to: m.to, toName: m.toName, subject: m.subject, html: r.html, text: r.text, messageId, unsubscribeUrl: null });
+    const sent = await sendEmail(s, { to: m.to, toName: m.toName, subject: m.subject, html: r.html, text: r.text, messageId, unsubscribeUrl: null, kind: "proposal" });
     await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: sent.providerId }).where(eq(emailMessagesTable.id, row!.id));
   } catch (err: any) {
+    // المفتاح مُطفأ: العرض لم يخرج وحالته كما هي، فلا سطر فاشل يوحي بغير ذلك.
+    if (err instanceof EmailHalted) { await db.delete(emailMessagesTable).where(eq(emailMessagesTable.id, row!.id)); throw err; }
     await db.update(emailMessagesTable).set({ status: "failed", error: String(err?.message ?? err).slice(0, 400) }).where(eq(emailMessagesTable.id, row!.id));
     throw err;
   }
@@ -127,6 +130,7 @@ export async function draftDueFollowups(now = new Date(), userId?: number) {
     .where(and(eq(proposalsTable.status, "sent"), lt(proposalsTable.nextFollowupAt, now), isNull(proposalsTable.followupDraft), lt(proposalsTable.followups, FOLLOWUP_DAYS.length),
       sql`${dealsTable.stage} not in ('won','lost')`, userId ? eq(proposalsTable.userId, userId) : sql`true`));
   for (const { p, d } of due) {
+    if (await accountHalted(p.userId, "proposal_followups")) continue;
     const brief = await dealBrief(p.userId, d, 6).catch(() => "");
     const out = await asAgent(p.userId, ROLE, () => complete([
       { role: "system", content: `أنت مُعِدّ العروض. اكتب متابعة قصيرة جداً (٣ أسطر) لعرض سعر أُرسل ولم يُرد عليه، بلغة العرض نفسها. سؤال واحد سهل: هل وصل العرض، هل من سؤال، هل نحدد مكالمة قصيرة. بلا ضغط وبلا لوم وبلا «آخر فرصة». نص عادي لا HTML.` },

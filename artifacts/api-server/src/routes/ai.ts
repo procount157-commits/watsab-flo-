@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../lib/auth";
+import { modelHalted } from "../lib/org/controls";
 import { getStatus, getHealth } from "../lib/whatsapp";
 import { db, campaignsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
@@ -40,6 +41,8 @@ async function callAI(
 // ── POST /api/ai/optimize-message ───────────────────────────────────────────
 
 router.post("/optimize-message", requireAuth, async (req, res) => {
+  // Pollinations directly, not complete(): the kill switch is asked here.
+  if (await modelHalted(req.session.userId)) { res.status(503).json({ error: "الذكاء الاصطناعي موقوف بمفتاح الإيقاف" }); return; }
   const body = req.body as { message?: unknown; tone?: unknown };
   const message = typeof body.message === "string" ? body.message.slice(0, 4000) : "";
   if (!message) { res.status(400).json({ error: "الرسالة مطلوبة" }); return; }

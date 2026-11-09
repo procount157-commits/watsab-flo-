@@ -20,6 +20,7 @@ import { db, contactGroupsTable, contactsTable, emailListsTable, emailListMember
 import { folderForSector, fileUnfiledLists, AUTOPILOT_MARK } from "./folders";
 import { classifySector, UNCLASSIFIED } from "./email/sector";
 import { logger } from "./logger";
+import { accountHalted, platformHalted } from "./org/controls";
 
 /** Arabic read as Latin-1 on an old upload («Ø§ÙÙÙ») back to Arabic. Pure. */
 export function fixMojibake(s: string): string {
@@ -302,8 +303,8 @@ export function startOrganizing(): void {
   if (sweep) return;
   const run = async () => {
     const users = await db.execute<{ id: number }>(sql`SELECT DISTINCT user_id AS id FROM contact_groups WHERE user_id IS NOT NULL UNION SELECT DISTINCT user_id FROM email_lists`).catch(() => ({ rows: [] as Array<{ id: number }> }));
-    for (const u of users.rows) await organizeAccount(Number(u.id));
-    await fileUnfiledLists().catch(() => []);
+    for (const u of users.rows) if (!(await accountHalted(Number(u.id), "organize"))) await organizeAccount(Number(u.id));
+    if (!(await platformHalted())) await fileUnfiledLists().catch(() => []);
   };
   setTimeout(() => void run(), 60_000).unref();
   sweep = setInterval(() => void run(), 10 * 60_000);

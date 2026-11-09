@@ -17,6 +17,7 @@ import { WORK_PROTOCOL, MIRROR, NEVER, channelExamples, finalCheck as coreCheck 
 import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
 import { receipt } from "./graph/receipts";
 import { read, replyPrompt, englishName, type Reading } from "./reply-brain";
+import { asWorker } from "./agent-context";
 
 // Words too common to tell entries apart; matching on them makes everything
 // look equally relevant.
@@ -487,10 +488,11 @@ export async function answerFromKnowledge(
           facts: [...(opts.shop?.facts ?? []).map((f) => `- ${f}`), ...found.slice(0, 3).map((f) => `- ${f.entry.title}: ${f.entry.content.slice(0, 450)}`)].join("\n"),
         })
       : buildSystemPrompt(profile, found, memory, persona, job, finalCheck, customerTurns, leadCard);
-    const out = await complete([
+    // The reply path is already inside asAgent; this names the other callers for the switches.
+    const out = await asWorker(userId, "sales", () => complete([
       { role: "system", content: system },
       ...turns,
-    ]);
+    ]));
     if (out?.text) {
       // The check before it leaves. The rules are the ones the writing skill
       // states; this is where they are enforced rather than hoped for. One
@@ -508,10 +510,10 @@ export async function answerFromKnowledge(
       let rewritten = false;
       const firstDraft = reply;
       if (needsRewrite(q)) {
-        const fixed = await complete([
+        const fixed = await asWorker(userId, "sales", () => complete([
           { role: "system", content: "أنت محرر رسائل واتساب لفريق مبيعات. تُصلح ما يُطلب منك فقط وتعيد الرسالة المصحّحة وحدها." },
           { role: "user", content: rewritePrompt(reply, q, ctx) },
-        ], 20_000);
+        ], 20_000));
         const candidate = fixed?.text?.trim().replace(/^["«“]+|["»”]+$/g, "").trim();
         if (candidate) {
           const q2 = checkReply(candidate, ctx);

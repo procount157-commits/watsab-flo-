@@ -6,6 +6,7 @@
 
 import nodemailer, { type Transporter } from "nodemailer";
 import type { EmailSettings } from "@workspace/db";
+import { gateSend } from "../org/gateway";
 
 export interface OutgoingEmail {
   to: string;
@@ -19,6 +20,12 @@ export interface OutgoingEmail {
   inReplyTo?: string | null;
   /** The thread so far, oldest first — a follow-up lands under the first mail, not as a new one. */
   references?: string[] | null;
+  /**
+   * ما هذه الرسالة، للبوابة (org/gateway.ts). campaign إن لم تُذكر: الأشدّ.
+   * owner_notice تعفى من المفاتيح ولا تمرّ إلا إلى صندوق صاحب العمل نفسه.
+   */
+  kind?: "campaign" | "reply" | "proposal" | "test" | "owner_notice";
+  role?: string | null;
 }
 
 export interface SendResult { providerId: string | null; serverReply?: string; accepted?: string[]; rejected?: string[] }
@@ -66,6 +73,15 @@ export class SendError extends Error {
   }
 }
 
+/** مفتاح الإيقاف قال لا: الرسالة تبقى في طابورها، لا تفشل ولا تُلغى. */
+export class EmailHalted extends SendError {
+  constructor(why: string) { super(`موقوف: ${why}`, false, "transient"); }
+}
+/** الشخص قال لا. ليس ارتداداً ولا سياسة مزوّد: لا تُعاقَب به جهةٌ ولا صندوق. */
+export class EmailSuppressed extends SendError {
+  constructor(why: string) { super(why, true, "config"); }
+}
+
 export function isConfigured(s: EmailSettings | null | undefined): boolean {
   if (!s?.fromEmail) return false;
   if (s.provider === "smtp") return !!(s.smtpHost && s.smtpUser && s.smtpPass);
@@ -104,6 +120,16 @@ function smtpTransport(s: EmailSettings): Transporter {
 
 export async function sendEmail(s: EmailSettings, m: OutgoingEmail): Promise<SendResult> {
   if (!isConfigured(s)) throw new SendError("إعدادات البريد غير مكتملة", true);
+  // Here and not in the callers: drainOne, the replies, the proposals, the tests
+  // and the escalation all end at this function, and a new one will too.
+  const gate = await gateSend({
+    userId: s.userId, channel: "email", kind: m.kind ?? "campaign", recipient: m.to, role: m.role ?? null,
+    selfAddressed: m.to.trim().toLowerCase() === s.fromEmail!.trim().toLowerCase(),
+  });
+  if (!gate.allowed) {
+    if (gate.code === "opted_out") throw new EmailSuppressed(gate.why ?? "طلب الإيقاف");
+    throw new EmailHalted(gate.why ?? "موقوف");
+  }
   const headers = listUnsubscribe(m.unsubscribeUrl, s.fromEmail!);
 
   if (s.provider === "smtp") {

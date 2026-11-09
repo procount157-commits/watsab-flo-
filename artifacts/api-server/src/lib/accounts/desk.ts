@@ -13,6 +13,7 @@ import { FREE_MAIL } from "../email/service";
 import { ACCOUNTS_TEAM, ensureAccountsTeam, deskActivity, nameOf } from "./team";
 import { processAccount } from "./pipeline";
 import { rankCandidates, shortCompany, dubaiNow, linkedinSearchUrl, type CandidateRow } from "./pure";
+import { accountHalted } from "../org/controls";
 
 // ── الجداول عند الإقلاع ────────────────────────────────────────────
 export const DESK_TABLES_SQL = [
@@ -206,6 +207,8 @@ export function startAccountsDesk(): void {
       const on = await db.select({ userId: accountsDeskSettingsTable.userId }).from(accountsDeskSettingsTable).where(eq(accountsDeskSettingsTable.enabled, true)).catch(() => []);
       for (const { userId } of on) {
         if (autoRanOn.get(userId) === now.date) continue;
+        // Before the stamp: an account released at ten still gets today's run.
+        if (await accountHalted(userId, "accounts_desk")) continue;
         autoRanOn.set(userId, now.date);
         await startRun(userId, { manual: false }).catch(() => {});
       }

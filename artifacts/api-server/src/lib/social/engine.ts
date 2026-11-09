@@ -25,7 +25,8 @@ import { openSession } from "../browser-agent";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
 import { ACTION_KINDS, COUNTS_AS, PLATFORM, capsFor, gulfHour, type ActionKind, type SocialPlatform } from "./platforms";
-import { driverFor, DRIVEN } from "./drivers";
+import { driverFor, hasDriver, DRIVEN } from "./drivers";
+import { accountHalted, isHalted } from "../org/controls";
 import { human } from "./drivers/common";
 import { activity, onDuty, roleOf, type Job } from "./team";
 import * as agent from "./agent";
@@ -72,7 +73,10 @@ export async function mayAct(userId: number, p: SocialPlatform, kind: ActionKind
   const a = await account(userId, p);
   const P = PLATFORM[p];
   if (!a) return { allowed: false, reason: `لم يُضبط حساب ${P.labelAr} بعد` };
-  if (!driverFor(p)) return { allowed: false, reason: `لا يعمل الفريق على موقع ${P.labelAr} بعد` };
+  if (!hasDriver(p)) return { allowed: false, reason: `لا يعمل الفريق على موقع ${P.labelAr} بعد` };
+  // مفتاح الإيقاف قبل كل فعل، وبسبب يُرى: ما وافق عليه صاحب العمل يبقى approved وينتظر.
+  const halt = await isHalted({ userId, channel: p, department: "social" });
+  if (halt.halted) return { allowed: false, reason: `مفتاح الإيقاف: ${halt.reason}` };
   if (a.state === "restricted") return { allowed: false, reason: `${P.labelAr} قيّد الحساب — كل شيء موقوف حتى يزول` };
   if (a.state === "checkpoint") return { allowed: false, reason: `${P.labelAr} يطلب تأكيد هويتك — افتح النافذة وأكمله` };
   if (a.state !== "logged_in") return { allowed: false, reason: "الحساب غير مسجّل دخول" };
@@ -121,7 +125,7 @@ async function settle(userId: number, p: SocialPlatform, a: SocialAccount, text:
 // ── Guard ────────────────────────────────────────────────────────
 export async function guardCheck(userId: number, p: SocialPlatform) {
   const a = await ensureAccount(userId, p);
-  const d = driverFor(p);
+  const d = driverFor(p, userId);
   if (!d) return { state: a.state, changed: false, note: "لا سائق لهذا الموقع" };
   let r: { state: string; username?: string; note?: string };
   try { r = await d.loginState(await pageFor(userId, a)); }
@@ -144,7 +148,7 @@ const discovered = new Map<string, number>();
 /** Our own newest posts join the watch list by themselves, twice a day. */
 export async function discoverPosts(userId: number, p: SocialPlatform, force = false) {
   const a = await account(userId, p);
-  const d = driverFor(p);
+  const d = driverFor(p, userId);
   const key = `${userId}:${p}`;
   // Every three hours, the ten newest: a new post's comments are answered the same day without anyone choosing it (the owner, 2026-10-22).
   if (!a?.username || !d || (!force && Date.now() - (discovered.get(key) ?? 0) < 3 * 3_600_000)) return 0;
@@ -162,7 +166,7 @@ export async function discoverPosts(userId: number, p: SocialPlatform, force = f
 
 export async function collectComments(userId: number, p: SocialPlatform) {
   const a = await account(userId, p);
-  const d = driverFor(p);
+  const d = driverFor(p, userId);
   if (!a || !d) return { found: 0, fresh: 0 };
   const posts = await db.select().from(socialPostsTable).where(and(eq(socialPostsTable.userId, userId), eq(socialPostsTable.platform, p), eq(socialPostsTable.watching, true)))
     .orderBy(desc(socialPostsTable.createdAt)).limit(10);
@@ -210,7 +214,7 @@ export async function processComments(userId: number, p: SocialPlatform, max = 1
 /** Read who is waiting, keep what they said, and draft the reply. */
 export async function syncInbox(userId: number, p: SocialPlatform, maxThreads = 8) {
   const a = await account(userId, p);
-  const d = driverFor(p);
+  const d = driverFor(p, userId);
   if (!a || !d) return { threads: 0, received: 0, drafted: 0 };
   const page = await pageFor(userId, a);
   const inbox = await d.readInbox(page, 30).catch((e) => ({ threads: [], error: String(e?.message ?? e) }));
@@ -387,7 +391,7 @@ export type SendResult = { sent: number; failed: number; held: string | null };
 /** Whatever is approved, in order of who has waited longest for us, inside the gate. */
 export async function sendApproved(userId: number, p: SocialPlatform, max = 12): Promise<SendResult> {
   const a = await account(userId, p);
-  const d = driverFor(p);
+  const d = driverFor(p, userId);
   if (!a || !d) return { sent: 0, failed: 0, held: "لا حساب" };
   if (a.dryRun) return { sent: 0, failed: 0, held: "وضع التجربة — لا يُرسل شيء" };
   const page = await pageFor(userId, a);
@@ -503,6 +507,7 @@ export function startSocial(): void {
     const desks = await db.select({ userId: socialAccountsTable.userId, platform: socialAccountsTable.platform }).from(socialAccountsTable)
       .where(and(eq(socialAccountsTable.autopilot, true), inArray(socialAccountsTable.platform, DRIVEN))).catch(() => []);
     for (const { userId, platform } of desks) {
+      if (await accountHalted(userId, "social.round")) continue;
       await runRound(userId, platform as SocialPlatform).catch((err) => logger.error({ userId, platform, err: String(err?.message ?? err) }, "فشلت جولة التواصل الاجتماعي"));
     }
   };

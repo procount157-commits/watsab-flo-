@@ -13,7 +13,7 @@
 // model mislabels a block far less often than it breaks JSON.
 
 import { lessonsFor } from "../feedback";
-import { asAgent } from "../agent-context";
+import { asAgent, asWorker } from "../agent-context";
 import { companyKnowledge, knowledgeLines } from "../company-knowledge";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, agentMemoryTable, botEmployeesTable, businessProfileTable, DEFAULT_EMPLOYEES, type SegmentFilter } from "@workspace/db";
@@ -162,7 +162,7 @@ export async function teach(userId: number, text: string, topic: string | null =
   await ensureEmailAgent(userId);
   const src = text.trim().slice(0, 12_000);
   if (!src) return [];
-  const out = await complete([
+  const out = await asWorker(userId, "email", () => complete([
     { role: "system", content: [
       "أنت تحفظين معرفة علّمك إياها صاحب العمل لتستخدميها في كتابة البريد التسويقي.",
       "استخرجي من النص الحقائق المفيدة للبيع: ما نقدّمه، لمن، ما يقلق كل قطاع، الالتزامات والمواعيد كما وردت حرفياً، أسلوبنا، ما لا يُقال.",
@@ -172,7 +172,7 @@ export async function teach(userId: number, text: string, topic: string | null =
       topic ? `النص كله عن قطاع: ${topic} — إلا ما كان عاماً بوضوح.` : "",
     ].filter(Boolean).join("\n") },
     { role: "user", content: src },
-  ], 60_000);
+  ], 60_000));
 
   const items: Array<{ content: string; topic: string | null }> = [];
   if (out?.text) {
@@ -451,14 +451,14 @@ export async function replyVoice(userId: number, sector: string | null): Promise
 /** A few lines on what a finished mission taught her, written into memory. */
 export async function learnFrom(userId: number, sectors: string[], report: unknown): Promise<string[]> {
   const { head } = await voice(userId);
-  const out = await complete([
+  const out = await asWorker(userId, "email", () => complete([
     { role: "system", content: [head, "",
       "أمامك نتائج حملة بريد انتهت. استخرجي ما يجب أن تتذكريه للحملة القادمة لنفس الجمهور.",
       "من ١ إلى ٤ أسطر، كل سطر بهذا الشكل: الدرس: <سلوك محدد يُكرَّر أو يُتجنَّب، مع الرقم الذي يدعمه>",
       "إن كانت العيّنة صغيرة (أقل من ٣٠ فتحاً أو ٥ ردود) فقولي ذلك في سطر واحد ولا تستنتجي أكثر.",
     ].join("\n") },
     { role: "user", content: JSON.stringify(report).slice(0, 6000) },
-  ], 45_000);
+  ], 45_000));
   const lessons = (out?.text ?? "").split("\n").map((l) => /الدرس\s*[:：]\s*(.+)/.exec(l)?.[1]?.trim()).filter((x): x is string => !!x).slice(0, 4);
   // A model's reading of a report is a win or a loss, never an «instruction»:
   // that kind is rendered as the owner's own order («التزم بها حرفياً»).

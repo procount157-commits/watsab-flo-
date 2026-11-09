@@ -31,6 +31,7 @@ import { isConfigured } from "./provider";
 import { count } from "./segments";
 import { createMission } from "./missions";
 import { activity, ensureEmailTeam, onDuty } from "./team";
+import { accountHalted } from "../org/controls";
 
 export const STAGES = {
   opened:   "فتحوا ولم يردّوا",
@@ -392,6 +393,7 @@ export async function runAutopilot(userId: number, opts: { force?: boolean } = {
 export async function runAllAutopilots(): Promise<void> {
   const rows = await db.select({ userId: emailAutopilotTable.userId }).from(emailAutopilotTable).where(eq(emailAutopilotTable.enabled, true));
   for (const r of rows) {
+    if (await accountHalted(r.userId, "email_autopilot")) continue;
     try { await runAutopilot(r.userId); }
     catch (err) { logger.warn({ userId: r.userId, err: String((err as any)?.message ?? err) }, "autopilot round failed"); }
   }

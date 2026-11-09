@@ -20,6 +20,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, knowledgeBaseTable, businessProfileTable } from "@workspace/db";
 import { logger } from "../logger";
 import { DEFAULT_PRICING, type Pricing } from "./pricing";
+import { accountHalted } from "../org/controls";
 
 export const CATALOG_KIND = "floret";
 const KB_CATEGORY = "catalog";
@@ -174,7 +175,7 @@ export function startCatalogSync() {
   if (timer || !process.env["FLORET_DATABASE_URL"]) return;
   const run = async () => {
     const users = await db.select({ userId: businessProfileTable.userId }).from(businessProfileTable).where(eq(businessProfileTable.catalogSource, CATALOG_KIND));
-    for (const u of users) await syncCatalog(u.userId).catch((err) => logger.warn({ userId: u.userId, err: String(err?.message ?? err).slice(0, 200) }, "مزامنة الكتالوج فشلت"));
+    for (const u of users) if (!(await accountHalted(u.userId, "catalog_sync"))) await syncCatalog(u.userId).catch((err) => logger.warn({ userId: u.userId, err: String(err?.message ?? err).slice(0, 200) }, "مزامنة الكتالوج فشلت"));
   };
   setTimeout(() => void run(), 90_000).unref();
   timer = setInterval(() => void run(), 6 * 3_600_000);

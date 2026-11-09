@@ -12,6 +12,7 @@
 // and the pricing is the catalogue's.
 
 import { logger } from "./logger";
+import { modelHalted } from "./org/controls";
 
 const GROQ_CHAT = "https://api.groq.com/openai/v1/chat/completions";
 const MODELS = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"];
@@ -25,7 +26,9 @@ const PROMPT = `أنت تصف صورة أرسلها عميل لمحل ذهب و�
 
 export type Seen = { text: string; model: string; ms: number } | null;
 
-export async function describeImage(image: Buffer, mimetype = "image/jpeg", caption = "", timeoutMs = 40_000): Promise<Seen> {
+export async function describeImage(image: Buffer, mimetype = "image/jpeg", caption = "", timeoutMs = 40_000, userId?: number): Promise<Seen> {
+  // Not through complete(), so the kill switch is asked here.
+  if (await modelHalted(userId)) return null;
   const key = process.env["GROQ_API_KEY"];
   if (!key) { logger.warn("لا يوجد مفتاح Groq — لا يمكن قراءة الصور"); return null; }
   if (!image.length || image.length > MAX_BYTES) { logger.warn({ bytes: image.length }, "حجم الصورة غير صالح"); return null; }

@@ -8,7 +8,7 @@ import { db, socialListsTable, socialTargetsTable, socialThreadsTable } from "@w
 import { classifySector } from "../email/sector";
 import { ACTION_KINDS, PLATFORM, capsFor, personOf, type SocialPlatform } from "./platforms";
 import { account, ensureAccount, record, todayCounts } from "./engine";
-import { driverFor } from "./drivers";
+import { driverFor, hasDriver } from "./drivers";
 import { activity, recentActivity, teamStatus } from "./team";
 import { openSession } from "../browser-agent";
 
@@ -41,7 +41,7 @@ export async function dashboard(userId: number, p: SocialPlatform, days = 14) {
     db.select().from(socialThreadsTable).where(and(eq(socialThreadsTable.userId, userId), eq(socialThreadsTable.platform, p), inArray(socialThreadsTable.temperature, ["hot", "warm"]))).orderBy(desc(socialThreadsTable.lastMessageAt)).limit(10),
   ]);
   return {
-    platform: p, label: PLATFORM[p].labelAr, driven: !!driverFor(p),
+    platform: p, label: PLATFORM[p].labelAr, driven: hasDriver(p),
     account: a, caps: capsFor(p, a.caps), today: today.used, fails: today.fails, pace: PLATFORM[p].pace, firstContact: PLATFORM[p].firstContact,
     kpi: k, daily, approvals, team, activity: act, lists, hot,
   };
@@ -87,7 +87,7 @@ export async function addTargets(userId: number, p: SocialPlatform, listId: numb
 
 /** A search on the platform itself, as the signed-in account sees it, into a new list. */
 export async function searchIntoList(userId: number, p: SocialPlatform, query: string, max = 30, listId?: number) {
-  const d = driverFor(p);
+  const d = driverFor(p, userId);
   if (!d) throw new Error(`البحث في ${PLATFORM[p].labelAr} غير متاح بعد`);
   const a = await account(userId, p);
   if (!a || a.state !== "logged_in") throw new Error("سجّل دخول الحساب أولاً من صفحة الحساب");

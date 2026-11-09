@@ -7,10 +7,26 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type Agent = { userId: number; role: string };
+type Agent = { userId: number; role: string; keepRoute?: boolean };
 const store = new AsyncLocalStorage<Agent>();
 
 export function asAgent<T>(userId: number, role: string, fn: () => Promise<T>): Promise<T> {
   return store.run({ userId, role }, fn);
 }
 export const currentAgent = (): Agent | undefined => store.getStore();
+
+/**
+ * Work that belongs to an account and an employee, but was never billed to one.
+ *
+ * The off switches and the receipts need to know whose thinking this is; the
+ * model route must not change because of it. Inside asAgent an account named in
+ * THEGRID_USERS goes to its paid keys first and the email team to its own models
+ * (llm.ts), so wrapping a background job in plain asAgent would have moved it onto
+ * the owner's paid provider and changed what answers. `keepRoute` is the difference.
+ * Inside an existing asAgent it changes nothing: that employee already owns the work.
+ */
+export function asWorker<T>(userId: number, role: string, fn: () => Promise<T>): Promise<T> {
+  return store.getStore() ? fn() : store.run({ userId, role, keepRoute: true }, fn);
+}
+/** The employee whose model route applies: none for work that only carries a name for the switches. */
+export const routedAgent = (): Agent | undefined => { const a = store.getStore(); return a?.keepRoute ? undefined : a; };

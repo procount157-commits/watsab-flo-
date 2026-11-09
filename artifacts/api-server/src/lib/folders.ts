@@ -8,6 +8,7 @@
 import { and, eq } from "drizzle-orm";
 import { db, listFoldersTable } from "@workspace/db";
 import { classifySector } from "./email/sector";
+import { platformHalted } from "./org/controls";
 
 /** The sector most of these company names are in — a majority of enough of them to mean it. */
 export function majoritySector(names: Array<string | null | undefined>, min = 5): string | null {
@@ -162,7 +163,7 @@ let filing: NodeJS.Timeout | null = null;
 /** Every ten minutes, and a first pass a minute after start: whatever list was made by any path is filed. */
 export function startListFiling(): void {
   if (filing) return;
-  const run = () => fileUnfiledLists().catch(() => []);
+  const run = async () => { if (!(await platformHalted())) await fileUnfiledLists().catch(() => []); };
   setTimeout(() => void run(), 60_000).unref();
   filing = setInterval(() => void run(), 10 * 60_000);
   filing.unref();

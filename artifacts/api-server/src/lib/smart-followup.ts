@@ -56,6 +56,7 @@ import { shopContext } from "./catalog/shop-context";
 import { HUMAN_VOICE } from "./voice-doctrine";
 import { quote, discounted, discountText } from "./catalog/pricing";
 import { normalizeArabic } from "./intent";
+import { accountHalted } from "./org/controls";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -1237,6 +1238,7 @@ export function startSmartFollowUps() {
   const run = async () => {
     const users = await db.execute(sql`SELECT user_id FROM business_profile WHERE smart_followup <> 'off' AND NOT team_paused`).catch(() => ({ rows: [] }));
     for (const u of users.rows as Array<{ user_id: number }>) {
+      if (await accountHalted(u.user_id, "smart_followup")) continue;
       await runSmartFollowUps(u.user_id).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "smart follow-up round failed"));
     }
   };

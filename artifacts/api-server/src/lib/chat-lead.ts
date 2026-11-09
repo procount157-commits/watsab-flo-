@@ -23,6 +23,7 @@ import { parseLoose } from "./loose-json";
 import { ENDEARMENT } from "./voice-doctrine";
 import { priceOrWeight } from "./reply-check";
 import { normalizeArabic } from "./intent";
+import { accountHalted } from "./org/controls";
 
 export const CHAT_LEAD_ROLE = "chat_lead";
 /** Who reads the handbook: the reply desk, the follow-up desk, the WhatsApp campaign writer. */
@@ -175,7 +176,7 @@ export function startChatLead(): void {
   if (timer) return;
   const run = async () => {
     const users = await db.execute<{ user_id: number }>(sql`SELECT DISTINCT user_id FROM wa_thread_messages WHERE created_at > now() - interval '7 days'`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
-    for (const u of users.rows) await runChatLead(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "مسؤول الشات تعذّر"));
+    for (const u of users.rows) if (!(await accountHalted(Number(u.user_id), "chat_lead"))) await runChatLead(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "مسؤول الشات تعذّر"));
   };
   setTimeout(() => void run(), 15 * 60_000).unref();
   timer = setInterval(() => void run(), 24 * 3_600_000);

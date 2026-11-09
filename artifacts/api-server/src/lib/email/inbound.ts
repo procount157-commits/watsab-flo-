@@ -34,7 +34,8 @@ import { say } from "../agent-comms";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
 import { recordEvent, getSettings, cancelSequencesFor, stopCompany } from "./service";
-import { sendEmail, messageIdFor, isConfigured } from "./provider";
+import { EmailHalted, sendEmail, messageIdFor, isConfigured } from "./provider";
+import { accountHalted } from "../org/controls";
 import { newToken, htmlToText } from "./tracking";
 import { updateCard } from "../lead-card";
 import { replyVoice } from "./agent";
@@ -130,7 +131,7 @@ export async function handleInbound(userId: number, mail: InboundMail): Promise<
   });
   // القواعد تردّدت في نيّة ردٍّ حقيقي: النموذج يُسأل كلمةً واحدة. وأي
   // فشلٍ يُبقي حكم القواعد.
-  const v = await classifyWithModel(v0, { subject: mail.subject, text }).catch(() => v0);
+  const v = await classifyWithModel(v0, { subject: mail.subject, text }, userId).catch(() => v0);
   const isReply = mayBecomeLead(v.kind);
 
   // الرسالة التي ردّ عليها: الترويسة أولاً، ثم العنوان.
@@ -472,7 +473,7 @@ export async function escalate(userId: number, x: { inboundId: number; from: str
     await sendEmail(s, {
       to: s.fromEmail, toName: null, subject: `🔥 ${head}`.slice(0, 200),
       html: `<div dir="auto" style="font:15px/1.8 Arial,sans-serif;white-space:pre-wrap">${body.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>`,
-      text: body, messageId: messageIdFor(newToken(), s.fromEmail), unsubscribeUrl: null, inReplyTo: null,
+      text: body, messageId: messageIdFor(newToken(), s.fromEmail), unsubscribeUrl: null, inReplyTo: null, kind: "owner_notice",
     });
   } catch (err: any) {
     logger.warn({ userId, inboundId: x.inboundId, err: String(err?.message ?? err) }, "تعذّر بريد التصعيد");
@@ -620,12 +621,14 @@ export async function sendReply(userId: number, inboundId: number, subject?: str
     userId, contactId: inb.contactId, toEmail: inb.fromEmail, subject: subj, token, status: "queued", messageIdHdr: messageId, senderId: via?.id ?? null,
   }).returning();
   try {
-    const r = await sendEmail(s!, { to: inb.fromEmail, toName: inb.fromName, subject: subj, html, text, messageId, unsubscribeUrl: null, inReplyTo: inb.messageIdHdr });
+    const r = await sendEmail(s!, { to: inb.fromEmail, toName: inb.fromName, subject: subj, html, text, messageId, unsubscribeUrl: null, inReplyTo: inb.messageIdHdr, kind: "reply" });
     await db.update(emailMessagesTable).set({ status: "sent", sentAt: new Date(), providerId: r.providerId }).where(eq(emailMessagesTable.id, m!.id));
     await db.update(emailInboundTable).set({ state: "sent", draftSubject: subj, draftReply: text, autoSendAt: null }).where(eq(emailInboundTable.id, inboundId));
     if (inb.draftReply) await recordFeedback({ userId, role: "email", channel: "email", kind: "email_reply", refId: inboundId, context: (inb.text ?? "").slice(0, 1_500), original: inb.draftReply, final: text, verdict: body != null ? "edited" : "approved" });
     await recordEvent(userId, m!.id, "sent", { meta: { reply: true } });
   } catch (err: any) {
+    // المفتاح مُطفأ: المحاولة لم تخرج ولا سطر لها، والمسودة في مكانها تنتظر.
+    if (err instanceof EmailHalted) { await db.delete(emailMessagesTable).where(eq(emailMessagesTable.id, m!.id)); throw err; }
     await db.update(emailMessagesTable).set({ status: "failed", error: String(err?.message ?? err).slice(0, 400) }).where(eq(emailMessagesTable.id, m!.id));
     throw err;
   }
@@ -735,9 +738,10 @@ async function pollInbox(ib: Inbox): Promise<number> {
 
 export async function pollAllMailboxes(): Promise<void> {
   const rows = await db.select().from(emailSettingsTable).where(sql`${emailSettingsTable.imapHost} is not null and coalesce(nullif(${emailSettingsTable.imapUser}, ''), ${emailSettingsTable.smtpUser}) is not null`);
-  for (const s of rows) await pollMailbox(s).catch(() => {});
+  // الموقوف لا يُقرأ بريده الآن، فلا يُصنَّف بلا نموذج ولا يضيع: lastUid يكمل حين يعود.
+  for (const s of rows) { if (await accountHalted(s.userId, "email.poll")) continue; await pollMailbox(s).catch(() => {}); }
   const extra = await db.select().from(emailSendersTable).where(and(isNotNull(emailSendersTable.imapHost), sql`${emailSendersTable.status} <> 'paused'`)).catch(() => []);
-  for (const x of extra) await pollSenderInbox(x).catch(() => {});
+  for (const x of extra) { if (await accountHalted(x.userId, "email.poll")) continue; await pollSenderInbox(x).catch(() => {}); }
 }
 
 /** Drafts whose moment has come. A person who edited or sent one first has already moved it out of "drafted". */
@@ -770,6 +774,8 @@ export async function sendDueAutoReplies(now = new Date()): Promise<number> {
     .where(and(eq(emailInboundTable.state, "drafted"), isNotNull(emailInboundTable.autoSendAt), lt(emailInboundTable.autoSendAt, now))).limit(20);
   let n = 0;
   for (const d of due) {
+    // حسابٌ موقوف: موعد الإرسال يبقى، ويُعاد السؤال كله حين يعود.
+    if (await accountHalted(d.userId, "email.auto_reply")) continue;
     try {
       // يُعاد السؤال لحظة الإرسال، لا لحظة الجدولة.
       const why = await autoSendBlocker(d, now);
@@ -781,6 +787,7 @@ export async function sendDueAutoReplies(now = new Date()): Promise<number> {
       }
       await sendReply(d.userId, d.id); n++; logger.info({ userId: d.userId, inboundId: d.id }, "أُرسل رد البريد تلقائياً");
     } catch (err: any) {
+      if (err instanceof EmailHalted) continue;
       await db.update(emailInboundTable).set({ autoSendAt: null }).where(eq(emailInboundTable.id, d.id));
       logger.warn({ inboundId: d.id, err: String(err?.message ?? err) }, "تعذّر الرد التلقائي — ينتظر شخصاً");
     }

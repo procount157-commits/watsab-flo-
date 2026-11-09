@@ -10,7 +10,7 @@ import {
 import { requireAuth } from "../lib/auth";
 import { openSession, closeSession, screenshot, remoteClick, remoteType, remoteKey, hasScreen } from "../lib/browser-agent";
 import { ACTION_KINDS, PLATFORM, isPlatform, postIdOf, type SocialPlatform } from "../lib/social/platforms";
-import { driverFor } from "../lib/social/drivers";
+import { hasDriver } from "../lib/social/drivers";
 import * as engine from "../lib/social/engine";
 import * as agent from "../lib/social/agent";
 import { activity } from "../lib/social/team";
@@ -38,7 +38,7 @@ router.get("/:platform", async (req, res) => {
 // ── Account ──────────────────────────────────────────────────────
 router.post("/:platform/login-window", async (req, res) => {
   const p = P(req);
-  if (!driverFor(p)) return res.status(400).json({ error: `لا يعمل الفريق على ${PLATFORM[p].labelAr} بعد` });
+  if (!hasDriver(p)) return res.status(400).json({ error: `لا يعمل الفريق على ${PLATFORM[p].labelAr} بعد` });
   const a = await engine.ensureAccount(uid(req), p);
   try {
     const s = await openSession(uid(req), a.profile, { visible: true });
@@ -341,7 +341,7 @@ router.delete("/:platform/content/:id", async (req, res) => {
 // ── Running ──────────────────────────────────────────────────────
 router.post("/:platform/run", async (req, res) => {
   const p = P(req);
-  if (!driverFor(p)) return res.status(400).json({ error: `لا يعمل الفريق على ${PLATFORM[p].labelAr} بعد` });
+  if (!hasDriver(p)) return res.status(400).json({ error: `لا يعمل الفريق على ${PLATFORM[p].labelAr} بعد` });
   // A round takes minutes (it paces itself like a person); it runs on, and the dashboard shows what it did.
   void engine.runRound(uid(req), p).catch(() => {});
   res.json({ started: true });

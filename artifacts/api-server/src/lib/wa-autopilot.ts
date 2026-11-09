@@ -42,6 +42,7 @@ import { WA_DOCTRINE } from "./wa-doctrine";
 import { state as firewallState } from "./wa-firewall";
 import { describePending, fitsCampaign, messageLang, pictureMatches, unreadCount } from "./image-sense";
 import { languageOfText } from "./recipient-name";
+import { accountHalted } from "./org/controls";
 
 export const WRITER_ROLE = "wa_campaigns";
 const JUDGE_AFTER_HOURS = 48;
@@ -438,7 +439,7 @@ export function startWaAutopilot(): void {
   if (timer) return;
   const run = async () => {
     const rows = await db.select({ userId: waAutopilotTable.userId }).from(waAutopilotTable).where(eq(waAutopilotTable.enabled, true)).catch(() => []);
-    for (const r of rows) await runCycle(r.userId).catch((err) => logger.warn({ userId: r.userId, err: String(err?.message ?? err) }, "دورة طيار واتساب تعذّرت"));
+    for (const r of rows) if (!(await accountHalted(r.userId, "wa_autopilot"))) await runCycle(r.userId).catch((err) => logger.warn({ userId: r.userId, err: String(err?.message ?? err) }, "دورة طيار واتساب تعذّرت"));
   };
   setTimeout(() => void run(), 3 * 60_000).unref();
   timer = setInterval(() => void run(), 30 * 60_000);

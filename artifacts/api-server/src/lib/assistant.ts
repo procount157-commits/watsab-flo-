@@ -18,6 +18,7 @@ import { complete, activeProvider } from "./llm";
 import { logger } from "./logger";
 import { overview as emailOverview } from "./email/service";
 import { INTERVIEW_KIND, INTERVIEW_DONE, QUESTIONS, STOP, interviewPrompt, managerFor, harvest, applyHarvest } from "./onboarding";
+import { asWorker } from "./agent-context";
 
 /** How much of a thread is replayed to the model. */
 const HISTORY_TURNS = 24;
@@ -176,13 +177,13 @@ export async function chat(userId: number, threadId: number | null, message: str
     system = systemPrompt(await buildContext(userId));
   }
 
-  const out = await complete([
+  const out = await asWorker(userId, "assistant", () => complete([
     { role: "system", content: system },
     ...history.slice(-HISTORY_TURNS).map((m) => ({
       role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
       content: m.content,
     })),
-  ], interviewing ? 60_000 : 30_000);
+  ], interviewing ? 60_000 : 30_000));
 
   if (!out?.text) {
     return { threadId: tid, reply: null, provider, error: "النموذج لم يستجب — جرّب مرة أخرى أو بدّل المزوّد." };

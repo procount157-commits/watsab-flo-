@@ -30,6 +30,8 @@ import { notify, esc } from "./telegram";
 import { say } from "./agent-comms";
 import { logger } from "./logger";
 import { overview as emailOverview } from "./email/service";
+import { asWorker } from "./agent-context";
+import { accountHalted } from "./org/controls";
 
 export const CHAIR = "chief";
 
@@ -254,7 +256,7 @@ async function speak(opts: {
     ...customer.filter((s) => /التفاوض|احتواء|خريطة/.test(s.name)),
   ]);
 
-  const out = await complete([
+  const out = await asWorker(opts.userId, opts.role, () => complete([
     { role: "system", content: [
       `أنت ${e.name}${e.title ? `، ${e.title}` : ""}.`,
       e.persona ?? "",
@@ -282,7 +284,7 @@ async function speak(opts: {
       `— أرقام اليوم —\n${opts.agenda}`,
       opts.heard.length ? `\n— ما قيل في الاجتماع حتى الآن —\n${transcript(opts.heard)}` : "",
     ].filter(Boolean).join("\n") },
-  ]);
+  ]));
   return out?.text?.trim() ?? null;
 }
 
@@ -519,6 +521,7 @@ export function startMeetings(): void {
     const accounts = await db.selectDistinct({ userId: botEmployeesTable.userId }).from(botEmployeesTable);
     const since = new Date(Date.now() - 24 * 60 * 60_000);
     for (const { userId } of accounts) {
+      if (await accountHalted(userId, "meeting")) continue;
       // A day with no customer contact has nothing to meet about, and a
       // meeting held anyway costs nine model calls to say so.
       const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(autoReplyLogTable)

@@ -32,6 +32,7 @@ import { complete } from "./llm";
 import { logger } from "./logger";
 import { say } from "./agent-comms";
 import { skillsFor, skillsPreamble } from "./agent-skills";
+import { asWorker } from "./agent-context";
 
 export const OPS_ROLE = "ops";
 export const OPS_SWEEP_MS = 10 * 60_000;
@@ -355,7 +356,7 @@ async function narrate(userId: number, d: Decision, done: string[]): Promise<str
   if (d.level === "ok") return plain;
 
   const trade = skillsPreamble(await skillsFor(userId, OPS_ROLE, "internal").catch(() => []));
-  const out = await complete([
+  const out = await asWorker(userId, OPS_ROLE, () => complete([
     { role: "system", content: [
       emp ? `أنت ${emp.name}${emp.title ? `، ${emp.title}` : ""}.` : "أنت مسؤول تشغيل.",
       emp?.persona ?? "",
@@ -370,7 +371,7 @@ async function narrate(userId: number, d: Decision, done: string[]): Promise<str
       "أي رقم تذكره يجب أن يكون منقولاً حرفياً مما أُعطي لك. لا تقرّبه ولا تعيد صياغته. وإن لم تكن متأكداً فلا تذكر رقماً أصلاً.",
     ].filter(Boolean).join("\n") },
     { role: "user", content: plain },
-  ]);
+  ]));
   return out?.text?.trim() || plain;
 }
 

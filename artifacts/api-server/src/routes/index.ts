@@ -7,6 +7,7 @@ import publicRouter from "./public";
 import authRouter from "./auth";
 import adminRouter from "./admin";
 import whatsappRouter from "./whatsapp";
+import orgRouter from "./org";
 import contactsRouter from "./contacts";
 import campaignsRouter from "./campaigns";
 import dashboardRouter from "./dashboard";
@@ -88,5 +89,6 @@ router.use("/ai", aiRouter);
 router.use("/settings", settingsRouter);
 router.use("/diagnostics", diagnosticsRouter);
 router.use("/accounts", accountsRouter);
+router.use("/org", orgRouter);
 
 export default router;

@@ -31,6 +31,7 @@ import { getSettings } from "./service";
 import { isConfigured } from "./provider";
 import { activity, onDuty } from "./team";
 import { logger } from "../logger";
+import { accountHalted } from "../org/controls";
 
 const n = (x: number) => x.toLocaleString("en");
 
@@ -124,7 +125,7 @@ export function startCaretaker() {
   if (timer) return;
   const run = async () => {
     const users = await db.execute<{ user_id: number }>(sql`SELECT user_id FROM email_settings`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
-    for (const u of users.rows) await caretakerRound(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "جولة ماجد فشلت"));
+    for (const u of users.rows) if (!(await accountHalted(Number(u.user_id), "email_caretaker"))) await caretakerRound(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "جولة ماجد فشلت"));
   };
   setTimeout(() => void run(), 5 * 60_000).unref();
   timer = setInterval(() => void run(), 6 * 3_600_000);

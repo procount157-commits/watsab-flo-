@@ -34,6 +34,7 @@ import { trackingActive, retestHeld, getSettings, signals } from "./service";
 import { warmupCap } from "./health";
 import { activity, guardCheck, formatIssues, repairDraft, onDuty, tooSimilar, leadOf, type EmailRole } from "./team";
 import { knowledgeText } from "./knowledge-docs";
+import { accountHalted } from "../org/controls";
 
 async function log(missionId: number, text: string, kind = "note") {
   await db.insert(emailMissionLogTable).values({ missionId, kind, text: text.slice(0, 2000) });
@@ -437,6 +438,7 @@ export async function runMissions(): Promise<void> {
   const active = await db.select().from(emailMissionsTable)
     .where(and(eq(emailMissionsTable.status, "active"), sql`(${emailMissionsTable.stage} in ('draft','sending','following_up') or (${emailMissionsTable.stage} = 'awaiting_approval' and not ${emailMissionsTable.requireApproval}))`));
   for (const m of active) {
+    if (await accountHalted(m.userId, "email_missions")) continue;
     try { await runMission(m); }
     catch (err) { await log(m.id, `خطأ: ${String((err as any)?.message ?? err).slice(0, 300)}`, "error").catch(() => {}); }
   }

@@ -4,6 +4,10 @@
 // the model call — so nothing they do goes on while they are switched off,
 // whichever of the thirty places the call came from. Read through a short
 // cache: the switch takes effect within seconds, not on every call's cost.
+//
+// These two stay the owner's everyday switches. The wider ones (the platform,
+// an account, a channel, a department) live in lib/org/controls.ts, which reads
+// these through offDuty() rather than keeping a second copy of the rule.
 
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";

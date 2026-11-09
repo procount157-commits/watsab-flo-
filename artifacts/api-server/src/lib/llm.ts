@@ -15,13 +15,13 @@
 // With none set, callers fall back to answering from the knowledge base
 // directly, which needs no network at all.
 
-import { currentAgent } from "./agent-context";
+import { currentAgent, routedAgent } from "./agent-context";
 import { and, eq } from "drizzle-orm";
 import { db, llmSettingsTable } from "@workspace/db";
 import { logger } from "./logger";
 import { rank, recordOk, recordFail, type Candidate } from "./llm-health";
 import { receipt, tokensOf, noteUnattributedCall } from "./graph/receipts";
-import { offDuty } from "./graph/switch";
+import { departmentOf, isHalted } from "./org/controls";
 
 export type Provider =
   | "anthropic" | "gemini" | "groq" | "openrouter"
@@ -442,14 +442,15 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000, opts?
   // Counted against the employee whose work this is, when it runs inside asAgent().
   const who = currentAgent(), t0 = Date.now();
   const charsIn = messages.reduce((a, m) => a + m.content.length, 0);
-  if (who) {
-    // Switched off — the employee, or the whole team — means no thinking at all.
-    const off = await offDuty(who.userId, who.role);
-    if (off) {
-      receipt({ userId: who.userId, node: who.role, action: "llm.call", status: "blocked", why: off });
-      return null;
-    }
-  } else noteUnattributedCall();
+  // Switched off — the platform, the account, the department, the employee, the
+  // whole team — means no thinking at all. With no employee on the call only the
+  // platform's switch can apply, and it is asked just the same. Before any network.
+  const halt = await isHalted(who ? { userId: who.userId, role: who.role, department: departmentOf(who.role) } : {});
+  if (halt.halted) {
+    if (who) receipt({ userId: who.userId, node: who.role, action: "llm.call", status: "blocked", why: halt.reason ?? "موقوف" });
+    return null;
+  }
+  if (!who) noteUnattributedCall();
   const out = await completeInner(messages, timeoutMs, opts);
   if (who) receipt({
     userId: who.userId, node: who.role, action: "llm.call", status: out ? "ok" : "failed",
@@ -528,10 +529,12 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number, opts?: C
   // capable than anything above it.
   add("pollinations", "", "");
 
-  const ranked = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), currentAgent()?.role ?? null);
+  // routedAgent, not currentAgent: a background job named for the switches (asWorker) keeps the route it always had.
+  const route = routedAgent();
+  const ranked = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), route?.role ?? null);
   // Gemini is the owner's paid key too (2026-10-19), for the same two accounts.
   const onlyNamed = (p: string) => p === "thegrid" || p === "openrouter2" || p === "gemini";
-  const ordered = paidFirst(ranked.filter((c) => !onlyNamed(c.provider) || gridAllowed(currentAgent()?.userId)), currentAgent()?.userId);
+  const ordered = paidFirst(ranked.filter((c) => !onlyNamed(c.provider) || gridAllowed(route?.userId)), route?.userId);
 
   let lastErr = "";
   for (const step of ordered) {

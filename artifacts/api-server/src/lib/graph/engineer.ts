@@ -38,6 +38,7 @@ import { runMeeting } from "../meeting";
 import { recentForReview } from "../arena";
 import { logger } from "../logger";
 import { HUMAN_VOICE } from "../voice-doctrine";
+import { accountHalted } from "../org/controls";
 
 export const ENGINEER_ROLE = "engineer";
 export const ENGINEER = { name: "غانم", title: "مهندس الجراف — مدير الفريق", avatar: "🧭" };
@@ -446,7 +447,7 @@ export function startEngineerRounds() {
     if (h !== 8) return;
     const users = await db.execute<{ user_id: number }>(sql`SELECT DISTINCT e.user_id FROM bot_employees e JOIN business_profile p ON p.user_id = e.user_id WHERE e.role = ${ENGINEER_ROLE} AND NOT p.team_paused
       AND NOT EXISTS (SELECT 1 FROM assistant_messages m JOIN assistant_threads t ON t.id = m.thread_id WHERE t.user_id = e.user_id AND t.title = 'جولات غانم اليومية' AND m.role = 'user' AND m.created_at > now() - interval '20 hours')`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
-    for (const u of users.rows) await dailyRound(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err).slice(0, 160) }, "جولة غانم فشلت"));
+    for (const u of users.rows) if (!(await accountHalted(Number(u.user_id), "engineer"))) await dailyRound(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err).slice(0, 160) }, "جولة غانم فشلت"));
   };
   dailyTimer = setInterval(() => void tick(), 15 * 60_000);
   dailyTimer.unref();

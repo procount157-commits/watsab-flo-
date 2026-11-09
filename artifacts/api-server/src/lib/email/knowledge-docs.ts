@@ -18,6 +18,7 @@ import { terms, queryWords } from "../knowledge";
 import { complete } from "../llm";
 import { logger } from "../logger";
 import { brief, ensureEmailAgent, teach, EMAIL_ROLE } from "./agent";
+import { asWorker } from "../agent-context";
 
 export const CATEGORIES: Record<string, string> = {
   company: "عن الشركة",
@@ -202,7 +203,7 @@ export async function ask(userId: number, question: string, sector: string | nul
     passages(userId, question, { sectors: sector ? [sector] : [], limit: 4 }),
   ]);
   if (!known && !found.length) return { answer: "لا أعرف شيئاً بعد — ارفع مستندات عن الشركة والقطاع أولاً.", sources: [], provider: null };
-  const out = await complete([
+  const out = await asWorker(userId, "email", () => complete([
     { role: "system", content: [
       "أنتِ نورة، مسؤولة التسويق بالبريد. صاحب العمل يختبر ما تعرفينه.",
       "أجيبي من المعلومات أدناه فقط. إن لم يكن الجواب فيها فقولي ذلك صراحة واذكري ما ينقصك — لا تخمّني ولا تكملي من عندك.",
@@ -212,7 +213,7 @@ export async function ask(userId: number, question: string, sector: string | nul
       found.length ? `مقتطفات من المستندات:\n${found.map((p, i) => `[${i + 1}] من «${p.title}»:\n${p.text}`).join("\n\n")}` : "",
     ].filter(Boolean).join("\n") },
     { role: "user", content: question },
-  ], 60_000);
+  ], 60_000));
   return {
     answer: out?.text?.trim() || (found.length ? `لم يستجب النموذج — هذا أقرب ما وجدته:\n\n${found[0]!.text.slice(0, 600)}` : "لم يستجب النموذج، ولا مقتطف يطابق السؤال."),
     sources: found.map((p, i) => ({ n: i + 1, docId: p.docId, title: p.title, text: p.text.slice(0, 400) })),

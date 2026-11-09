@@ -22,6 +22,8 @@ import { notify, esc, linkedUsers } from "./telegram";
 import { say } from "./agent-comms";
 import { logger } from "./logger";
 import { skillsFor, skillsPreamble } from "./agent-skills";
+import { asWorker } from "./agent-context";
+import { accountHalted } from "./org/controls";
 
 export const COLLECTOR_ROLE = "collector";
 
@@ -234,7 +236,7 @@ export async function buildReport(userId: number): Promise<string> {
     .where(and(eq(botEmployeesTable.userId, userId), eq(botEmployeesTable.role, COLLECTOR_ROLE))).limit(1);
 
   const trade = skillsPreamble(await skillsFor(userId, COLLECTOR_ROLE, "internal").catch(() => []));
-  const note = await complete([
+  const note = await asWorker(userId, COLLECTOR_ROLE, () => complete([
     { role: "system", content: [
       emp ? `أنت ${emp.name}${emp.title ? `، ${emp.title}` : ""}.` : "أنت محلل بيانات.",
       emp?.persona ?? "",
@@ -243,7 +245,7 @@ export async function buildReport(userId: number): Promise<string> {
       "لا تكرر الأرقام كما هي — اشرح دلالتها. لا تستخدم HTML ولا رموزاً.",
     ].filter(Boolean).join("\n") },
     { role: "user", content: lines.join("\n").replace(/<[^>]+>/g, "") },
-  ], 15_000).catch(() => null);
+  ], 15_000)).catch(() => null);
 
   if (note?.text) lines.push("", `💬 ${esc(note.text.trim())}`);
   return lines.join("\n");
@@ -286,6 +288,7 @@ export function startCollector(): void {
     lastReportDay = day;
 
     for (const userId of await linkedUsers()) {
+      if (await accountHalted(userId, "collector")) continue;
       await runCollector(userId).catch((err) =>
         logger.error({ userId, err: String(err?.message ?? err) }, "فشلت جولة جامع البيانات"));
     }

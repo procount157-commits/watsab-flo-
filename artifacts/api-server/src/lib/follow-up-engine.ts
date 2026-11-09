@@ -11,6 +11,7 @@ import { asAgent } from "./agent-context";
 import { dealFromHotLead } from "./deals/deals";
 import { sayable } from "./tts";
 import { businessProfileTable } from "@workspace/db";
+import { accountHalted } from "./org/controls";
 
 async function voiceRepliesOn(userId: number) {
   const [p] = await db.select({ v: businessProfileTable.voiceReplies }).from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1);
@@ -684,6 +685,8 @@ export async function runDueFollowUps(now = new Date()): Promise<{ sent: number;
     const used = perUser.get(job.userId) ?? 0;
     if (used >= MAX_PER_TICK_PER_USER) continue;   // next tick
     if (!getStatus(job.userId).connected) continue; // stays pending
+    // A stopped account's rungs stay pending. A stop long enough expires them, like any other delay.
+    if (await accountHalted(job.userId, "follow_up")) continue;
     // A lapsed subscription sends nothing. Stays pending for the renewal.
     if (!planOkByUser.has(job.userId)) {
       planOkByUser.set(job.userId, await assertCanSend(job.userId).then(() => true).catch(() => false));

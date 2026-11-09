@@ -8,6 +8,7 @@ import { providerStatus, providerStatusAsync, complete, activeProvider, resolveP
 import { healthReport } from "../lib/llm-health";
 import { db as _db } from "@workspace/db";
 import { llmSettingsTable } from "@workspace/db";
+import { asWorker } from "../lib/agent-context";
 
 const router = Router();
 router.use(requireAuth);
@@ -48,10 +49,10 @@ router.put("/provider", async (req, res) => {
 
   // Prove it works before reporting success — a key that stores but cannot
   // answer is worse than none, because nothing looks wrong.
-  const out = await complete([
+  const out = await asWorker(req.session.userId!, "system", () => complete([
     { role: "system", content: "أجب بكلمة واحدة بالعربية." },
     { role: "user",   content: "قل: جاهز" },
-  ], 20_000);
+  ], 20_000));
 
   res.json({
     saved: true,
@@ -69,16 +70,16 @@ router.delete("/provider", async (req, res) => {
 });
 
 /** Round-trip the configured provider so a key can be verified before relying on it. */
-router.post("/provider/test", async (_req, res) => {
+router.post("/provider/test", async (req, res) => {
   const resolved = await resolveProvider();
   const p = resolved?.provider ?? "none";
   if (!resolved) {
     return res.json({ ok: false, provider: p, error: "لا يوجد مزوّد مضبوط — أضف مفتاحاً من هذه الصفحة" });
   }
-  const out = await complete([
+  const out = await asWorker(req.session.userId!, "system", () => complete([
     { role: "system", content: "أجب بكلمة واحدة فقط بالعربية." },
     { role: "user",   content: "قل: جاهز" },
-  ], 15_000);
+  ], 15_000));
   res.json(out
     ? { ok: true, provider: out.provider, sample: out.text.slice(0, 80) }
     : { ok: false, provider: p, error: "المزوّد لم يستجب — تحقق من المفتاح أو الحصة" });

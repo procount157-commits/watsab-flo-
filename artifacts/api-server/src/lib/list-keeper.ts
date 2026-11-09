@@ -17,6 +17,7 @@ import { saveToGroup } from "./contact-save";
 import { say } from "./agent-comms";
 import { receipt } from "./graph/receipts";
 import { logger } from "./logger";
+import { activeAccounts } from "./org/controls";
 
 export const KEEPER_ROLE = "intake";
 
@@ -88,7 +89,9 @@ export function startListKeeper() {
   if (timer) return;
   const run = async () => {
     const users = await db.execute<{ user_id: number }>(sql`SELECT user_id FROM business_profile WHERE NOT team_paused`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
-    for (const u of users.rows) await keeperRound(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "جولة سالم فشلت"));
+    for (const id of await activeAccounts(users.rows.map((u) => Number(u.user_id)), "list_keeper")) {
+      await keeperRound(id).catch((err) => logger.warn({ userId: id, err: String(err?.message ?? err) }, "جولة سالم فشلت"));
+    }
   };
   setTimeout(() => void run(), 4 * 60_000).unref();
   timer = setInterval(() => void run(), 2 * 3_600_000);

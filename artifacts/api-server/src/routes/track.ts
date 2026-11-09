@@ -126,7 +126,9 @@ router.post("/api/email/events/:token", async (req, res) => {
   const kind = /bounce|hard_bounce|soft_bounce/.test(type) ? "bounce" : /complain|spam/.test(type) ? "complaint" : /unsub/.test(type) ? "unsubscribe" : null;
   if (kind && email) {
     const [c] = await db.select({ id: emailContactsTable.id }).from(emailContactsTable)
-      .where(eq(emailContactsTable.email, email)).limit(1);
+      // This account's contact. Without the filter, one account's webhook could mark
+      // another's contact bounced or unsubscribed, when the same address was on both.
+      .where(and(eq(emailContactsTable.userId, s.userId), eq(emailContactsTable.email, email))).limit(1);
     if (c) {
       const [m] = await db.select({ id: emailMessagesTable.id }).from(emailMessagesTable)
         .where(and(eq(emailMessagesTable.userId, s.userId), eq(emailMessagesTable.toEmail, email))).orderBy(desc(emailMessagesTable.createdAt)).limit(1);

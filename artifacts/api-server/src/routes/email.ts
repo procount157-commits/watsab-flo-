@@ -442,7 +442,7 @@ router.post("/settings/test-send", async (req, res) => {
     { base, token, secret: process.env["SESSION_SECRET"] ?? "wam", pixel: !!s!.tracking, links: !!s!.tracking },
     { base, token, fromName: s!.fromName ?? s!.fromEmail!, fromEmail: s!.fromEmail! }, brandOf(s));
   try {
-    const out = await sendEmail(s!, { to, subject: "اختبار الإرسال — FLOW HUB", html: r.html, text: r.text, messageId: messageIdFor(token, s!.fromEmail!), unsubscribeUrl: null });
+    const out = await sendEmail(s!, { to, subject: "اختبار الإرسال — FLOW HUB", html: r.html, text: r.text, messageId: messageIdFor(token, s!.fromEmail!), unsubscribeUrl: null, kind: "test" });
     logger.info({ userId, to, serverReply: out.serverReply, accepted: out.accepted, rejected: out.rejected, messageId: out.providerId }, "رسالة اختبار البريد");
     res.json({ ok: true, to, providerId: out.providerId, serverReply: out.serverReply ?? null, accepted: out.accepted ?? [], rejected: out.rejected ?? [] });
   } catch (err: any) {
@@ -1069,7 +1069,7 @@ router.post("/campaigns/:id/test", async (req, res) => {
     { base: "", token, secret: "x", pixel: false, links: false },
     { base: "", token, fromName: s!.fromName ?? s!.fromEmail!, fromEmail: s!.fromEmail! }, brandOf(s));
   try {
-    await sendEmail(s!, { to, subject: `[Test] ${personalize(c.subject, vars)}`, html: r.html, text: r.text, messageId: messageIdFor(token, s!.fromEmail!), unsubscribeUrl: null });
+    await sendEmail(s!, { to, subject: `[Test] ${personalize(c.subject, vars)}`, html: r.html, text: r.text, messageId: messageIdFor(token, s!.fromEmail!), unsubscribeUrl: null, kind: "test" });
     res.json({ ok: true, to });
   } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
 });

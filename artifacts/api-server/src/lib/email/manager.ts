@@ -42,6 +42,7 @@ import { say } from "../agent-comms";
 import { runDesk, type DeskReport } from "../data-desk/desk";
 import { evaluateDesk, evaluationFacts, type Evaluation } from "../team/evaluate";
 import { verdictFor } from "./service";
+import { accountHalted } from "../org/controls";
 
 /** الإصلاحات التي يأذن بها المدير بلا رجوع: كلها تُعيد السجل إلى ما حدث فعلاً. */
 const SAFE_REPAIRS: Array<NonNullable<LedgerFinding["repair"]>> = ["resync_counters", "cancel_orphans", "mark_bounced", "restore_policy_rejected"];
@@ -417,6 +418,7 @@ export function startManagerLoop(): void {
     const rows = await db.execute<{ user_id: number }>(sql`SELECT user_id FROM email_autopilot WHERE enabled = true`);
     for (const u of rows.rows) {
       const userId = Number(u.user_id);
+      if (await accountHalted(userId, "email_manager")) continue;
       const due = Date.now() - (lastBrief.get(userId) ?? 0) > 20 * 3_600_000;
       const r = await runManagerCycle(userId, { brief: due, notifyOwner: due }).catch((err) => {
         logger.warn({ userId, err: String(err?.message ?? err) }, "دورة المدير تعذّرت"); return null;

@@ -18,6 +18,8 @@ import {
 import { complete } from "./llm";
 import { remember, memoryPreamble } from "./agent-memory";
 import { logger } from "./logger";
+import { asWorker } from "./agent-context";
+import { accountHalted } from "./org/controls";
 
 /** Gulf time, which is what the owner means by "in the morning". */
 const TZ_OFFSET_HOURS = 4;
@@ -125,10 +127,10 @@ export async function runRoutine(r: AgentRoutine): Promise<{ output?: string; er
     "قاعدة: <القاعدة في سطر واحد>",
   ].filter(Boolean).join("\n");
 
-  const out = await complete([
+  const out = await asWorker(r.userId, r.role, () => complete([
     { role: "system", content: system },
     { role: "user", content: `${r.instruction}\n\n— الوضع الحالي —\n${facts}` },
-  ]);
+  ]));
 
   if (!out?.text) {
     return { error: "تعذّر الوصول إلى النموذج" };
@@ -153,6 +155,8 @@ export async function runDueRoutines(now = new Date()): Promise<number> {
   let ran = 0;
   for (const r of all) {
     if (!isDue(r, now)) continue;
+    // Before the stamp: a routine that falls due while the account is stopped runs when it returns.
+    if (await accountHalted(r.userId, "routines")) continue;
     // Stamped before the work, not after: a routine whose model call hangs for
     // two minutes must not be picked up again by the next sweep.
     await db.update(agentRoutinesTable).set({ lastRunAt: now })
