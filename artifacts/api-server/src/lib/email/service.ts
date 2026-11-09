@@ -496,7 +496,9 @@ async function drainOne(userId: number): Promise<boolean> {
       companyGapClause(emailMessagesTable.contactId),
       // ملفٌ جديد أرسل عيّنته: ما بعدها ينتظر حكمها (bounce-guard.ts).
       awaitingVerdict(emailMessagesTable.contactId)))
-    .orderBy(asc(emailMessagesTable.createdAt)).limit(1);
+    // رسالة مكتب الحسابات مكتوبةٌ لشخصٍ بعينه، ولا تقف خلف طابور الموجات: أول
+    // تسعٍ منها انتظرت خلف ١٢٠٦ رسائل أقدمها من ٢٦ أكتوبر (٩ نوفمبر).
+    .orderBy(sql`(EXISTS (SELECT 1 FROM email_sequence_jobs dj JOIN email_sequences dq ON dq.id = dj.sequence_id WHERE dj.id = ${emailMessagesTable.sequenceJobId} AND dq.name LIKE ${ACCOUNTS_SEQUENCE_PREFIX + "%"})) DESC`, asc(emailMessagesTable.createdAt)).limit(1);
   if (!m) {
     await completeFinishedCampaigns(userId);
     const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(emailMessagesTable).where(and(eq(emailMessagesTable.userId, userId), eq(emailMessagesTable.status, "queued")));

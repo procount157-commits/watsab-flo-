@@ -260,7 +260,7 @@ export async function todayView(userId: number) {
       (SELECT count(*)::int FROM target_accounts WHERE user_id = ${userId} AND created_at >= ${week}) AS companies,
       (SELECT count(*)::int FROM target_people WHERE user_id = ${userId} AND created_at >= ${week}) AS people,
       (SELECT count(*)::int FROM target_people WHERE user_id = ${userId} AND created_at >= ${week} AND email_status IN ('published', 'verified')) AS verified,
-      (SELECT count(*)::int FROM target_accounts WHERE user_id = ${userId} AND (sent_at >= ${week} OR (sent_at IS NULL AND status = 'sent' AND updated_at >= ${week}))) AS sent,
+      (SELECT count(*)::int FROM target_accounts WHERE user_id = ${userId} AND sent_at >= ${week}) AS sent,
       (SELECT count(*)::int FROM target_accounts WHERE user_id = ${userId} AND opened_at >= ${week}) AS opened,
       (SELECT count(*)::int FROM target_accounts WHERE user_id = ${userId} AND replied_at >= ${week}) AS replied,
       (SELECT count(*)::int FROM target_accounts WHERE user_id = ${userId} AND meeting_at >= ${week}) AS meetings`)).rows;

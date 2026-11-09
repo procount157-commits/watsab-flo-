@@ -292,7 +292,9 @@ function AccountCard({ a, compact }: { a: Account; compact?: boolean }) {
     <div className={cn(card, "p-4 space-y-3")}>
       <div className="flex items-start gap-2 flex-wrap">
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-sm flex items-center gap-2 flex-wrap">{a.company} <StatusPill s={a.status} /></p>
+          <p className="font-semibold text-sm flex items-center gap-2 flex-wrap">{a.company} {a.status === "sent" && !a.email?.sentAt
+            ? <span className={cn(pill, "border-yellow-500/30 bg-yellow-500/10 text-yellow-300")}>في الطابور</span>
+            : <StatusPill s={a.status} />}</p>
           <div className="flex gap-3 flex-wrap text-[11px] text-muted-foreground mt-0.5">
             <a href={a.website ?? `https://${a.domain}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-primary" dir="ltr"><Globe className="w-3 h-3" /> {a.domain}</a>
             {a.city && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {a.city}</span>}
