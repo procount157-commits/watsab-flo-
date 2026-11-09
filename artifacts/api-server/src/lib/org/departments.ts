@@ -31,6 +31,7 @@ export const ROLE_MAP: Record<string, StaticEntry> = {
   // ── التنفيذي ──
   chief: e("executive.chief", "executive", CORE_PROMPT, "lib/wa-manager.ts startWaManagerLoop (٦ ساعات)", "wa-manager.runWaManagerCycle", "own", 6 * H, { dependsOn: ["whatsapp.campaigns", "whatsapp.followup"] }),
   engineer: e("executive.engineer", "executive", "lib/graph/engineer.ts", "lib/graph/engineer.ts startEngineerRounds (08:00 الخليج)", "graph/engineer.dailyRound", "own", D),
+  ceo_agent: e("executive.ceo", "executive", "lib/org/ceo.ts CEO_PERSONA", "lib/org/ceo.ts startCeoAgent (07:30 دبي)", "org/ceo.runCeoDaily", "own", D),
   // ── البريد ──
   email_manager: e("email.director", "email", EMAIL_PROMPT, "lib/email/manager.ts startManagerLoop (٦ ساعات)", "email/manager.runManagerCycle", "own", 6 * H, { dependsOn: ["email.analyst"] }),
   email: e("email.copywriter", "email", EMAIL_PROMPT, "lib/email/missions.ts startMissionWorker (١٠ دقائق)", "email/missions.runMissions → writeCampaign", "own", 10 * M, { dependsOn: ["email.strategist", "email.director", "email.opens"] }),

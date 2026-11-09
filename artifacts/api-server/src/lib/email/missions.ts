@@ -37,6 +37,7 @@ import { knowledgeText } from "./knowledge-docs";
 import { accountHalted } from "../org/controls";
 import { beat, runAs } from "../org/runtime";
 import { recordQualityFeedback } from "../org/handoffs";
+import { noteGuardResult } from "../org/providers";
 
 async function log(missionId: number, text: string, kind = "note") {
   await db.insert(emailMissionLogTable).values({ missionId, kind, text: text.slice(0, 2000) });
@@ -274,6 +275,7 @@ export async function runMission(m: EmailMission): Promise<void> {
         ...formatIssues(w.draft.html, "first"),
         ...(twin ? [`نص شبه مطابق لموجة سابقة: «${twin.slice(0, 80)}…»`] : []),
       ];
+      noteGuardResult(m.userId, role, !issues.length);
       if (issues.length) {
         // وما رفضه ماجد يصل كاتبه في الكتابة التالية، مرةً لكل عيب.
         await recordQualityFeedback(m.userId, role, issues, { missionId: m.id }).catch(() => {});

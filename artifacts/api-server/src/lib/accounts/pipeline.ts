@@ -19,6 +19,7 @@ import { getSettings, enrolInSequence, ACCOUNTS_SEQUENCE_PREFIX } from "../email
 import { accountsVoice, deskActivity } from "./team";
 import { runAs } from "../org/runtime";
 import { finishWorkflow, qualityFeedback, recordQualityFeedback, startWorkflow, workflowStep } from "../org/handoffs";
+import { noteGuardResult } from "../org/providers";
 import {
   pickPages, visibleText, extractSignal, signalLine, groundPeople, extractEmails, domainPattern,
   emailCandidates, personalMatch, roleAddress, nameInSource, clampNote, stripNoteSignature, writingIssues, readWritten,
@@ -333,7 +334,11 @@ async function processSteps(userId: number, acc: TargetAccount, o: { key: string
 
     // ٤ — هند
     const siteFacts = r.pages.map((p) => p.text.slice(0, 900)).join("\n").slice(0, 2500);
-    const { written, issues } = (await runAs(userId, "accounts_writer", { kind: "write_email", respect: "none" }, () => writeFor(userId, acc, dm, { fallback: !personal, signal: r.signal, senderFirst: senderFirstName(es?.fromName), siteFacts })))!;
+    const { written, issues } = (await runAs(userId, "accounts_writer", { kind: "write_email", respect: "none" }, async () => {
+      const out = await writeFor(userId, acc, dm, { fallback: !personal, signal: r.signal, senderFirst: senderFirstName(es?.fromName), siteFacts });
+      noteGuardResult(userId, "accounts_writer", !!out.written && !out.issues.length);
+      return out;
+    }))!;
     await workflowStep(userId, wf, "accounts_writer", "write", { written: !!written, subject: written?.subject ?? null });
     // حكم ماجد داخل writeFor (guardCheck وformatIssues): خطوته في السجل، وما رفضه يصل هند في كتابتها التالية.
     await workflowStep(userId, wf, "email_guard", "quality", { pass: !!written && !issues.length, issues: issues.slice(0, 6) });

@@ -58,6 +58,8 @@ import { backfillRegistry } from "./lib/org/registry";
 import { registerOrgHandlers } from "./lib/org/handoffs";
 import { startTaskWorker } from "./lib/org/tasks";
 import { startWatchdog } from "./lib/org/watchdog";
+import { startCeoAgent } from "./lib/org/ceo";
+import { seedAllPromptProposals } from "./lib/org/proposals";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -152,8 +154,11 @@ function startListening() {
     registerOrgHandlers();
     startTaskWorker();
     startWatchdog();
+    startCeoAgent();
     // بعد أن يوظّف كلٌّ فريقه (ensureEmailAgent بعد ٢٥ ثانية).
     setTimeout(() => void backfillRegistry().catch((err) => logger.warn({ err: String(err?.message ?? err) }, "تعذّر ملء سجل الموظفين")), 45_000);
+    // مقترحات معلّقة فقط: لا يُفعَّل شيء عند الإقلاع.
+    setTimeout(() => void seedAllPromptProposals().catch((err) => logger.warn({ err: String(err?.message ?? err) }, "تعذّر بذر مقترحات التعليمات")), 60_000);
 
     // Restore all saved WhatsApp sessions from DB — no QR needed after restart or deployment
     void restoreAllSessions();

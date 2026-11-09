@@ -20,6 +20,7 @@ import WaAutopilot from "@/pages/WaAutopilot";
 import Assistant from "@/pages/Assistant";
 import Employees from "@/pages/Employees";
 import AgentOps from "@/pages/AgentOps";
+import OrgPage from "@/pages/org/OrgPage";
 import Board from "@/pages/Board";
 import BrowserDesk from "@/pages/BrowserDesk";
 import Meetings from "@/pages/Meetings";
@@ -201,6 +202,8 @@ function AuthenticatedRoutes() {
           <Route path="/content"        component={ContentCalendar} />
           <Route path="/instagram/:tab?/:id?">{() => <SocialDesk platform="instagram" />}</Route>
           <Route path="/tiktok/:tab?/:id?">{() => <SocialDesk platform="tiktok" />}</Route>
+          <Route path="/org/employees/:key" component={OrgPage} />
+          <Route path="/org/:tab?"      component={OrgPage} />
           <Route path="/ops"            component={AgentOps} />
           <Route path="/employees"      component={Employees} />
           <Route path="/conversations"  component={Conversations} />

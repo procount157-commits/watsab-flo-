@@ -22,6 +22,7 @@ import { logger } from "./logger";
 import { rank, recordOk, recordFail, type Candidate } from "./llm-health";
 import { receipt, tokensOf, noteUnattributedCall } from "./graph/receipts";
 import { departmentOf, isHalted } from "./org/controls";
+import { noteProviderCall } from "./org/providers";
 
 export type Provider =
   | "anthropic" | "gemini" | "groq" | "openrouter"
@@ -29,7 +30,7 @@ export type Provider =
   | "pollinations" | "thegrid" | "openrouter2" | "none";
 
 export interface LlmMessage { role: "system" | "user" | "assistant"; content: string }
-export interface LlmResult  { text: string; provider: Provider }
+export interface LlmResult  { text: string; provider: Provider; model?: string }
 
 /**
  * Spare OpenRouter keys, tried in order when the first one is refused (401,
@@ -453,7 +454,7 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000, opts?
   if (!who) noteUnattributedCall();
   const out = await completeInner(messages, timeoutMs, opts);
   const meter = currentMeter();
-  if (meter) { meter.calls++; meter.tokensIn += tokensOf(charsIn); meter.tokensOut += tokensOf(out?.text.length ?? 0); meter.model = out?.provider ?? meter.model; }
+  if (meter) { meter.calls++; meter.tokensIn += tokensOf(charsIn); meter.tokensOut += tokensOf(out?.text.length ?? 0); meter.model = out?.provider ?? meter.model; if (out) { meter.lastProvider = out.provider; meter.lastModel = out.model ?? ""; } }
   if (who) receipt({
     userId: who.userId, node: who.role, action: "llm.call", status: out ? "ok" : "failed",
     model: out?.provider ?? null, tokensIn: tokensOf(charsIn), tokensOut: tokensOf(out?.text.length ?? 0), durationMs: Date.now() - t0,
@@ -555,11 +556,15 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number, opts?: C
           logger.info({ pinned: `${resolved.provider}/${pinnedModel}`, answered: `${step.provider}/${step.model}` },
             "الخيار المفضّل تعذّر — أجاب بديل");
         }
-        return { text, provider: step.provider as Provider };
+        noteProviderCall({ provider: step.provider, model: step.model, ok: true, ms: Date.now() - t0, charsIn: messages.reduce((a, m) => a + m.content.length, 0), charsOut: text.length });
+        return { text, provider: step.provider as Provider, model: step.model };
       } catch (err: any) {
         lastErr = String(err?.message ?? err).slice(0, 160);
         // Our own in-flight cap is not the provider failing: no cooldown for it.
-        if (!lastErr.includes("ثلاثة طلبات جارية")) await recordFail(step.provider, step.model, lastErr);
+        if (!lastErr.includes("ثلاثة طلبات جارية")) {
+          await recordFail(step.provider, step.model, lastErr);
+          noteProviderCall({ provider: step.provider, model: step.model, ok: false, ms: Date.now() - t0 });
+        }
         const transient = isTransient(err);
         logger.warn({ provider: step.provider, model: step.model, attempt, transient, err: lastErr }, "LLM call failed");
         // A key or model problem will not fix itself on a retry.

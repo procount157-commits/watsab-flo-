@@ -34,7 +34,11 @@ export const routedAgent = (): Agent | undefined => { const a = store.getStore()
 // ── What a run cost ───────────────────────────────────────────────
 // lib/org/runtime.ts opens a meter around one employee's run; complete() adds
 // to it. Separate from the agent store: asAgent inside the run must not lose it.
-export type Meter = { calls: number; tokensIn: number; tokensOut: number; model: string | null };
+export type Meter = {
+  calls: number; tokensIn: number; tokensOut: number; model: string | null;
+  /** نوع المهمة (RunOpts.kind) وآخر من أجاب: مقاييس المزوّد، وحكم الحارس على ما كتبه. */
+  kind?: string; lastProvider?: string; lastModel?: string;
+};
 const meters = new AsyncLocalStorage<Meter>();
 export function withMeter<T>(m: Meter, fn: () => Promise<T>): Promise<T> { return meters.run(m, fn); }
 export const currentMeter = (): Meter | undefined => meters.getStore();

@@ -86,16 +86,18 @@ export async function watchdogRound(): Promise<{ findings: Finding[]; raised: nu
 export const EXECUTIONS_KEEP_DAYS = 30;
 export const EVENTS_KEEP_DAYS = 30;
 export const TASKS_KEEP_DAYS = 90;
+export const PROVIDER_METRICS_KEEP_DAYS = 180;
 const BATCH = 2000;
 
 /** يُحذف ما فات مهلته دفعاتٍ صغيرة، فلا قفل طويل على VPS متواضع. */
-export async function orgRetention(): Promise<{ executions: number; events: number; tasks: number; workflows: number }> {
+export async function orgRetention(): Promise<{ executions: number; events: number; tasks: number; workflows: number; providerMetrics: number }> {
   const chunks = async (q: () => ReturnType<typeof db.execute>) => { let n = 0; for (let i = 0; i < 20; i++) { const r = await q(); n += r.rowCount ?? 0; if ((r.rowCount ?? 0) < BATCH) break; } return n; };
   const executions = await chunks(() => db.execute(sql`DELETE FROM employee_executions WHERE id IN (SELECT id FROM employee_executions WHERE started_at < now() - make_interval(days => ${EXECUTIONS_KEEP_DAYS}) AND status <> 'running' LIMIT ${BATCH})`));
   const events = await chunks(() => db.execute(sql`DELETE FROM execution_events WHERE id IN (SELECT id FROM execution_events WHERE created_at < now() - make_interval(days => ${EVENTS_KEEP_DAYS}) LIMIT ${BATCH})`));
   const tasks = await chunks(() => db.execute(sql`DELETE FROM employee_tasks WHERE task_id IN (SELECT task_id FROM employee_tasks WHERE status IN ('completed','cancelled','expired','failed') AND updated_at < now() - make_interval(days => ${TASKS_KEEP_DAYS}) LIMIT ${BATCH})`));
   const workflows = await chunks(() => db.execute(sql`DELETE FROM workflow_executions WHERE id IN (SELECT id FROM workflow_executions WHERE started_at < now() - make_interval(days => ${TASKS_KEEP_DAYS}) AND status <> 'running' LIMIT ${BATCH})`));
-  return { executions, events, tasks, workflows };
+  const providerMetrics = await chunks(() => db.execute(sql`DELETE FROM provider_metrics WHERE id IN (SELECT id FROM provider_metrics WHERE day < to_char(now() - make_interval(days => ${PROVIDER_METRICS_KEEP_DAYS}), 'YYYY-MM-DD') LIMIT ${BATCH})`));
+  return { executions, events, tasks, workflows, providerMetrics };
 }
 
 let timer: NodeJS.Timeout | null = null;

@@ -249,9 +249,15 @@ export const improvementProposalsTable = pgTable("improvement_proposals", {
   status:       varchar("status", { length: 20 }).notNull().default("proposed"),
   appliedAt:    at("applied_at"),
   rollbackVersion: integer("rollback_version"),
+  // ما يقرّر: أهو آلي منخفض الخطر أم ينتظر موافقة (lib/org/proposals.ts).
+  category:     varchar("category", { length: 30 }),
+  risk:         varchar("risk", { length: 20 }),
+  decisionNote: text("decision_note"),
+  rolledBackAt: at("rolled_back_at"),
   createdAt:    created(),
 }, (t) => [
   index("idx_improvement_proposals_user").on(t.userId, t.status),
+  uniqueIndex("uq_improvement_seed").on(t.userId, t.target, sql`(new_value->>'libraryVersion')`).where(sql`requested_by = 'system.seed'`),
   check("improvement_proposals_status", sql`${t.status} IN ('proposed','approved','rejected','applied','rolled_back')`),
 ]);
 
@@ -310,7 +316,15 @@ export const providerMetricsTable = pgTable("provider_metrics", {
   tokensIn:  integer("tokens_in").notNull().default(0),
   tokensOut: integer("tokens_out").notNull().default(0),
   costUsd:   numeric("cost_usd", { precision: 10, scale: 5 }).notNull().default("0"),
-}, (t) => [unique("uq_provider_metrics").on(t.userId, t.provider, t.model, t.day)]);
+  // لكل نوع مهمة: زمن النداءات مجموعاً، وما قاله الحارس في مخرجاتها.
+  taskType:  varchar("task_type", { length: 60 }).notNull().default(""),
+  latencyMs: bigint("latency_ms", { mode: "number" }).notNull().default(0),
+  guardPassed: integer("guard_passed").notNull().default(0),
+  guardFailed: integer("guard_failed").notNull().default(0),
+}, (t) => [
+  uniqueIndex("uq_provider_metrics_task").on(t.userId, t.provider, t.model, t.day, t.taskType),
+  index("idx_provider_metrics_day").on(t.userId, t.day),
+]);
 
 export const executiveReportsTable = pgTable("executive_reports", {
   id:        serial("id").primaryKey(),
@@ -320,6 +334,20 @@ export const executiveReportsTable = pgTable("executive_reports", {
   body:      text("body").notNull(),
   metrics:   jsonb("metrics"),
   createdBy: varchar("created_by", { length: 60 }),
+  // حقول التقرير: الوقائع بالكود، والنص وحده من النموذج (lib/org/ceo.ts).
+  executiveSummary: text("executive_summary"),
+  narrativeStatus: varchar("narrative_status", { length: 20 }),
+  thinData: boolean("thin_data").notNull().default(false),
+  departmentPerformance: jsonb("department_performance"),
+  employeeAlerts: jsonb("employee_alerts"),
+  operationalRisks: jsonb("operational_risks"),
+  revenueOpportunities: jsonb("revenue_opportunities"),
+  resourceIssues: jsonb("resource_issues"),
+  topPriorities: jsonb("top_priorities"),
+  recommendedActions: jsonb("recommended_actions"),
+  actionsRequiringApproval: jsonb("actions_requiring_approval"),
+  previousImprovementResults: jsonb("previous_improvement_results"),
+  answers: jsonb("answers"),
   createdAt: created(),
 }, (t) => [unique("uq_executive_reports").on(t.userId, t.period, t.periodKey)]);
 

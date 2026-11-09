@@ -12,6 +12,12 @@ import { orgRegistry } from "../lib/org/registry";
 import { approveTask, cancelTask, listTasks, rejectTask, retryTask } from "../lib/org/tasks";
 import { watchdogFindings } from "../lib/org/watchdog";
 import { applyQueueReview, queueReview, releaseStale } from "../lib/org/queue";
+import { employeeProfile, employeesList, orgOverview } from "../lib/org/overview";
+import { latestScorecards, scoreAccount, type PeriodName } from "../lib/org/scorecards";
+import { adminOverview, listReports, runCeoDaily } from "../lib/org/ceo";
+import { readiness } from "../lib/org/readiness";
+import { approveProposal, createProposal, getProposal, listProposals, ProposalRefused, rejectProposal, rollbackProposal } from "../lib/org/proposals";
+import { providerReport } from "../lib/org/providers";
 
 const router = Router();
 router.use(requireAuth);
@@ -128,5 +134,119 @@ const lessonVerdict = (status: "approved" | "rejected") => async (req: any, res:
 };
 router.post("/lessons/:id/approve", lessonVerdict("approved"));
 router.post("/lessons/:id/reject", lessonVerdict("rejected"));
+
+// ── الحد على ما يكلّف نموذجاً أو اتصالاً خارجياً ──
+const hits = new Map<string, number>();
+export const CEO_RUN_LIMIT_MS = 5 * 60_000;
+export const READINESS_VERIFY_LIMIT_MS = 60_000;
+/** كم بقي بالمللي ثانية، أو صفر ويُسجَّل الطلب. لكل حساب في هذه العملية. */
+export function rateLimited(key: string, windowMs: number, now = Date.now()): number {
+  const last = hits.get(key);
+  if (last != null && now - last < windowMs) return windowMs - (now - last);
+  hits.set(key, now);
+  return 0;
+}
+/** للاختبار وحده. */
+export const forgetRateLimits = () => hits.clear();
+
+router.get("/overview", async (req, res) => { res.json(await orgOverview(req.session.userId!)); });
+router.get("/employees", async (req, res) => { res.json({ employees: await employeesList(req.session.userId!) }); });
+router.get("/employees/:key", async (req, res) => {
+  const p = await employeeProfile(req.session.userId!, String(req.params["key"]).slice(0, 60));
+  if (!p) return res.status(404).json({ error: "لا موظف بهذا المفتاح في حسابك" });
+  res.json(p);
+});
+
+const PERIODS: PeriodName[] = ["weekly", "monthly"];
+router.get("/scorecards", async (req, res) => {
+  const userId = req.session.userId!;
+  const period = String(req.query["period"] ?? "weekly") as PeriodName;
+  if (!PERIODS.includes(period)) return res.status(400).json({ error: "period: weekly أو monthly" });
+  const employee = req.query["employee"] ? String(req.query["employee"]).slice(0, 60) : null;
+  let cards = await latestScorecards(userId, period, employee);
+  if (!cards.length) {
+    // لم يمرّ العامل اليومي بعد: تُحسب الآن مرةً وتُحفظ.
+    await scoreAccount(userId, [period]);
+    cards = (await latestScorecards(userId, period, employee)).map((c) => ({ ...c, live: true }));
+  }
+  res.json({ period, scorecards: cards });
+});
+
+router.get("/ceo/reports", async (req, res) => {
+  const userId = req.session.userId!;
+  const limit = Number(req.query["limit"]) || 30;
+  const [{ hired }] = (await db.execute<{ hired: boolean }>(sql`SELECT EXISTS (SELECT 1 FROM bot_employees WHERE user_id = ${userId} AND role = 'ceo_agent') AS hired`)).rows as any[];
+  res.json({ reports: await listReports(userId, limit), employee: { key: "executive.ceo", hired: !!hired } });
+});
+router.post("/ceo/run", async (req, res) => {
+  const userId = req.session.userId!;
+  const wait = rateLimited(`ceo:${userId}`, CEO_RUN_LIMIT_MS);
+  if (wait) return res.status(429).json({ error: "شُغّل قبل قليل", retryAfterSec: Math.ceil(wait / 1000) });
+  res.json(await runCeoDaily(userId));
+});
+
+router.get("/readiness", async (req, res) => {
+  const userId = req.session.userId!;
+  const asked = req.query["verify"] === "1" || req.query["verify"] === "true";
+  // تجاوز الحد لا يخطئ: يعود الفحص بلا اتصال، وما يحتاجه NEEDS_TEST.
+  const verify = asked && !rateLimited(`readiness:${userId}`, READINESS_VERIFY_LIMIT_MS);
+  res.json(await readiness(userId, { verify }));
+});
+
+router.get("/proposals", async (req, res) => {
+  res.json({ proposals: await listProposals(req.session.userId!, { status: req.query["status"] ? String(req.query["status"]) : undefined, target: req.query["target"] ? String(req.query["target"]) : undefined, limit: Number(req.query["limit"]) || 100 }) });
+});
+const refused = (res: any, err: unknown) => {
+  if (err instanceof ProposalRefused) return res.status(err.status).json({ error: err.message });
+  throw err;
+};
+router.post("/proposals", async (req, res) => {
+  const b = (req.body ?? {}) as { target?: unknown; category?: unknown; reason?: unknown; newValue?: unknown; evidence?: unknown; impact?: unknown };
+  if (typeof b.target !== "string" || !b.target.trim() || typeof b.reason !== "string" || !b.reason.trim()) return res.status(400).json({ error: "target وreason مطلوبان" });
+  if (!b.target.startsWith("prompt:") && typeof b.category !== "string") return res.status(400).json({ error: "category مطلوبة" });
+  try {
+    const proposal = await createProposal({ userId: req.session.userId!, requestedBy: `user:${req.session.userId!}`, target: b.target, category: typeof b.category === "string" ? b.category : null, reason: b.reason, newValue: b.newValue, evidence: b.evidence, impact: typeof b.impact === "string" ? b.impact : null });
+    res.status(201).json({ proposal });
+  } catch (err) { refused(res, err); }
+});
+const proposalId = (req: any, res: any): number | null => {
+  const id = Number(req.params["id"]);
+  if (Number.isInteger(id) && id > 0) return id;
+  res.status(400).json({ error: "رقم مقترح غير صالح" });
+  return null;
+};
+router.get("/proposals/:id", async (req, res) => {
+  const id = proposalId(req, res);
+  if (id == null) return;
+  const proposal = await getProposal(req.session.userId!, id);
+  if (!proposal) return res.status(404).json({ error: "ليس لهذا الحساب" });
+  res.json({ proposal });
+});
+router.post("/proposals/:id/approve", async (req, res) => {
+  const id = proposalId(req, res);
+  if (id == null) return;
+  const userId = req.session.userId!;
+  try { res.json(await approveProposal(userId, id, userId)); } catch (err) { refused(res, err); }
+});
+router.post("/proposals/:id/reject", async (req, res) => {
+  const id = proposalId(req, res);
+  if (id == null) return;
+  const userId = req.session.userId!;
+  try { res.json({ proposal: await rejectProposal(userId, id, userId, req.body?.reason ? String(req.body.reason) : null) }); } catch (err) { refused(res, err); }
+});
+router.post("/proposals/:id/rollback", async (req, res) => {
+  const id = proposalId(req, res);
+  if (id == null) return;
+  const userId = req.session.userId!;
+  try { res.json({ proposal: await rollbackProposal(userId, id, userId) }); } catch (err) { refused(res, err); }
+});
+
+router.get("/providers", async (req, res) => { res.json(await providerReport(req.session.userId!, Number(req.query["days"]) || 7)); });
+
+/** أعداد المنصة للمدير: لا اسم ولا محتوى حساب. */
+router.get("/admin/overview", async (req, res) => {
+  if (!req.session.isAdmin) return res.status(403).json({ error: "للمدير وحده" });
+  res.json(await adminOverview());
+});
 
 export default router;

@@ -168,7 +168,7 @@ const MAX_PER_KIND = { instruction: 12, win: 5, loss: 5, gap: 4, playbook: 1 } a
 
 export async function memoryFor(userId: number, role: string): Promise<Record<MemoryKind, AgentMemory[]>> {
   const rows = await db.select().from(agentMemoryTable)
-    .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, role), eq(agentMemoryTable.approvalStatus, "approved")))
+    .where(and(eq(agentMemoryTable.userId, userId), eq(agentMemoryTable.role, role), eq(agentMemoryTable.approvalStatus, "approved"), sql`(${agentMemoryTable.expiryAt} IS NULL OR ${agentMemoryTable.expiryAt} > now())`))
     .orderBy(desc(agentMemoryTable.times), desc(agentMemoryTable.updatedAt));
 
   const out: Record<MemoryKind, AgentMemory[]> = { instruction: [], win: [], loss: [], gap: [], playbook: [] };

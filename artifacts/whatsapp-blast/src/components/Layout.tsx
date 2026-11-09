@@ -13,6 +13,7 @@ import { toast } from "sonner";
 
 const NAV = [
   { href: "/dashboard",     label: "لوحة التحكم",       icon: LayoutDashboard },
+  { href: "/org",           label: "مركز قيادة المنظّمة", icon: Network, badge: "جديد" },
   { href: "/connect",       label: "ربط الواتساب",      icon: QrCode },
   { href: "/conversations", label: "المحادثات",          icon: MessageSquare },
   { href: "/groups",        label: "قروبات العملاء",     icon: Users2, badge: "جديد" },

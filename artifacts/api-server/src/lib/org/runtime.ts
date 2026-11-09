@@ -127,7 +127,7 @@ export async function execute<T>(userId: number, role: string, o: RunOpts, fn: (
   const sampled = !!o.sampleMin;
   const executionId = sampled ? null : await openExecution(userId, key, o);
   if (!sampled) await safeBeat({ userId, key, status: "running", intervalSec: interval, kind: o.kind, executionId, started: true });
-  const meter: Meter = { calls: 0, tokensIn: 0, tokensOut: 0, model: null };
+  const meter: Meter = { calls: 0, tokensIn: 0, tokensOut: 0, model: null, kind: o.kind };
   const t0 = Date.now();
   try {
     const value = await withMeter(meter, () => asWorker(userId, role, fn));
