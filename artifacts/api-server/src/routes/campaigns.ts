@@ -23,6 +23,7 @@ import fs from "fs";
 import path from "path";
 import { withStopButton } from "../lib/opt-out";
 import { accountHalted } from "../lib/org/controls";
+import { everyMs } from "../lib/org/workers";
 
 // Connection-lost errors that trigger reconnect logic
 // NOTE: "fetch failed" is intentionally excluded — it indicates a media-download
@@ -337,7 +338,7 @@ async function runWatchdog() {
 setTimeout(() => runWatchdog().catch(() => {}), 10_000);
 
 // Then run every 45 seconds (was 90s) for tighter detection
-setInterval(() => runWatchdog().catch(() => {}), 45_000);
+everyMs("whatsapp.campaign_watchdog", 45_000, runWatchdog);
 
 // ── Startup recovery ──────────────────────────────────────────────
 // Called once at server start — resumes any campaign that was left in

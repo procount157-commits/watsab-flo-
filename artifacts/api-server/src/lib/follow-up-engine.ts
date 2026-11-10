@@ -45,6 +45,7 @@ import { assertCanSend } from "./plans";
 import { provisionOnConnect } from "./provision";
 import { lastOutreach, outreachPreamble, savedName } from "./outreach-context";
 import { shopContext } from "./catalog/shop-context";
+import { everyMs } from "./org/workers";
 
 // How often the worker looks for due jobs.
 const TICK_MS = 60_000;
@@ -781,9 +782,7 @@ export function startFollowUpEngine() {
   registerOnConnectHook((userId) => { void provisionOnConnect(userId); });
 
   if (timer) return;
-  timer = setInterval(() => {
-    runDueFollowUps().catch((err) => logger.error({ err }, "follow-up worker tick failed"));
-  }, TICK_MS);
+  timer = everyMs("whatsapp.followup_engine", TICK_MS, () => runDueFollowUps().catch((err) => { logger.error({ err }, "follow-up worker tick failed"); throw err; }));
   logger.info({ tickSeconds: TICK_MS / 1000 }, "follow-up engine started");
 }
 

@@ -119,7 +119,9 @@ for (const f of ["executive_summary", "period", "account_id", "department_perfor
 const { PLATFORM } = await import("../social/platforms");
 check("instagram's caps are its own", PROMPT_LIBRARY["instagram.manager"]!.sections.decisionFramework.includes(`رد ${PLATFORM.instagram.caps.reply}`));
 check("tiktok's caps are its own", PROMPT_LIBRARY["tiktok.manager"]!.sections.decisionFramework.includes(`رد ${PLATFORM.tiktok.caps.reply}`));
-check("a job without an engine says so", ["instagram.inviter", "tiktok.analyst"].every((k) => /بلا محرّك/.test(PROMPT_LIBRARY[k]!.sections.identity)));
+// الناقل والمحلل لهما محرّك الآن (النسخة 2): تعليماتهما تسمّي الدالة ولا تقول «بلا محرّك».
+check("inviter and analyst name their engine (v2)", ["instagram.inviter", "tiktok.analyst"].every((k) => PROMPT_LIBRARY[k]!.version === 2 && !/بلا محرّك/.test(PROMPT_LIBRARY[k]!.sections.identity))
+  && /inviteCommenters/.test(PROMPT_LIBRARY["instagram.inviter"]!.sections.approvedTools) && /runEngagementAnalysis/.test(PROMPT_LIBRARY["tiktok.analyst"]!.sections.approvedTools));
 
 console.log(`\n${pass}/${total} passed`);
 if (pass !== total) process.exit(1);

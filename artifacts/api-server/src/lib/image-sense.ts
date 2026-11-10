@@ -18,6 +18,7 @@ import { getObjectBuffer, objectNameFromUrl, contentTypeForName } from "./storag
 import { parseLoose } from "./loose-json";
 import { logger } from "./logger";
 import { accountHalted, modelHalted, platformHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const SECTORS = ["عقارات", "ذهب ومجوهرات", "قانونية", "مقاولات", "مطاعم ومقاهي"] as const;
 export const GENERAL = "عام";
@@ -158,9 +159,6 @@ export async function unreadCount(userId: number): Promise<number> {
 
 export function startImageSense(): void {
   if (!process.env["GEMINI_API_KEY"]) return;
-  setTimeout(() => {
-    const tick = () => void describePending().then((n) => { if (n) logger.info({ n }, "Gemini وصف صوراً في المعرض"); }).catch(() => {});
-    tick();
-    setInterval(tick, 60_000);
-  }, 45_000);
+  const tick = () => describePending().then((n) => { if (n) logger.info({ n }, "Gemini وصف صوراً في المعرض"); });
+  everyMs("image_sense.describe", 60_000, tick, { firstMs: 45_000 });
 }

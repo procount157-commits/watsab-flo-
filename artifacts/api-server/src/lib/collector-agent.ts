@@ -25,6 +25,7 @@ import { runAs } from "./org/runtime";
 import { skillsFor, skillsPreamble } from "./agent-skills";
 import { asWorker } from "./agent-context";
 import { accountHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const COLLECTOR_ROLE = "collector";
 
@@ -295,6 +296,6 @@ export function startCollector(): void {
     }
   };
 
-  setTimeout(() => { void sweep(); setInterval(() => void sweep(), 30 * 60_000); }, 4 * 60_000);
+  everyMs("shared.collector", 30 * 60_000, sweep, { firstMs: 4 * 60_000 });
   logger.info({ hour: REPORT_HOUR }, "جامع البيانات بدأ");
 }

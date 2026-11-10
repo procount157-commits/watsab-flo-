@@ -16,6 +16,7 @@ import { rankCandidates, shortCompany, dubaiNow, linkedinSearchUrl, type Candida
 import { accountHalted } from "../org/controls";
 import { runAs } from "../org/runtime";
 import { finishWorkflow, openWorkflowFor, workflowStep } from "../org/handoffs";
+import { everyMs } from "../org/workers";
 
 // ── الجداول عند الإقلاع ────────────────────────────────────────────
 export const DESK_TABLES_SQL = [
@@ -209,7 +210,7 @@ export function startAccountsDesk(): void {
   void ensureDeskTables();
   setTimeout(() => {
     // 08:30 Dubai, Monday to Friday, once a day per account that switched the desk on.
-    setInterval(async () => {
+    everyMs("target_accounts.desk", 5 * 60_000, async () => {
       const now = dubaiNow();
       if (!now.weekday || now.hour < 8 || (now.hour === 8 && now.minute < 30) || now.hour >= 17) return;
       await ensureDeskTables();
@@ -221,8 +222,8 @@ export function startAccountsDesk(): void {
         autoRanOn.set(userId, now.date);
         await startRun(userId, { manual: false }).catch(() => {});
       }
-    }, 5 * 60_000);
-    setInterval(() => void syncAccounts().catch((e) => logger.warn({ err: String(e?.message ?? e) }, "مكتب الحسابات: المزامنة فشلت")), 10 * 60_000);
+    });
+    everyMs("target_accounts.sync", 10 * 60_000, syncAccounts);
   }, 60_000);
   logger.info("مكتب الحسابات المستهدفة بدأ");
 }

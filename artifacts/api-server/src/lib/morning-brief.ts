@@ -10,6 +10,7 @@ import { eq, sql } from "drizzle-orm";
 import { db, briefSettingsTable, botEmployeesTable } from "@workspace/db";
 import { notify, esc } from "./telegram";
 import { logger } from "./logger";
+import { everyMs } from "./org/workers";
 
 const n = (v: unknown) => Number(v ?? 0).toLocaleString("ar-SA");
 const gulfNow = (now = new Date()) => new Date(now.getTime() + 4 * 3_600_000);
@@ -119,5 +120,5 @@ export async function sweepBriefs(now = new Date()) {
 }
 
 export function startMorningBrief() {
-  setInterval(() => void sweepBriefs().catch(() => {}), 10 * 60_000);
+  everyMs("morning_brief.sweep", 10 * 60_000, sweepBriefs);
 }

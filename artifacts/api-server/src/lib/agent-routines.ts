@@ -20,6 +20,7 @@ import { remember, memoryPreamble } from "./agent-memory";
 import { logger } from "./logger";
 import { asWorker } from "./agent-context";
 import { accountHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 /** Gulf time, which is what the owner means by "in the morning". */
 const TZ_OFFSET_HOURS = 4;
@@ -208,9 +209,11 @@ export const ROUTINE_TEMPLATES = [
  */
 export function startRoutineScheduler(): void {
   const SWEEP_MS = 5 * 60_000;
-  const sweep = () => void runDueRoutines().catch((err) =>
-    logger.error({ err: String(err?.message ?? err) }, "فشل مرور المهام الدورية"));
+  const sweep = () => runDueRoutines().catch((err) => {
+    logger.error({ err: String(err?.message ?? err) }, "فشل مرور المهام الدورية");
+    throw err;
+  });
 
-  setTimeout(() => { sweep(); setInterval(sweep, SWEEP_MS); }, 2 * 60_000);
+  everyMs("agent.routines", SWEEP_MS, sweep, { firstMs: 2 * 60_000 });
   logger.info({ sweepMin: SWEEP_MS / 60_000 }, "مجدول المهام الدورية بدأ");
 }

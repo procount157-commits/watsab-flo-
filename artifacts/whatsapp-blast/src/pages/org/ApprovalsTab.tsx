@@ -6,7 +6,7 @@ import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { ShadowCompare } from "./simulation";
 import { PersuasionLibrary } from "./docs/EmployeeDossier";
-import { Confirm, Empty, Filters, PROPOSAL, Pill, Pre, Q, Section, Stat, ago, card, list, num, pill, show, useOrg, useOrgAction, when } from "./shared";
+import { Confirm, Empty, Filters, PROPOSAL, Pill, Pre, Q, Section, Stat, ago, card, ghost, list, num, pill, primary, show, useOrg, useOrgAction, when } from "./shared";
 
 const hasValue = (v: unknown) => v != null && v !== "" && !(typeof v === "object" && Object.keys(v as object).length === 0);
 const Field = ({ label, children }: { label: string; children: ReactNode }) => (
@@ -179,6 +179,59 @@ function Held() {
   );
 }
 
+
+const BULK_KIND: Record<string, string> = { proposal: "مقترح تعليمات", objection: "اعتراض", playbook: "كتيّب", task: "مهمة" };
+const BULK_RESULT: Record<string, string> = { approved: "text-emerald-400", skipped: "text-muted-foreground", failed: "text-red-400" };
+const BulkRows = ({ items }: { items: any[] }) => (
+  <ul className="space-y-1 max-h-72 overflow-y-auto">
+    {items.map((i) => (
+      <li key={`${i.kind}:${i.id}`} className="flex gap-2 text-[11px] items-start">
+        <span className={cn("w-14 flex-shrink-0", BULK_RESULT[i.result])}>{i.result === "approved" ? "يُعتمد" : i.result === "failed" ? "فشل" : "يُترك"}</span>
+        <span className="w-24 flex-shrink-0 text-muted-foreground">{BULK_KIND[i.kind] ?? i.kind}</span>
+        <b className="min-w-0 truncate" dir="ltr">{i.label}</b>
+        <span className="mr-auto text-muted-foreground text-left" dir="auto">{i.why}</span>
+      </li>
+    ))}
+  </ul>
+);
+
+/** «اعتماد كل المؤهل»: معاينة بلا تغيير، ثم تأكيدٌ يسرد ما سيحدث بالضبط، ثم النتيجة بنداً بنداً. */
+function BulkApprove() {
+  const [open, setOpen] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const preview = useOrg<{ items: any[]; approved: number; skipped: number }>("/approvals/bulk", false, open);
+  const act = useOrgAction();
+  const items = list(preview.data?.items);
+  const will = items.filter((i) => i.result === "approved");
+  return (
+    <Section title="اعتماد كل المؤهل" action={!open ? <button className={primary} onClick={() => { setResult(null); setOpen(true); }}><Check className="w-3 h-3" />اعتماد كل المؤهل</button> : undefined}>
+      <p className="text-[11px] text-muted-foreground">يعتمد ما يجتاز بوابته فقط: تعليماتٌ لها عيّنة ظل سليمة في ٧ أيام بلا مخالفة، واعتراضاتٌ دليلها من المعرفة المعتمدة، ومهامٌ تنتظر موافقتك. لا يغيّر أوضاع الإرسال ولا المتابعة ولا التواصل ولا الحدود ولا الدروس.</p>
+      {open && !result && (
+        <Q q={preview} what="المعاينة">
+          {() => (
+            <div className="space-y-2">
+              <BulkRows items={items} />
+              {will.length === 0 ? <Empty>لا شيء مؤهل الآن.</Empty> : (
+                <Confirm tone="primary" label={`اعتماد ${num(will.length)} بنداً`} icon={<Check className="w-3 h-3" />} busy={act.isPending}
+                  effect={<>سيُعتمد بالضبط: {will.map((i) => `${BULK_KIND[i.kind] ?? i.kind} ${i.label}`).join("، ")}. مقترحات التعليمات تُفعَّل فوراً ويمكن إرجاعها، والمهام تدخل الطابور. ويُترك {num(items.length - will.length)} بنداً كما هو.</>}
+                  onConfirm={() => act.mutate({ path: "/approvals/bulk", body: { confirm: true }, ok: (d) => `اعتُمد ${d?.approved ?? 0}، وتُرك ${d?.skipped ?? 0}` }, { onSuccess: (d) => setResult(d) })} />
+              )}
+              <button className={ghost} onClick={() => setOpen(false)}>إغلاق</button>
+            </div>
+          )}
+        </Q>
+      )}
+      {result && (
+        <div className="space-y-2">
+          <p className="text-xs">النتيجة: اعتُمد {num(result.approved)}، تُرك {num(result.skipped)}{result.failed ? `، فشل ${num(result.failed)}` : ""}.</p>
+          <BulkRows items={list(result.items)} />
+          <button className={ghost} onClick={() => { setResult(null); setOpen(false); }}>إغلاق</button>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 export default function ApprovalsTab() {
   const tasks = useOrg<{ tasks: any[] }>("/tasks?status=waiting_for_approval&limit=500");
   const count = list(tasks.data?.tasks).length;
@@ -190,6 +243,7 @@ export default function ApprovalsTab() {
           <Link href="/org/tasks" className="mr-auto text-primary hover:underline">افتح المهام</Link>
         </div>
       )}
+      <BulkApprove />
       <Proposals />
       <Lessons />
       <PersuasionLibrary />

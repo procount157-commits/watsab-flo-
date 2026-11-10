@@ -12,6 +12,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db, clientObligationsTable, waGroupSuggestionsTable, type ClientObligation } from "@workspace/db";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
+import { everyMs } from "../org/workers";
 
 export const KIND_AR: Record<string, string> = { vat: "ضريبة القيمة المضافة", ct: "ضريبة الشركات", license: "تجديد الرخصة", aml: "مراجعة AML", payroll: "الرواتب", audit: "التدقيق", other: "التزام" };
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -75,9 +76,6 @@ export async function sweepObligations(now = new Date(), userId?: number) {
 }
 
 export function startObligationReminders() {
-  setTimeout(() => {
-    void sweepObligations().catch(() => {});
-    setInterval(() => void sweepObligations().catch((err) => logger.warn({ err: String(err) }, "obligation sweep failed")), 60 * 60_000);
-  }, 3 * 60_000);
+  everyMs("groups.obligations", 60 * 60_000, sweepObligations, { firstMs: 3 * 60_000 });
 }
 

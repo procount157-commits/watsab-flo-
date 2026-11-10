@@ -196,8 +196,31 @@ export const ORG_INTELLIGENCE_SQL = [
   `ALTER TABLE provider_metrics ADD COLUMN IF NOT EXISTS guard_passed integer NOT NULL DEFAULT 0`,
   `ALTER TABLE provider_metrics ADD COLUMN IF NOT EXISTS guard_failed integer NOT NULL DEFAULT 0`,
   `ALTER TABLE provider_metrics DROP CONSTRAINT IF EXISTS uq_provider_metrics`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_metrics_task ON provider_metrics (user_id, provider, model, day, task_type)`,
+  // uq_provider_metrics_task (074) صار uq_provider_metrics_class في ORG_OPS_SQL: لا يُعاد إنشاؤه عند كل إقلاع ليُحذف بعده.
   `CREATE INDEX IF NOT EXISTS idx_provider_metrics_day ON provider_metrics (user_id, day)`,
+];
+
+/**
+ * 079_org_ops.sql: صنف العمل في مقاييس المزوّد (للتوجيه)، المزوّد والكلفة في سطر التنفيذ،
+ * جدول الأسعار فارغاً، وسجل العمّال. الفهرس الفريد الجديد يُنشأ قبل حذف القديم، فلا لحظة بلا قيد.
+ */
+export const ORG_OPS_SQL = [
+  `ALTER TABLE provider_metrics ADD COLUMN IF NOT EXISTS task_class varchar(20) NOT NULL DEFAULT ''`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_metrics_class ON provider_metrics (user_id, provider, model, day, task_type, task_class)`,
+  `DROP INDEX IF EXISTS uq_provider_metrics_task`,
+  `CREATE INDEX IF NOT EXISTS idx_provider_metrics_routing ON provider_metrics (task_class, day)`,
+  `ALTER TABLE employee_executions ADD COLUMN IF NOT EXISTS provider varchar(40)`,
+  `CREATE TABLE IF NOT EXISTS provider_prices (
+    id serial PRIMARY KEY, provider varchar(40) NOT NULL, model varchar(120) NOT NULL DEFAULT '',
+    input_per_million numeric(14,6) NOT NULL, output_per_million numeric(14,6) NOT NULL, currency varchar(3) NOT NULL DEFAULT 'USD',
+    source text NOT NULL, updated_by integer, updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT uq_provider_prices UNIQUE (provider, model),
+    CONSTRAINT provider_prices_nonneg CHECK (input_per_million >= 0 AND output_per_million >= 0))`,
+  `CREATE TABLE IF NOT EXISTS worker_registry (
+    worker_id varchar(80) NOT NULL, name varchar(80) NOT NULL, interval_ms integer NOT NULL, scope varchar(40) NOT NULL DEFAULT 'all',
+    started_at timestamptz NOT NULL DEFAULT now(), first_due_at timestamptz, last_tick_at timestamptz, last_ok_at timestamptz,
+    last_error text, last_error_at timestamptz, last_duration_ms integer, ticks bigint NOT NULL DEFAULT 0, errors bigint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (worker_id, name))`,
 ];
 
 let tablesReady: Promise<boolean> | null = null;
@@ -208,7 +231,7 @@ let tablesReady: Promise<boolean> | null = null;
  */
 export function ensureOrgTables(): Promise<boolean> {
   tablesReady ??= (async () => {
-    for (const q of [...ORG_TABLES_SQL, ...ORG_RUNTIME_SQL, ...ORG_INTELLIGENCE_SQL]) await db.execute(sql.raw(q));
+    for (const q of [...ORG_TABLES_SQL, ...ORG_RUNTIME_SQL, ...ORG_INTELLIGENCE_SQL, ...ORG_OPS_SQL]) await db.execute(sql.raw(q));
     return true;
   })().catch((e) => {
     tablesReady = null;

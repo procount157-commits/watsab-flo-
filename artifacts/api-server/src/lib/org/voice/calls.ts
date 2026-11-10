@@ -265,5 +265,7 @@ export async function lineAudio(userId: number, callId: number, lineId: number):
   const v = await voiceDeps().tts(l.text, lang, genderFor(l.employee_key));
   if (!v) throw new VoiceError("تعذّر توليد الصوت — النص ظاهر", 502, "tts_failed");
   await db.execute(sql`UPDATE call_transcripts SET tts_ms = COALESCE(tts_ms, ${Date.now() - t0}), tts_voice = COALESCE(tts_voice, ${v.voice}) WHERE id = ${lineId}`);
+  // أول دورٍ حقيقي كامل على الحساب يجعل الصوت READY (readiness.ts)، ويُسجَّل مرةً واحدة. لا يرمي.
+  if (l.speaker === "employee") await (await import("./readiness")).markVoiceReady(userId, callId, lineId).catch(() => null);
   return { audio: v.audio, mime: "audio/mpeg", voice: v.voice };
 }

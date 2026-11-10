@@ -12,6 +12,7 @@
 import { db, unsubscribedPhonesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger";
+import { everyMs } from "./org/workers";
 
 /** Kept for callers that still read it: a stop is permanent, so no months. */
 export const STOP_MONTHS = 0;
@@ -60,9 +61,7 @@ export async function sweepExpiredOptOuts(): Promise<number> {
 }
 
 export function startOptOutSweep() {
-  const run = () => sweepExpiredOptOuts().catch((err) => logger.warn({ err: String(err) }, "opt-out sweep failed"));
-  setTimeout(run, 60_000).unref();
-  setInterval(run, 6 * 60 * 60_000).unref();
+  everyMs("whatsapp.opt_out_sweep", 6 * 60 * 60_000, sweepExpiredOptOuts, { firstMs: 60_000, unref: true });
 }
 
 /**

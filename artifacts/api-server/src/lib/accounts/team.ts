@@ -95,6 +95,8 @@ export async function ensureAccountsTeam(userId: number) {
     const hasTasks = await db.select({ id: agentTasksTable.id }).from(agentTasksTable).where(and(eq(agentTasksTable.userId, userId), eq(agentTasksTable.role, d.role))).limit(1);
     if (!hasTasks.length) await db.insert(agentTasksTable).values(d.tasks.map((task, i) => ({ userId, role: d.role, task, sortOrder: (i + 1) * 10 })));
     logger.info({ userId, role: d.role }, "وُظّف في مكتب الحسابات المستهدفة");
+    // مفتاحه ومسودة ملفه الآن، لا عند الإقلاع التالي.
+    void import("../org/registry").then((m) => m.backfillRegistry(userId)).catch(() => {});
   }
   return db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), inArray(botEmployeesTable.role, [...ACCOUNTS_TEAM])));
 }

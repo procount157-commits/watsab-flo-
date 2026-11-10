@@ -18,7 +18,11 @@ import { adminOverview, listReports, runCeoDaily } from "../lib/org/ceo";
 import { readiness } from "../lib/org/readiness";
 import { approveProposal, createProposal, getProposal, listProposals, ProposalRefused, rejectProposal, rollbackProposal } from "../lib/org/proposals";
 import { providerReport } from "../lib/org/providers";
+import { listPrices, PriceRefused, setPrices } from "../lib/org/prices";
+import { workerReport } from "../lib/org/workers";
 import { employeeOfTarget, shadowSummary } from "../lib/org/shadow";
+import { bulkApprove } from "../lib/org/bulk";
+import { OWNER_ACTION_TYPE, settleOwnerAction } from "../lib/org/tickets";
 
 const router = Router();
 router.use(requireAuth);
@@ -56,8 +60,11 @@ router.get("/audit", async (req, res) => {
 
 // ── التشغيل: الجرد، النبض، المهام، الحارس. كلٌّ مقيَّد بحساب الجلسة. ──
 router.get("/inventory", async (req, res) => {
-  res.json({ employees: await orgRegistry(req.session.userId!) });
+  // العمّال (الحلقات المتكررة) للمنصة كلها، لا لحساب: أسماؤها وحالها فقط، بلا بيانات حساب.
+  const [employees, workers] = await Promise.all([orgRegistry(req.session.userId!), workerReport().catch(() => null)]);
+  res.json({ employees, workers });
 });
+router.get("/workers", async (_req, res) => { res.json(await workerReport()); });
 
 router.get("/heartbeats", async (req, res) => {
   const userId = req.session.userId!;
@@ -80,7 +87,11 @@ const taskAction = (act: (userId: number, id: number, reason: string | null) => 
   if (!task) return res.status(409).json({ error: "المهمة ليست لهذا الحساب أو حالتها لا تسمح" });
   res.json({ task });
 };
-router.post("/tasks/:id/approve", taskAction((u, id) => approveTask(u, id, u)));
+router.post("/tasks/:id/approve", taskAction(async (u, id) => {
+  const t = await approveTask(u, id, u);
+  // تذكرة مكالمة أو اجتماع: قرار صاحب الحساب هو المخرج، فتُكمَل ولا تدخل الطابور.
+  return t?.taskType === OWNER_ACTION_TYPE ? (await settleOwnerAction(u, id, u)) ?? t : t;
+}));
 router.post("/tasks/:id/reject", taskAction((u, id, why) => rejectTask(u, id, u, why)));
 router.post("/tasks/:id/cancel", taskAction((u, id, why) => cancelTask(u, id, u, why)));
 router.post("/tasks/:id/retry", taskAction((u, id) => retryTask(u, id, u)));
@@ -150,7 +161,11 @@ export function rateLimited(key: string, windowMs: number, now = Date.now()): nu
 /** للاختبار وحده. */
 export const forgetRateLimits = () => hits.clear();
 
-router.get("/overview", async (req, res) => { res.json(await orgOverview(req.session.userId!)); });
+router.get("/overview", async (req, res) => {
+  const [overview, w] = await Promise.all([orgOverview(req.session.userId!), workerReport().catch(() => null)]);
+  res.json({ ...overview, workers: w ? { total: w.total, ok: w.ok, failing: w.failing, stuck: w.stuck, waiting: w.waiting,
+    problems: w.workers.filter((x) => x.health === "stuck" || x.health === "failing").map((x) => ({ name: x.name, health: x.health, lastTickAt: x.lastTickAt, lastError: x.lastError, intervalSec: x.intervalSec })) } : null });
+});
 router.get("/employees", async (req, res) => { res.json({ employees: await employeesList(req.session.userId!) }); });
 router.get("/employees/:key", async (req, res) => {
   const p = await employeeProfile(req.session.userId!, String(req.params["key"]).slice(0, 60));
@@ -225,6 +240,17 @@ router.get("/proposals/:id", async (req, res) => {
   const key = employeeOfTarget(proposal.target);
   res.json({ proposal, shadow: key ? await shadowSummary(req.session.userId!, { proposalId: id }) : null });
 });
+// «اعتماد كل المؤهل»: GET يعرض ما سيحدث بلا تغيير، وPOST يعتمد ما يجتاز بوابته فقط (lib/org/bulk.ts).
+// حساب الجلسة وحده، والفاعل في كل سطر تدقيق صاحب الجلسة. لا يمسّ أوضاع الإرسال ولا الحدود ولا الدروس.
+router.get("/approvals/bulk", async (req, res) => {
+  const userId = req.session.userId!;
+  res.json(await bulkApprove(userId, userId, { dryRun: true }));
+});
+router.post("/approvals/bulk", async (req, res) => {
+  const userId = req.session.userId!;
+  if (req.body?.confirm !== true) return res.status(400).json({ error: "التأكيد مطلوب (confirm: true)" });
+  res.json(await bulkApprove(userId, userId));
+});
 router.post("/proposals/:id/approve", async (req, res) => {
   const id = proposalId(req, res);
   if (id == null) return;
@@ -245,6 +271,18 @@ router.post("/proposals/:id/rollback", async (req, res) => {
 });
 
 router.get("/providers", async (req, res) => { res.json(await providerReport(req.session.userId!, Number(req.query["days"]) || 7)); });
+// الأسعار عامة لكل الحسابات: يقرؤها الجميع، ويضعها المالك (المدير) وحده، ولكل سعر مصدره.
+router.get("/providers/prices", async (req, res) => { res.json({ prices: await listPrices(), canEdit: !!req.session.isAdmin }); });
+router.put("/providers/prices", async (req, res) => {
+  if (!req.session.isAdmin) return res.status(403).json({ error: "للمالك وحده" });
+  try {
+    const rows = Array.isArray(req.body?.prices) ? req.body.prices : req.body && typeof req.body === "object" && req.body.provider ? [req.body] : null;
+    res.json({ prices: await setPrices(req.session.userId!, rows as any) });
+  } catch (err) {
+    if (err instanceof PriceRefused) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+});
 
 /** أعداد المنصة للمدير: لا اسم ولا محتوى حساب. */
 router.get("/admin/overview", async (req, res) => {

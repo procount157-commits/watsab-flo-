@@ -6,6 +6,7 @@
 import { asAgent } from "../../agent-context";
 import type { LlmMessage } from "../../llm";
 import { voiceDeps } from "./deps";
+import { noteQuality } from "../providers";
 import { contextFor, isCeo, type EmployeeRef } from "./context";
 import { citedIds, cleanProposals, extractObject, redact, type Proposal } from "./limits";
 
@@ -84,10 +85,12 @@ export async function answerAs(i: AnswerInput): Promise<Answer & { known?: Set<s
     { role: "system", content: systemPrompt(i, ctx.dossier) },
     { role: "user", content: userPrompt(i, ctx.facts) },
   ];
-  const out = await asAgent(i.userId, i.emp.role, () => voiceDeps().llm(messages, 30_000, { maxTokens: 900 })).catch(() => null);
+  const out = await asAgent(i.userId, i.emp.role, () => voiceDeps().llm(messages, 30_000, { maxTokens: 900, taskClass: "voice" })).catch(() => null);
   const ms = Date.now() - t0;
   if (!out?.text?.trim()) return { ok: false, reason: "لم يرد النموذج (أو أن الموظف موقوف بمفتاح) — لا جواب مخترع مكانه", ms };
   const obj = extractObject(out.text);
+  // جودة الصوت (org/routing.ts): الجواب بالشكل المطلوب.
+  noteQuality(!!obj, out, "voice", { userId: i.userId, role: i.emp.role });
   const rawReply = String(obj?.["reply"] ?? (obj ? "" : out.text)).trim();
   if (!rawReply) return { ok: false, reason: "ردّ النموذج بلا نص", ms };
   const ev = checkEvidence(redact(rawReply).slice(0, 2_000), obj?.["evidence"], ctx.ids);

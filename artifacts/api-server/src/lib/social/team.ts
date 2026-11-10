@@ -118,6 +118,8 @@ export async function ensureSocialTeam(userId: number, platform: SocialPlatform)
     // Their skills come with them, not at the next restart.
     const { seedSkills } = await import("../skills");
     await seedSkills(userId).catch(() => {});
+    // ومفاتيحهم ومسودات ملفاتهم الآن، لا عند الإقلاع التالي (registry.backfillRegistry يبذرها).
+    void import("../org/registry").then((m) => m.backfillRegistry(userId)).catch(() => {});
   }
   return db.select().from(botEmployeesTable).where(and(eq(botEmployeesTable.userId, userId), inArray(botEmployeesTable.role, roles)));
 }

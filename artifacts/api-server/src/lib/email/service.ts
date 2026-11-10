@@ -32,6 +32,7 @@ import { receipt } from "../graph/receipts";
 import { beat, runAs } from "../org/runtime";
 import { handoffDeliveryFailure } from "../org/handoffs";
 import { INELIGIBLE_AR, domainsInOtherCampaigns, notBlockedByDesk, notFromDeadMission, notHeldStale, staleIneligible, staleMessage } from "../org/queue";
+import { everyMs } from "../org/workers";
 
 /**
  * العنوان العام لم يكن يُقرأ إلا من البيئة، ولم تكن للواجهة سبيلٌ إليه —
@@ -915,19 +916,19 @@ export function startEmailWorkers(): void {
   let lastReportDay = "";
   void ensureDomainIndexes();
   setTimeout(() => {
-    setInterval(() => void drainQueues().catch((e) => logger.warn({ err: String(e?.message ?? e) }, "email drain failed")), 20_000);
-    setInterval(() => void enqueueDueSequenceSteps().catch(() => {}), 60_000);
-    setInterval(() => void startScheduled().catch(() => {}), 60_000);
-    setInterval(() => void decideAbTests().catch(() => {}), 5 * 60_000);
+    everyMs("email.queue_drain", 20_000, drainQueues);
+    everyMs("email.sequence_steps", 60_000, enqueueDueSequenceSteps);
+    everyMs("email.scheduled_campaigns", 60_000, startScheduled);
+    everyMs("email.ab_tests", 5 * 60_000, decideAbTests);
     // 20:30 Gulf time, once a day, to every account that sent something.
-    setInterval(async () => {
+    everyMs("email.daily_report", 5 * 60_000, async () => {
       const gulf = new Date(Date.now() + 4 * 3_600_000);
       const day = gulf.toISOString().slice(0, 10);
       if (gulf.getUTCHours() !== 20 || gulf.getUTCMinutes() < 30 || day === lastReportDay) return;
       lastReportDay = day;
       const users = await db.selectDistinct({ userId: emailSettingsTable.userId }).from(emailSettingsTable);
       for (const { userId } of users) await dailyEmailReport(userId).catch(() => {});
-    }, 5 * 60_000);
+    });
   }, 40_000);
   logger.info("عامل البريد بدأ");
 }

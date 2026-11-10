@@ -43,6 +43,7 @@ import { updateCard } from "../lead-card";
 import { replyVoice } from "./agent";
 import { lt, gt, isNotNull } from "drizzle-orm";
 import { dryRun, personaFor, simPersona } from "../org/simulation";
+import { everyMs } from "../org/workers";
 
 /**
  * النيّات التي يجوز أن يجيبها ردٌّ آلي. الشكوى والرفض ينتظران شخصاً،
@@ -807,13 +808,10 @@ export async function sendDueAutoReplies(now = new Date()): Promise<number> {
 }
 
 export function startInboundPolling(): void {
-  setTimeout(() => {
-    void pollAllMailboxes();
-    setInterval(() => void pollAllMailboxes(), 2 * 60_000);
-    setInterval(() => void sendDueAutoReplies().catch(() => {}), 60_000);
-    // ردٌّ حار مسودته تنتظر ساعتين بلا أحد: يُصعَّد.
-    setInterval(() => void escalateStaleHotDrafts().catch(() => {}), 15 * 60_000);
-  }, 50_000);
+  everyMs("email.inbound_poll", 2 * 60_000, pollAllMailboxes, { firstMs: 50_000 });
+  everyMs("email.auto_replies", 60_000, sendDueAutoReplies, { firstMs: 50_000 + 60_000 });
+  // ردٌّ حار مسودته تنتظر ساعتين بلا أحد: يُصعَّد.
+  everyMs("email.hot_draft_escalation", 15 * 60_000, escalateStaleHotDrafts, { firstMs: 50_000 + 15 * 60_000 });
   logger.info("قارئ البريد الوارد بدأ");
 }
 

@@ -21,6 +21,7 @@ import { db, knowledgeBaseTable, businessProfileTable } from "@workspace/db";
 import { logger } from "../logger";
 import { DEFAULT_PRICING, type Pricing } from "./pricing";
 import { accountHalted } from "../org/controls";
+import { everyMs } from "../org/workers";
 
 export const CATALOG_KIND = "floret";
 const KB_CATEGORY = "catalog";
@@ -177,7 +178,5 @@ export function startCatalogSync() {
     const users = await db.select({ userId: businessProfileTable.userId }).from(businessProfileTable).where(eq(businessProfileTable.catalogSource, CATALOG_KIND));
     for (const u of users) if (!(await accountHalted(u.userId, "catalog_sync"))) await syncCatalog(u.userId).catch((err) => logger.warn({ userId: u.userId, err: String(err?.message ?? err).slice(0, 200) }, "مزامنة الكتالوج فشلت"));
   };
-  setTimeout(() => void run(), 90_000).unref();
-  timer = setInterval(() => void run(), 6 * 3_600_000);
-  timer.unref();
+  timer = everyMs("catalog.floret_sync", 6 * 3_600_000, run, { firstMs: 90_000, unref: true });
 }

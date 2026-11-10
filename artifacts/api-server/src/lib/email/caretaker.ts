@@ -33,6 +33,7 @@ import { activity, onDuty } from "./team";
 import { logger } from "../logger";
 import { accountHalted } from "../org/controls";
 import { runAs } from "../org/runtime";
+import { everyMs } from "../org/workers";
 
 const n = (x: number) => x.toLocaleString("en");
 
@@ -132,9 +133,7 @@ export function startCaretaker() {
     const users = await db.execute<{ user_id: number }>(sql`SELECT user_id FROM email_settings`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
     for (const u of users.rows) if (!(await accountHalted(Number(u.user_id), "email_caretaker"))) await caretakerRound(Number(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "جولة ماجد فشلت"));
   };
-  setTimeout(() => void run(), 5 * 60_000).unref();
-  timer = setInterval(() => void run(), 6 * 3_600_000);
-  timer.unref();
+  timer = everyMs("email.caretaker", 6 * 3_600_000, run, { firstMs: 5 * 60_000, unref: true });
 }
 
 /** The last of what ماجد reported, newest first — for the dashboard. */

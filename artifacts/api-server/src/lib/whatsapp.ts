@@ -32,6 +32,7 @@ import { onGroupMessage } from "./groups/assistant";
 import { receipt } from "./graph/receipts";
 import { currentAgent } from "./agent-context";
 import { describeImage, photoAsText } from "./vision";
+import { everyMs } from "./org/workers";
 export const BASE_SESSION_DIR = path.resolve(process.cwd(), "whatsapp-session");
 
 
@@ -3284,7 +3285,7 @@ export function startWakeDetector() {
   const TICK_MS = 15_000;
   const JUMP_MS = 60_000;
   let last = Date.now();
-  setInterval(() => {
+  everyMs("whatsapp.wake_detector", TICK_MS, () => {
     const now = Date.now();
     const gap = now - last;
     last = now;
@@ -3294,7 +3295,7 @@ export function startWakeDetector() {
     void import("@workspace/db").then(({ db, hostSleepsTable }) => db.insert(hostSleepsTable).values({ seconds: Math.round(gap / 1000) })).catch(() => {});
     invalidateWaVersion("host woke from sleep");
     waManager.onSystemWake();
-  }, TICK_MS);
+  });
   appLogger.info("sleep detector started");
 }
 

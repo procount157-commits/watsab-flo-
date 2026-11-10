@@ -24,6 +24,8 @@ const STATES: Array<{ key: string; label: string; bar: string }> = [
   { key: "failed", label: "فشل", bar: "bg-red-500" },
   { key: "paused", label: "موقوف", bar: "bg-orange-500" },
   { key: "no_execution", label: "بلا تنفيذ", bar: "bg-muted-foreground/40" },
+  { key: "no_account", label: "بلا حساب منصة", bar: "bg-muted-foreground/25" },
+  { key: "planned", label: "مخطط", bar: "bg-muted-foreground/15" },
 ];
 
 function Delta({ v }: { v: unknown }) {
@@ -68,6 +70,8 @@ export default function CommandTab() {
               <Section title="المهام">
                 <div className="grid grid-cols-2 gap-2">
                   <Stat label="نشطة" value={d.tasks?.active} />
+                  <Stat label="منها تنتظرك" value={d.tasks?.waitingForOwner} />
+                  <Stat label="منها محجوبة" value={d.tasks?.blocked} />
                   <Stat label="متأخرة" value={d.tasks?.overdue} />
                 </div>
               </Section>

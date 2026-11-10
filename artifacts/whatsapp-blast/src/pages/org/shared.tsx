@@ -130,6 +130,8 @@ export const HEARTBEAT: Record<string, { label: string; cls: string }> = {
   halted: { label: "موقوف", cls: R },
   paused: { label: "موقوف", cls: R },
   no_execution: { label: "بلا تنفيذ", cls: N },
+  planned: { label: "مخطط — بلا تكامل", cls: N },
+  no_account: { label: "بلا حساب منصة", cls: N },
 };
 export const TASK: Record<string, { label: string; cls: string }> = {
   pending: { label: "معلّقة", cls: N },

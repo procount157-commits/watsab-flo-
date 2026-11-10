@@ -58,6 +58,8 @@ export type Candidate = { provider: string; model: string; apiKey: string };
  */
 export async function rank(
   candidates: Candidate[], pinned?: { provider: string; model: string },
+  /** يُملأ بمفاتيح `provider|model` لمن في التهدئة: التوجيه بالدليل لا يقدّمهم. */
+  restingOut?: Set<string>,
 ): Promise<Candidate[]> {
   if (candidates.length <= 1) return candidates;
 
@@ -72,7 +74,7 @@ export async function rank(
   for (const c of candidates) {
     const h = health.get(keyOf(c));
     const cool = h?.cooldownUntil ? new Date(h.cooldownUntil).getTime() : 0;
-    if (cool > now) { resting.push(c); continue; }
+    if (cool > now) { resting.push(c); restingOut?.add(keyOf(c)); continue; }
     usable.push({
       ...c,
       s: score(h ?? { ok: 0, fail: 0, avgMs: 0 }),

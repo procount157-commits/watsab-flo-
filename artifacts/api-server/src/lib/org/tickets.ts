@@ -102,13 +102,14 @@ export async function roleForKey(userId: number, key: string): Promise<string | 
 // ── السجل ─────────────────────────────────────────────────────────
 
 /** سطرٌ في org_audit_log ورقمه على التذكرة، وسطرٌ في سجل أفعالها. */
-async function trail(t: Task, action: string, actor: Actor, o: { why?: string | null; meta?: Record<string, unknown>; status?: "ok" | "refused" | "info" } = {}): Promise<void> {
+async function trail(t: Task, action: string, actor: Actor, o: { why?: string | null; meta?: Record<string, unknown>; status?: "ok" | "refused" | "info" } = {}): Promise<number | null> {
   const [a] = (await db.execute<{ id: number }>(sql`INSERT INTO org_audit_log (user_id, action, kind, role, actor, why, meta)
     VALUES (${t.userId}, ${`ticket.${action}`.slice(0, 40)}, 'ticket', ${t.ownerRole.slice(0, 60)}, ${actor.kind === "owner" ? Number(actor.id) : null}, ${o.why ?? null},
       ${JSON.stringify({ taskId: t.taskId, actor, ...(o.meta ?? {}) })}::jsonb) RETURNING id`)).rows;
   if (a) await db.execute(sql`UPDATE employee_tasks SET audit_event_ids = CASE WHEN jsonb_array_length(audit_event_ids) >= 200 THEN audit_event_ids - 0 ELSE audit_event_ids END || ${JSON.stringify([Number(a.id)])}::jsonb
     WHERE task_id = ${t.taskId} AND user_id = ${t.userId}`);
   await recordAction({ userId: t.userId, ticketId: t.taskId, role: t.ownerRole, actor, actionType: `ticket.${action}`, status: o.status ?? "ok", output: { why: o.why ?? null, ...(o.meta ?? {}) } });
+  return a ? Number(a.id) : null;
 }
 
 async function load(userId: number, id: number): Promise<Task> {
@@ -214,7 +215,10 @@ export async function planTicket(userId: number, id: number, p: Plan, actor: Act
 }
 
 /** موافقة صاحب العمل على بصمة الحمولة التي رآها. حمولةٌ تغيّرت: 409. */
-export async function approveTicket(userId: number, id: number, ownerId: number, shownHash: string): Promise<Task> {
+/** تذاكر المكالمات والاجتماعات: قرار صاحب الحساب هو العمل كله، فلا تدخل الطابور (لا معالج لها). */
+export const OWNER_ACTION_TYPE = "owner_action";
+
+export async function approveTicket(userId: number, id: number, ownerId: number, shownHash: string, note?: string | null): Promise<Task> {
   const t = await load(userId, id);
   const awaiting = t.status === "waiting_for_approval" || (t.status === "waiting_for_owner" && t.approvalRequired && t.approvalStatus === "pending");
   if (!awaiting) throw new TicketRefused("التذكرة لا تنتظر موافقة", 409, "bad_transition");
@@ -224,15 +228,48 @@ export async function approveTicket(userId: number, id: number, ownerId: number,
     await trail(t, "approve_refused", { kind: "owner", id: ownerId }, { status: "refused", why: "الحمولة تغيّرت منذ عُرضت", meta: { shown: shownHash, current: payloadHash(ticketPayload(t)) } });
     throw new TicketRefused("الحمولة تغيّرت منذ عُرضت عليك — راجعها من جديد", 409, "payload_changed");
   }
-  await trail(r, "status", { kind: "owner", id: ownerId }, { meta: { from: t.status, to: r.status, payloadHash: shownHash } });
+  const eventId = await trail(r, "status", { kind: "owner", id: ownerId }, { meta: { from: t.status, to: r.status, payloadHash: shownHash } });
+  if (r.taskType === OWNER_ACTION_TYPE && r.status === "queued") return completeOwnerAction(r, ownerId, eventId, shownHash, note ?? null);
   return r;
+}
+
+/** بعد موافقةٍ من أي باب (المهام، الاعتماد الجماعي): owner_action في الطابور تُكمَل بقرار صاحبها. */
+export async function settleOwnerAction(userId: number, taskId: number, ownerId: number, note?: string | null): Promise<Task | null> {
+  const t = await load(userId, taskId).catch(() => null);
+  if (!t || t.taskType !== OWNER_ACTION_TYPE || t.status !== "queued" || t.approvalStatus !== "approved") return t;
+  const [ev] = (await db.execute<any>(sql`SELECT id FROM org_audit_log WHERE user_id = ${userId} AND action IN ('task.approved','ticket.status')
+    AND meta->>'taskId' = ${String(taskId)} ORDER BY id DESC LIMIT 1`)).rows;
+  return completeOwnerAction(t, ownerId, ev ? Number(ev.id) : null, t.approvedPayloadHash ?? "", note ?? null);
+}
+
+/** موافقة على تذكرة owner_action: مكتملة، مخرجها قرار صاحب الحساب، ودليلها حدث الموافقة. */
+async function completeOwnerAction(t: Task, ownerId: number, eventId: number | null, payloadHash: string, note: string | null): Promise<Task> {
+  const output = { decision: "approved", by: ownerId, note: note?.slice(0, 1000) || "وافق صاحب الحساب على هذا البند كما عُرض", payloadHash, title: t.title ?? null };
+  const evidence = [{ type: "approval_event", id: eventId, ref: `org_audit_log:${eventId}`, note: "موافقة صاحب الحساب على بصمة الحمولة" }];
+  const [row] = (await db.execute<any>(sql`UPDATE employee_tasks SET status = 'completed', completed_at = now(), updated_at = now(), actual_output = ${JSON.stringify(output)}::jsonb,
+      evidence_references = evidence_references || ${JSON.stringify(evidence)}::jsonb, lease_owner = NULL, lease_expires_at = NULL
+    WHERE task_id = ${t.taskId} AND user_id = ${t.userId} AND status = 'queued' RETURNING *`)).rows;
+  if (!row) return load(t.userId, t.taskId);
+  const done = toTask(row);
+  await trail(done, "status", { kind: "owner", id: ownerId }, { why: "قرار صاحب الحساب هو المخرج", meta: { from: "queued", to: "completed", approvalEventId: eventId } });
+  await releaseDependents(t.taskId);
+  return done;
 }
 
 export async function rejectTicket(userId: number, id: number, ownerId: number, why?: string | null): Promise<Task> {
   const t = await load(userId, id);
   const r = await rejectTask(userId, id, ownerId, why);
   if (!r) throw new TicketRefused("التذكرة لا تنتظر موافقة", 409, "bad_transition");
-  await trail(r, "rejected", { kind: "owner", id: ownerId }, { why, meta: { from: t.status } });
+  const eventId = await trail(r, "rejected", { kind: "owner", id: ownerId }, { why, meta: { from: t.status } });
+  if (r.taskType === OWNER_ACTION_TYPE) {
+    // ملغاة بسببها: القرار والسبب يُحفظان مخرجاً، وحدث الرفض دليلاً.
+    const reason = why?.trim() || "رفضها صاحب الحساب";
+    const [row] = (await db.execute<any>(sql`UPDATE employee_tasks SET failure_reason = ${reason.slice(0, 500)}, failure_code = 'owner_rejected', retryable = false, responsible_party = 'owner',
+        actual_output = ${JSON.stringify({ decision: "rejected", by: ownerId, reason })}::jsonb,
+        evidence_references = evidence_references || ${JSON.stringify([{ type: "approval_event", id: eventId, ref: `org_audit_log:${eventId}`, note: "رفض صاحب الحساب" }])}::jsonb
+      WHERE task_id = ${id} AND user_id = ${userId} AND status = 'cancelled' RETURNING *`)).rows;
+    if (row) return toTask(row);
+  }
   return r;
 }
 

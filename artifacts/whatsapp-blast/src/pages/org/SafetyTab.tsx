@@ -109,9 +109,45 @@ function EmployeeSwitches({ controls, isAdmin }: { controls: Control[]; isAdmin:
   );
 }
 
+const WORKER: Record<string, { label: string; cls: string }> = {
+  ok: { label: "سليم", cls: "text-emerald-400 border-emerald-500/30" },
+  failing: { label: "آخر دقّة فشلت", cls: "text-amber-400 border-amber-500/30" },
+  stuck: { label: "عالق", cls: "text-red-400 border-red-500/30" },
+  waiting: { label: "لم يحن موعده", cls: "text-muted-foreground border-card-border" },
+};
+
+/** الحلقات المتكررة في عملية الخادم (worker_registry): عالقة إن مرّ ثلاثة أضعاف فاصلها بلا دقّة. */
+function WorkersHealth({ w }: { w: any }) {
+  if (!w) return null;
+  const rows = list(w.workers).sort((a, b) => ["stuck", "failing", "waiting", "ok"].indexOf(a.health) - ["stuck", "failing", "waiting", "ok"].indexOf(b.health));
+  return (
+    <Section title={`العمّال المتكررون — ${num(w.ok)} سليم · ${num(w.failing)} فاشل · ${num(w.stuck)} عالق`}>
+      {!rows.length ? <Empty>لم يسجّل عاملٌ بعد في هذه العملية.</Empty> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground"><tr><th className="text-right py-1">العامل</th><th className="text-right">الحال</th><th className="text-right">الفاصل</th><th className="text-right">آخر دقّة</th><th className="text-right">الدقّات</th><th className="text-right">آخر خطأ</th></tr></thead>
+            <tbody>
+              {rows.map((x) => (
+                <tr key={x.name} className="border-t border-card-border">
+                  <td className="py-1" dir="ltr">{x.name}</td>
+                  <td><span className={cn(pill, WORKER[x.health]?.cls)}>{WORKER[x.health]?.label ?? x.health}</span></td>
+                  <td>{num(x.intervalSec)} ث</td>
+                  <td>{x.lastTickAt ? ago(x.lastTickAt) : "—"}</td>
+                  <td>{num(x.ticks)}{x.errors ? ` (${num(x.errors)} خطأ)` : ""}</td>
+                  <td className="max-w-[16rem] truncate" dir="auto" title={x.lastError ?? ""}>{x.lastError ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 export default function SafetyTab() {
   const q = useOrg<{ controls: Control[]; isAdmin: boolean }>("/controls", 20_000);
-  const inv = useOrg<{ employees: any[] }>("/inventory", 60_000);
+  const inv = useOrg<{ employees: any[]; workers?: any }>("/inventory", 60_000);
   return (
     <div className="space-y-4">
       <Q q={q} what="المفاتيح">
@@ -143,6 +179,7 @@ export default function SafetyTab() {
                 ))}
               </Section>
               <EmployeeSwitches controls={controls} isAdmin={isAdmin} />
+              <WorkersHealth w={inv.data?.workers} />
               <AuditLog isAdmin={isAdmin} />
             </>
           );

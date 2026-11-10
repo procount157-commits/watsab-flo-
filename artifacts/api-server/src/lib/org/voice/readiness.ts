@@ -22,11 +22,36 @@ async function realTurnEvidence(userId: number): Promise<{ callId: number; at: s
   return r ? { callId: Number(r.call_id), at: new Date(r.created_at).toISOString() } : null;
 }
 
+/**
+ * بعد أن وُلّد صوت ردّ موظف: هل هذا دورٌ حقيقي كامل؟ سطر المالك قبله في المكالمة صوتٌ فرّغه
+ * Groq (stt_ms مسجَّل)، والرد من النموذج (source = model)، والصوت وُلّد الآن. نعم = سطر
+ * voice.ready في سجل الحساب مرةً واحدة، فتصير الجاهزية READY تلقائياً. Pure في قراره، ولا يرمي.
+ */
+export async function markVoiceReady(userId: number, callId: number, lineId: number): Promise<boolean> {
+  const [x] = (await db.execute<any>(sql`SELECT e.id, e.seq, e.tts_ms, e.source AS esrc,
+      (SELECT row_to_json(o) FROM (SELECT o.id, o.source, o.stt_model, o.stt_ms FROM call_transcripts o WHERE o.call_id = e.call_id AND o.user_id = e.user_id
+        AND o.speaker = 'owner' AND o.seq < e.seq ORDER BY o.seq DESC LIMIT 1) o) AS owner
+    FROM call_transcripts e WHERE e.id = ${lineId} AND e.call_id = ${callId} AND e.user_id = ${userId} AND e.speaker = 'employee'`)).rows;
+  const o = x?.owner;
+  const real = !!x && x.tts_ms != null && x.esrc === "model" && !!o && o.source === "voice" && /^groq:/.test(String(o.stt_model ?? "")) && o.stt_ms != null;
+  if (!real) return false;
+  const [have] = (await db.execute(sql`SELECT 1 FROM org_audit_log WHERE user_id = ${userId} AND action = 'voice.ready' LIMIT 1`)).rows;
+  if (have) return true;
+  await db.execute(sql`INSERT INTO org_audit_log (user_id, action, kind, why, meta) VALUES (${userId}, 'voice.ready', 'voice',
+    ${"أول دورٍ صوتي حقيقي كامل: تفريغ Groq ← جواب النموذج ← صوت"}, ${JSON.stringify({ callId, ownerLineId: Number(o.id), employeeLineId: lineId })}::jsonb)`);
+  return true;
+}
+
+async function readyMarker(userId: number): Promise<{ callId: number; at: string } | null> {
+  const [r] = (await db.execute<any>(sql`SELECT meta, created_at FROM org_audit_log WHERE user_id = ${userId} AND action = 'voice.ready' ORDER BY id LIMIT 1`).catch(() => ({ rows: [] as any[] }))).rows;
+  return r ? { callId: Number(r.meta?.callId ?? 0), at: new Date(r.created_at).toISOString() } : null;
+}
+
 export async function voiceReadiness(userId: number) {
   await ensureVoiceTables();
   const items: VoiceReadinessItem[] = [];
   const stt = sttConfigured();
-  const ev = stt ? await realTurnEvidence(userId) : null;
+  const ev = stt ? (await readyMarker(userId)) ?? await realTurnEvidence(userId) : null;
   items.push({
     id: "voice.in_app", title: "مكالمة صوتية داخل التطبيق (نصف اتجاهية)",
     status: !stt ? "BLOCKED" : ev ? "READY" : "NEEDS_TEST",

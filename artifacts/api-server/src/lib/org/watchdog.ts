@@ -11,8 +11,9 @@ import { MISSED_FACTOR, backfillRegistry } from "./registry";
 import { expireTasks, reclaimExpiredLeases } from "./tasks";
 import { ensureOrgTables } from "./schema";
 import { ledgerMaintenance } from "./ledger";
+import { everyMs, stuckWorkers, workerRetention, WORKER_STUCK_FACTOR } from "./workers";
 
-export type FindingKind = "missed_heartbeat" | "lease_requeued" | "lease_needs_review" | "lease_dead_letter" | "stuck_execution" | "repeated_failures" | "queue_age" | "waiting_too_long" | "duplicate_task" | "duplicate_execution";
+export type FindingKind = "missed_heartbeat" | "lease_requeued" | "lease_needs_review" | "lease_dead_letter" | "stuck_execution" | "repeated_failures" | "queue_age" | "waiting_too_long" | "duplicate_task" | "duplicate_execution" | "stuck_worker";
 export interface Finding { userId: number | null; kind: FindingKind; subject: string; severity: "warn" | "critical"; detail: string; ref?: Record<string, unknown> }
 
 export const STUCK_AFTER_SEC = 2 * 3600;
@@ -48,6 +49,10 @@ export async function watchdogFindings(userId?: number): Promise<Finding[]> {
   for (const r of waiting.rows) out.push({ userId: Number(r.user_id), kind: "waiting_too_long", subject: `task:${r.task_id}`, severity: "warn", detail: `${r.task_type} لـ${r.owner_role} في ${r.status} منذ ${new Date(r.created_at).toISOString()}` });
   for (const r of dupTasks.rows) out.push({ userId: Number(r.user_id), kind: "duplicate_task", subject: `${r.owner_role}:${r.task_type}`, severity: "warn", detail: `${r.n} مهام مفتوحة بالمدخل نفسه` });
   for (const r of dupExec.rows) out.push({ userId: Number(r.user_id), kind: "duplicate_execution", subject: `${r.employee_key}:${r.kind ?? ""}`, severity: "warn", detail: `${r.n} تنفيذات تعمل معاً` });
+  // الحلقات المتكررة (workers.ts) للمنصة كلها، لا لحساب: تُرى في مرور الحارس العام وحده.
+  if (userId == null) for (const w of await stuckWorkers().catch(() => [])) out.push({ userId: null, kind: "stuck_worker", subject: `worker:${w.name}`, severity: "critical",
+    detail: `«${w.name}» لم يدقّ منذ ${w.last_tick_at ? new Date(w.last_tick_at).toISOString() : "الإقلاع"} (الفاصل ${Math.round(Number(w.interval_ms) / 1000)} ث، الحد ${WORKER_STUCK_FACTOR}×)${w.last_error ? ` — آخر خطأ: ${String(w.last_error).slice(0, 160)}` : ""}`,
+    ref: { intervalMs: Number(w.interval_ms), lateMs: w.lateMs } });
   return out;
 }
 
@@ -93,14 +98,15 @@ const BATCH = 2000;
 
 /** يُحذف ما فات مهلته دفعاتٍ صغيرة، فلا قفل طويل على VPS متواضع.
  * التذاكر (employee_tasks) تبقى أبداً: يُحذف سجل أفعالها وحده بعد ٩٠ يوماً (ledgerMaintenance). */
-export async function orgRetention(): Promise<{ executions: number; events: number; ticketEvents: number; workflows: number; providerMetrics: number }> {
+export async function orgRetention(): Promise<{ executions: number; events: number; ticketEvents: number; workflows: number; providerMetrics: number; workers: number }> {
   const chunks = async (q: () => ReturnType<typeof db.execute>) => { let n = 0; for (let i = 0; i < 20; i++) { const r = await q(); n += r.rowCount ?? 0; if ((r.rowCount ?? 0) < BATCH) break; } return n; };
   const executions = await chunks(() => db.execute(sql`DELETE FROM employee_executions WHERE id IN (SELECT id FROM employee_executions WHERE started_at < now() - make_interval(days => ${EXECUTIONS_KEEP_DAYS}) AND status <> 'running' LIMIT ${BATCH})`));
   const events = await chunks(() => db.execute(sql`DELETE FROM execution_events WHERE id IN (SELECT id FROM execution_events WHERE created_at < now() - make_interval(days => ${EVENTS_KEEP_DAYS}) LIMIT ${BATCH})`));
   const ticketEvents = (await ledgerMaintenance().catch((err) => { logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "صيانة سجل التذاكر فشلت"); return { deleted: 0 }; })).deleted;
   const workflows = await chunks(() => db.execute(sql`DELETE FROM workflow_executions WHERE id IN (SELECT id FROM workflow_executions WHERE started_at < now() - make_interval(days => ${TASKS_KEEP_DAYS}) AND status <> 'running' LIMIT ${BATCH})`));
   const providerMetrics = await chunks(() => db.execute(sql`DELETE FROM provider_metrics WHERE id IN (SELECT id FROM provider_metrics WHERE day < to_char(now() - make_interval(days => ${PROVIDER_METRICS_KEEP_DAYS}), 'YYYY-MM-DD') LIMIT ${BATCH})`));
-  return { executions, events, ticketEvents, workflows, providerMetrics };
+  const workers = await workerRetention().catch(() => 0);
+  return { executions, events, ticketEvents, workflows, providerMetrics, workers };
 }
 
 let timer: NodeJS.Timeout | null = null;
@@ -115,10 +121,7 @@ export function startWatchdog(): void {
       await orgRetention();
     }
   };
-  const safe = () => void tick().catch((err) => logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "مرور الحارس فشل"));
-  // بعد الإقلاع بدقيقتين، حين يكون العمّال قد بدؤوا.
-  setTimeout(safe, 2 * 60_000).unref();
-  timer = setInterval(safe, 2 * 60_000);
-  timer.unref();
+  // بعد الإقلاع بدقيقتين، حين يكون العمّال قد بدؤوا. الخطأ يُمسك ويُسجَّل في worker_registry.
+  timer = everyMs("org.watchdog", 2 * 60_000, tick, { firstMs: 2 * 60_000, unref: true });
   logger.info("حارس الموظفين بدأ — مرور كل دقيقتين");
 }

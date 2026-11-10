@@ -34,6 +34,7 @@ import { runAs } from "./org/runtime";
 import { say } from "./agent-comms";
 import { skillsFor, skillsPreamble } from "./agent-skills";
 import { asWorker } from "./agent-context";
+import { everyMs } from "./org/workers";
 
 export const OPS_ROLE = "ops";
 export const OPS_SWEEP_MS = 10 * 60_000;
@@ -444,6 +445,6 @@ export function startOpsAgent(): void {
   };
   // Three minutes after boot, so sessions have finished restoring and the
   // officer does not open by declaring a healthy account disconnected.
-  setTimeout(() => { void sweep(); setInterval(() => void sweep(), OPS_SWEEP_MS); }, 3 * 60_000);
+  everyMs("ops.controller", OPS_SWEEP_MS, sweep, { firstMs: 3 * 60_000 });
   logger.info({ sweepMin: OPS_SWEEP_MS / 60_000 }, "مسؤول التشغيل بدأ");
 }

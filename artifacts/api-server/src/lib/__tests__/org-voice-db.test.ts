@@ -1,7 +1,7 @@
 // غرفة التحكّم على قاعدة اختبار مؤقتة وحدها، بتفريغ ونموذج وصوت بديلة، بلا شبكة:
 //   DATABASE_URL=postgres://t:t@127.0.0.1:55443/t npx tsx src/lib/__tests__/org-voice-db.test.ts
 export {};
-if (!/127\.0\.0\.1:(55439|55440|55443)\//.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
+if (!/127\.0\.0\.1:(55445|55439|55440|55443)\//.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
 
 let fetched = 0;
 globalThis.fetch = (async () => { fetched++; throw new Error("no network in this test"); }) as any;

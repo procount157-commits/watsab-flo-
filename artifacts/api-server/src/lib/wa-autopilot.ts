@@ -38,12 +38,14 @@ import { pieceUrl, shopName } from "./catalog/floret";
 import { logger } from "./logger";
 import { runAs } from "./org/runtime";
 import { parseLoose } from "./loose-json";
+import { noteQuality } from "./org/providers";
 import { strictSector } from "./email/sector";
 import { WA_DOCTRINE } from "./wa-doctrine";
 import { state as firewallState } from "./wa-firewall";
 import { describePending, fitsCampaign, messageLang, pictureMatches, unreadCount } from "./image-sense";
 import { languageOfText } from "./recipient-name";
 import { accountHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const WRITER_ROLE = "wa_campaigns";
 const JUDGE_AFTER_HOURS = 48;
@@ -239,23 +241,26 @@ async function write(userId: number, vertical: string, target: string, service: 
       { role: "user", content: attempt ? `النسختان السابقتان رُفضتا: ${lastWhy}. اكتبهما من جديد.` : "اكتب النسختين." },
     ], 90_000)).catch(() => null);
     if (!out?.text) { lastWhy = "النموذج لم يستجب"; continue; }
+    // جودة الكاتب (org/routing.ts): نسختان كاملتان اجتازتا الفحص بلغة تصميمهما.
+    const judged = (passed: boolean) => noteQuality(passed, out, "writer", { userId, role: WRITER_ROLE });
     const raw: any = parseLoose(out.text);
-    if (!raw) { lastWhy = "ليس JSON"; continue; }
+    if (!raw) { lastWhy = "ليس JSON"; judged(false); continue; }
     const vs: WaVariant[] = (raw?.variants ?? []).slice(0, 2).map((v: any, i: number) => {
       const img = plan[i]?.img;
       let message = String(v?.message ?? "").trim();
       if (shop && piece && !message.includes(piece)) message = `${message}\n${piece}`;
       return { key: i ? "B" : "A", angle: String(v?.angle ?? "").slice(0, 80), message, mediaUrl: img?.url ?? null, link: piece };
     });
-    if (vs.length < 2 || vs.some((v) => v.message.length < 20)) { lastWhy = "نسختان ناقصتان"; continue; }
+    if (vs.length < 2 || vs.some((v) => v.message.length < 20)) { lastWhy = "نسختان ناقصتان"; judged(false); continue; }
     const problems = vs.flatMap((v) => variantIssues(v.message, shop, facts).map((x) => `${v.key}: ${x}`));
-    if (problems.length) { lastWhy = problems.join(" · "); continue; }
+    if (problems.length) { lastWhy = problems.join(" · "); judged(false); continue; }
     // Pro Count addresses every company by its own name; the send loop fills
     // it per number (fillRecipient), «شركتكم» where the number has no name.
     // The shop names nobody.
     // A message in the wrong language for its design is rewritten, not sent.
     const wrongLang = vs.filter((v, i) => languageOfText(v.message) !== plan[i]!.lang).map((v) => v.key);
-    if (wrongLang.length) { lastWhy = `${wrongLang.join(" و")} ليست بلغة تصميمها`; continue; }
+    if (wrongLang.length) { lastWhy = `${wrongLang.join(" و")} ليست بلغة تصميمها`; judged(false); continue; }
+    judged(true);
     vs.forEach((v, i) => { v.message = addressed(v.message, shop, plan[i]!.lang); });
     // The last check, with the picture and the words side by side. Doubt drops
     // the picture; the message still goes, as text.
@@ -442,7 +447,5 @@ export function startWaAutopilot(): void {
     const rows = await db.select({ userId: waAutopilotTable.userId }).from(waAutopilotTable).where(eq(waAutopilotTable.enabled, true)).catch(() => []);
     for (const r of rows) if (!(await accountHalted(r.userId, "wa_autopilot"))) await runAs(r.userId, WRITER_ROLE, { kind: "wa_autopilot_cycle", respect: "none" }, () => runCycle(r.userId)).catch((err) => logger.warn({ userId: r.userId, err: String(err?.message ?? err) }, "دورة طيار واتساب تعذّرت"));
   };
-  setTimeout(() => void run(), 3 * 60_000).unref();
-  timer = setInterval(() => void run(), 30 * 60_000);
-  timer.unref();
+  timer = everyMs("whatsapp.autopilot", 30 * 60_000, run, { firstMs: 3 * 60_000, unref: true });
 }

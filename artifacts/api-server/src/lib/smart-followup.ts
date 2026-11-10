@@ -44,6 +44,7 @@ import { getCard, cardText, isHumanHeld } from "./lead-card";
 import { lastOutreach, outreachPreamble, savedName } from "./outreach-context";
 import { retrieve } from "./knowledge";
 import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
+import { noteQuality } from "./org/providers";
 import { opsVerdict, FOLLOWUP_ROLE } from "./followup-officer";
 import { isWithinSendingHours, timeNote, fixGreeting, SENDING_TZ, SENDING_HOUR_START, SENDING_HOUR_END, SENDING_HOURS_ENABLED } from "./sending-hours";
 import { getDailyRemaining } from "./daily-limit";
@@ -59,6 +60,7 @@ import { quote, discounted, discountText } from "./catalog/pricing";
 import { normalizeArabic } from "./intent";
 import { accountHalted } from "./org/controls";
 import { simPersona } from "./org/simulation";
+import { everyMs } from "./org/workers";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -638,6 +640,7 @@ export async function compose(userId: number, phone: string, turns: Turn[], rung
   };
   if (vertical === "jewelry") { (ctx as any).strictNumbers = true; (ctx as any).warm = true; (ctx as any).catalogNames = shop?.names ?? []; (ctx as any).discountAllowed = false; (ctx as any).noPrices = true; }
   let text = raw, q = checkReply(text, ctx);
+  noteQuality(!needsRewrite(q) && !blocksSend(q), out, "customer_reply");
   if (needsRewrite(q)) {
     const fixed = await complete([
       { role: "system", content: "أنت محرر رسائل واتساب لفريق مبيعات. تُصلح ما يُطلب منك فقط وتعيد الرسالة المصحّحة وحدها." },
@@ -1246,7 +1249,5 @@ export function startSmartFollowUps() {
       await runAs(u.user_id, "followup", { kind: "smart_followup", respect: "none" }, () => runSmartFollowUps(u.user_id)).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "smart follow-up round failed"));
     }
   };
-  setTimeout(() => void run(), 3 * 60_000).unref();
-  timer = setInterval(() => void run(), 20 * 60_000);
-  timer.unref();
+  timer = everyMs("whatsapp.smart_followup", 20 * 60_000, run, { firstMs: 3 * 60_000, unref: true });
 }

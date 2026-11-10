@@ -19,7 +19,7 @@ import { getSettings, enrolInSequence, ACCOUNTS_SEQUENCE_PREFIX } from "../email
 import { accountsVoice, deskActivity } from "./team";
 import { runAs } from "../org/runtime";
 import { finishWorkflow, qualityFeedback, recordQualityFeedback, startWorkflow, workflowStep } from "../org/handoffs";
-import { noteGuardResult } from "../org/providers";
+import { noteGuardResult, noteQuality } from "../org/providers";
 import {
   pickPages, visibleText, extractSignal, signalLine, groundPeople, extractEmails, domainPattern,
   emailCandidates, personalMatch, roleAddress, nameInSource, clampNote, stripNoteSignature, writingIssues, readWritten,
@@ -134,6 +134,7 @@ export async function findPeople(userId: number, acc: TargetAccount, r: Research
   const out = await asAgent(userId, "accounts_analyst", () => complete([{ role: "system", content: system }, { role: "user", content: user }], 45_000, { maxTokens: 900 }));
   if (!out) return { people: [], answered: false };
   const parsed = parseLoose<{ people?: unknown }>(out.text);
+  noteQuality(parsed != null, out, "analyst", { userId, role: "accounts_analyst" });
   const people = groundPeople(parsed?.people, all);
   // A LinkedIn profile Tavily returned whose title carries the name is a link we did see.
   for (const p of people) {

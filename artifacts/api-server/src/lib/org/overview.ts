@@ -17,8 +17,9 @@ import { APPROVAL_CATEGORIES } from "./proposals";
 import { REAL_TASK } from "./sim-schema";
 
 const num = (v: unknown) => Number(v ?? 0);
-const BUCKETS = { healthy: "healthy", running: "running", late: "delayed", failed: "failed", halted: "paused", no_execution: "no_execution" } as const;
-export const emptyCounts = () => ({ healthy: 0, running: 0, delayed: 0, failed: 0, paused: 0, no_execution: 0 });
+const BUCKETS = { healthy: "healthy", running: "running", late: "delayed", failed: "failed", halted: "paused", no_execution: "no_execution", planned: "planned", no_account: "no_account" } as const;
+// planned (لينكدإن) وno_account (لا حساب منصة) يُعدّان وحدهما: لا يدخلان «بلا تنفيذ» ولا «فشل».
+export const emptyCounts = () => ({ healthy: 0, running: 0, delayed: 0, failed: 0, paused: 0, no_execution: 0, planned: 0, no_account: 0 });
 
 /** عدّ الموظفين بحالتهم، للمنظّمة أو لقسم. Pure. */
 export function countStates(rows: Array<Pick<InventoryRow, "heartbeat_status">>) {
@@ -26,6 +27,10 @@ export function countStates(rows: Array<Pick<InventoryRow, "heartbeat_status">>)
   for (const r of rows) c[BUCKETS[r.heartbeat_status]]++;
   return c;
 }
+
+/** المهام النشطة في اللوحة: كل حالة مفتوحة ما عدا المسودة. */
+export const ACTIVE_TASK_LIST = ["pending", "queued", "running", "waiting_for_dependency", "waiting_for_approval", "waiting_for_owner", "blocked"] as const;
+const ACTIVE_TASK_STATUSES = sql.raw(`(${ACTIVE_TASK_LIST.map((x) => `'${x}'`).join(",")})`);
 
 /** ما انقضى من مواعيد المهام: موعد فات، أو عقد انتهى، أو انتظر فوق حد الحارس. */
 const OVERDUE = sql`((due_at IS NOT NULL AND due_at < now() AND status NOT IN ('completed','cancelled','failed','expired'))
@@ -67,7 +72,10 @@ export async function orgOverview(userId: number) {
 
 async function buildOverview(userId: number) {
   const staff = await orgRegistry(userId);
-  const [tasks] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status IN ('pending','queued','running','waiting_for_dependency','waiting_for_approval'))::int AS active, count(*) FILTER (WHERE ${OVERDUE})::int AS overdue FROM employee_tasks WHERE user_id = ${userId} AND ${REAL_TASK}`)).rows;
+  // النشطة تشمل ما ينتظر صاحب الحساب وما هو محجوب، ويُعرضان وحدهما أيضاً.
+  const [tasks] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status IN ${ACTIVE_TASK_STATUSES})::int AS active,
+      count(*) FILTER (WHERE status = 'waiting_for_owner')::int AS waiting_for_owner, count(*) FILTER (WHERE status = 'blocked')::int AS blocked,
+      count(*) FILTER (WHERE ${OVERDUE})::int AS overdue FROM employee_tasks WHERE user_id = ${userId} AND ${REAL_TASK}`)).rows;
   const [q] = (await db.execute<any>(sql`SELECT count(*)::int AS n, min(created_at) AS oldest, count(*) FILTER (WHERE created_at <= now() - make_interval(days => ${STALE_DAYS}) AND stale_released_at IS NULL)::int AS held FROM email_messages WHERE user_id = ${userId} AND status = 'queued'`)).rows;
   const [qt] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued, count(*) FILTER (WHERE dead_letter)::int AS dead FROM employee_tasks WHERE user_id = ${userId} AND ${REAL_TASK}`)).rows;
   const [appr] = (await db.execute<any>(sql`SELECT (SELECT count(*)::int FROM employee_tasks WHERE user_id = ${userId} AND status = 'waiting_for_approval' AND ${REAL_TASK}) AS tasks,
@@ -94,7 +102,7 @@ async function buildOverview(userId: number) {
     };
   }).filter((d) => d.employees > 0);
   return {
-    generatedAt: new Date().toISOString(), employees: countStates(staff), tasks: { active: num(tasks?.active), overdue: num(tasks?.overdue) }, departments,
+    generatedAt: new Date().toISOString(), employees: countStates(staff), tasks: { active: num(tasks?.active), waitingForOwner: num(tasks?.waiting_for_owner), blocked: num(tasks?.blocked), overdue: num(tasks?.overdue) }, departments,
     queue: { emailQueued: num(q?.n), emailOldest: q?.oldest ?? null, emailHeldStale: num(q?.held), tasksQueued: num(qt?.queued), deadLetter: num(qt?.dead) },
     integrations: health.map((h: any) => ({ integration: h.integration, status: h.status, detail: h.detail, lastOkAt: h.last_ok_at, lastFailAt: h.last_fail_at, checkedAt: h.checked_at })),
     risks: [

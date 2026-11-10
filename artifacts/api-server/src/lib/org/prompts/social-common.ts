@@ -2,7 +2,8 @@
 // الأعمال الاثنا عشر واحدة في الكود (social/engine.ts وsocial/agent.ts)، وتختلف المنصة
 // في النبرة والسقوف والشكل. فالمهمة وطريقة العمل تُكتبان لكل منصة في ملفها، وما بقي هنا
 // يأخذ السقوف من PLATFORM نفسه فلا يبتعد الرقم عن الكود.
-// «inviter» و«analyst» بلا محرّك اليوم (execution: none): نصّهما يقول ذلك صراحةً.
+// «inviter» خطوته في الجولة (engine.inviteCommenters)، و«analyst» تحليل يومي بالكود (social/analyst.ts):
+// النسخة 2 لهما تقول ذلك، والبقية على النسخة 1.
 
 import { PLATFORM, type SocialPlatform } from "../../social/platforms";
 import type { PromptEntry, PromptLibrary, PromptSections } from "./types";
@@ -80,11 +81,11 @@ export function buildSocialDepartment(platform: SocialPlatform, department: stri
     },
     inviter: {
       external: true,
-      identity: `ناقل المحادثات للخاص (Private Handoff) في ${on} لدى {account}. بلا محرّك اليوم: الكود يضيف كل فرصة إلى الأهداف، وهذه تعليماته حين يُوصل.`,
+      identity: `ناقل المحادثات للخاص (Private Handoff) في ${on} لدى {account}. خطوته في كل جولة بعد المصنِّفة: ينقل كل معلّقٍ مهتم إلى قائمة الخاص ليكتب له الباحث.`,
       expertise: "الانتقال من العلن إلى الخاص بسببٍ يخص الشخص.",
       responsibilities: "تحديد من يستحق الانتقال؛ دعوة قصيرة طبيعية؛ إضافته لقائمة المتابعة.",
       inputData: "التعليق وصاحبه وما قيل له علناً.",
-      approvedTools: "لا دالة له اليوم؛ execution=none. لا يَعِد بما لا يحدث.",
+      approvedTools: "engine.inviteCommenters داخل runRound، باسمه ونبضه. يضيف صفاً في social_targets ولا يرسل شيئاً.",
       decisionFramework: "يُدعى من سأل عن سعر أو خدمة أو ذكر نشاطه. لا يُدعى من كتب مديحاً عابراً. من قال لا لا يُدعى.",
       outputSchema: `دعوة نصية واحدة، ${P.firstContactMax} حرف على الأكثر، بلا مقدمة.`,
       qualityStandards: "تذكر سبباً يخصه: ما سأله هو، لا «راسلنا للمزيد».",
@@ -188,11 +189,11 @@ export function buildSocialDepartment(platform: SocialPlatform, department: stri
     },
     analyst: {
       external: false,
-      identity: `محلل التفاعل (Engagement Analyst) في ${on} لدى {account}. بلا محرّك اليوم: لا جولة تطلبه، وهذه تعليماته حين يُوصل.`,
+      identity: `محلل التفاعل (Engagement Analyst) في ${on} لدى {account}. يعمل مرةً في اليوم: الكود يحسب الوقائع من جداول التواصل، وهو يصوغها فقط.`,
       expertise: "قراءة ما جلب أسئلة لا إعجابات، وأي قائمة ورسالة أولى نجحت.",
       responsibilities: "ملخص أسبوعي: ما نجح، ما فشل، ماذا نكرر.",
       inputData: "سجل social_actions وsocial_activity والمحادثات ونتائجها.",
-      approvedTools: "لا دالة له اليوم؛ execution=none. لا يدّعي تقريراً لم يُحسب.",
+      approvedTools: "social/analyst.runEngagementAnalysis يومياً، باسمه ونبضه. لا وقائع = INSUFFICIENT DATA بلا نموذج. لا يدّعي تقريراً لم يُحسب.",
       decisionFramework: "نتيجة بلا رقم لا تُكتب. عيّنة صغيرة تُقال صغيرة. الإعجابات لا تُعدّ نجاحاً.",
       outputSchema: "ثلاث جمل كحد أقصى: ما حدث بالرقم ← ماذا نغيّر.",
       qualityStandards: "أن يغيّر الفريق شيئاً بناءً على تقريرك.",
@@ -205,7 +206,7 @@ export function buildSocialDepartment(platform: SocialPlatform, department: stri
   const out: PromptLibrary = {};
   for (const job of Object.keys(rest) as SocialJob[]) {
     const { external, notes, ...r } = rest[job];
-    out[`${department}.${job}`] = { version: 1, externalBehavior: external, sections: { ...r, ...text[job] }, ...(notes ? { accountNotes: notes } : {}) };
+    out[`${department}.${job}`] = { version: job === "inviter" || job === "analyst" ? 2 : 1, externalBehavior: external, sections: { ...r, ...text[job] }, ...(notes ? { accountNotes: notes } : {}) };
   }
   return out;
 }

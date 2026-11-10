@@ -3,7 +3,7 @@
 // وعزل الحسابات. قاعدة الاختبار وحدها:
 //   DATABASE_URL=postgres://t:t@127.0.0.1:55442/t npx tsx src/lib/__tests__/org-docs-db.test.ts
 export {};
-if (!/127\.0\.0\.1:(55439|55440|55442)\//.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
+if (!/127\.0\.0\.1:(55445|55439|55440|55442)\//.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
 globalThis.fetch = (async (url: any) => { throw new Error(`no network in this test: ${url}`); }) as any;
 
 const { db } = await import("@workspace/db");

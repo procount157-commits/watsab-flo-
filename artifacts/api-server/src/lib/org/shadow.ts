@@ -371,6 +371,8 @@ export async function shadowTick(now = new Date(), run: typeof runShadow = runSh
     const [seen] = await rows(sql`SELECT 1 FROM shadow_runs WHERE user_id = ${userId} AND trigger = 'schedule' AND created_at >= ${new Date(`${t.date}T00:00:00+04:00`)} LIMIT 1`);
     if (seen) continue;
     await run(userId, { trigger: "schedule" }).catch((err) => logger.warn({ userId, err: String(err?.message ?? err).slice(0, 200) }, "الظل المجدول فشل"));
+    // المرحلة ٥: بعد الظل، الداخلي منخفض الخطر الذي اجتاز بوابته يُفعَّل (auto-apply.ts). لا يرمي.
+    await (await import("./auto-apply")).autoApplyLowRisk(userId, { trigger: "schedule" });
     done.push(userId);
   }
   return done;

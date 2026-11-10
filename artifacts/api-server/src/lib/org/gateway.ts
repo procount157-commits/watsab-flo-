@@ -13,6 +13,7 @@ import { audit, departmentOf, departmentOfChannel, isHalted, isUnavailable, type
 import { key9 } from "../wa-firewall-rules";
 import { currentTicket, recordAction, recordGate } from "./ledger";
 import { currentSimulation, recordSandbox } from "./simulation";
+import { everyMs } from "./workers";
 
 export type GateCode = "ok" | "halted" | "opted_out" | "no_driver" | "not_owner" | "duplicate" | "simulation";
 export interface GateInput {
@@ -91,8 +92,7 @@ export async function flushAllowed(): Promise<number> {
 let flusher: NodeJS.Timeout | null = null;
 export function startGateFlusher(): void {
   if (flusher) return;
-  flusher = setInterval(() => void flushAllowed().catch(() => {}), 5 * 60_000);
-  flusher.unref();
+  flusher = everyMs("org.gate_flusher", 5 * 60_000, flushAllowed, { unref: true });
 }
 
 async function logRefusal(i: GateInput, r: GateResult) {

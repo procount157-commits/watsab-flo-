@@ -28,7 +28,9 @@ import { trackingState } from "./public-url";
 import { resultsReport, resultsFacts } from "./results";
 import { accountHalted } from "../org/controls";
 import { runAs } from "../org/runtime";
+import { noteQuality } from "../org/providers";
 import { handoffRetarget, handoffReviewResults, handoffSubjectGuidance, replyOutcomeFacts } from "../org/handoffs";
+import { everyMs } from "../org/workers";
 
 export type SpecialistRole = "email_registrar" | "email_data" | "email_retarget" | "email_opens" | "email_analyst";
 
@@ -177,6 +179,8 @@ async function specialistRun(userId: number, role: SpecialistRole, opts: { notif
     .split("\n").map((l) => l.replace(/^[-•*\s]+/, "").trim()).filter((l) => l.length > 3).slice(0, 6);
 
   const report: SpecialistReport = { role, name: spec.name, verdict, top, points, step, raw: facts.raw };
+  // جودة المحلل (org/routing.ts): الشكل المطلوب — حكمٌ وخطوة على الأقل.
+  noteQuality(!!verdict && !!step, out, undefined, { userId, role });
 
   await activity(userId, role as EmailRole, "report",
     [verdict, top ? `الأهم: ${top}` : "", ...points.map((p) => `• ${p}`), step ? `الخطوة: ${step}` : ""].filter(Boolean).join("\n"),
@@ -251,6 +255,6 @@ export function startSpecialistRounds(): void {
     }
   };
   // أول جولةٍ بعد ثلاث دقائق من الإقلاع، ثم كل يوم.
-  setTimeout(() => { void run(); setInterval(() => void run(), DAY); }, 180_000);
+  everyMs("email.specialists", DAY, run, { firstMs: 180_000 });
   logger.info("جولة أخصائيي البريد اليومية مُجدولة");
 }

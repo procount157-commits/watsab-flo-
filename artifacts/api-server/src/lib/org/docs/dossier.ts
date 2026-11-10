@@ -36,7 +36,8 @@ const toRow = (r: any): DossierRow => ({
 /** مسودةٌ لكل موظفٍ في الحساب له مدخل في المكتبة، مرةً لكل نسخة مكتبة. لا يفعّل شيئاً. */
 export async function seedDossiers(userId: number): Promise<number> {
   if (!(await ensureDocsTables())) return 0;
-  await backfillRegistry(userId);
+  // seed: false — هذا هو البذر نفسه، فلا يبذر الملء من داخله.
+  await backfillRegistry(userId, { seed: false });
   const account = await accountOf(db, userId);
   const staff = (await db.execute<{ employee_key: string }>(sql`SELECT employee_key FROM bot_employees WHERE user_id = ${userId} AND employee_key IS NOT NULL`)).rows;
   let made = 0;
@@ -84,10 +85,21 @@ export async function seedAllDossiers(): Promise<{ dossiers: number; objections:
   return { dossiers, objections };
 }
 
-/** عند الإقلاع: الجدول ثم البذر، بلا انتظار ولا تفعيل. */
+/** مرورٌ واحد: يملأ مفاتيح من وُظّف حديثاً ثم يبذر ما ينقص. يُعاد بأمان، ولا يفعّل شيئاً. */
+export async function docsTick(): Promise<{ dossiers: number; objections: number }> {
+  await backfillRegistry().catch(() => 0);
+  return seedAllDossiers();
+}
+
+let docsTimer: NodeJS.Timeout | null = null;
+/** عند الإقلاع: الجدول ثم البذر، بلا انتظار ولا تفعيل. ثم كل ساعة: موظفٌ جديد يأخذ مسودته بلا إعادة تشغيل. */
 export function startOrgDocs(): void {
-  void seedAllDossiers().then((n) => { if (n.dossiers || n.objections) logger.info(n, "ملفات الموظفين: بُذرت مسودات معلّقة"); })
+  const run = () => void docsTick().then((n) => { if (n.dossiers || n.objections) logger.info(n, "ملفات الموظفين: بُذرت مسودات معلّقة"); })
     .catch((err) => logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "ملفات الموظفين: تعذّر البذر"));
+  run();
+  if (docsTimer) return;
+  docsTimer = setInterval(run, 60 * 60_000);
+  docsTimer.unref();
 }
 
 // ── القراءة ───────────────────────────────────────────────────────

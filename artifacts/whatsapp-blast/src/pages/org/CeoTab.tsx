@@ -116,7 +116,7 @@ function Report({ r }: { r: any }) {
                     <td className="py-1.5 pl-3 font-medium">{dept(x.department)}</td><td className="pl-3">{num(x.executions)}</td><td className="pl-3">{num(x.failed)}</td>
                     <td className="pl-3">{pct(x.successRate) ?? <span className="text-muted-foreground">بيانات غير كافية</span>}</td>
                     <td className="pl-3">{num(x.calls)}</td><td className="pl-3">{num(x.tokens)}</td>
-                    <td className="pl-3">{x.costUsd == null ? <span className="text-muted-foreground">غير معروفة</span> : `$${num(x.costUsd)}`}</td>
+                    <td className="pl-3">{x.costUsd == null ? <span className="text-muted-foreground">غير متاح</span> : `$${num(x.costUsd)}`}</td>
                     <td className="pl-3" dir="auto">{x.outcome == null ? "—" : `${x.outcomeLabel ?? ""} ${num(x.outcome)}`.trim()}</td>
                   </tr>
                 ))}</tbody>
@@ -151,7 +151,7 @@ function Report({ r }: { r: any }) {
         </Section>
         <Section title="مشاكل الموارد">
           <Rows rows={list(r.resource_issues)} render={(x) => (
-            <div><b>{dept(x.department)}</b> <span className="text-muted-foreground">{num(x.tokens)} رمز · {num(x.calls)} نداء · التكلفة {x.costUsd == null ? "غير معروفة" : `$${num(x.costUsd)}`} · النتيجة {num(x.outcome)}</span><p className="text-muted-foreground mt-0.5" dir="auto">{x.detail}</p></div>
+            <div><b>{dept(x.department)}</b> <span className="text-muted-foreground">{num(x.tokens)} رمز · {num(x.calls)} نداء · التكلفة {x.costUsd == null ? "غير متاح" : `$${num(x.costUsd)}`} · النتيجة {num(x.outcome)}</span><p className="text-muted-foreground mt-0.5" dir="auto">{x.detail}</p></div>
           )} />
         </Section>
         <Section title="الإجراءات الموصى بها">

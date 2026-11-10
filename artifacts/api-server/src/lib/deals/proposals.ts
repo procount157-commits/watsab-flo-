@@ -23,6 +23,7 @@ import { notify, esc } from "../telegram";
 import { logger } from "../logger";
 import { corePrompt } from "../prompt-core";
 import { advance, dealBrief, setStage } from "./deals";
+import { everyMs } from "../org/workers";
 
 export const ROLE = "proposals";
 const BLANK = /\[\[[^\]]+\]\]/;
@@ -157,7 +158,7 @@ export async function sendFollowup(userId: number, id: number, text?: string) {
 }
 
 export function startProposalFollowups() {
-  setInterval(() => void draftDueFollowups().catch((err) => logger.warn({ err: String(err) }, "proposal follow-ups failed")), 60 * 60_000);
+  everyMs("deals.proposal_followups", 60 * 60_000, draftDueFollowups);
 }
 
 export async function proposalsFor(userId: number, dealId: number): Promise<Proposal[]> {

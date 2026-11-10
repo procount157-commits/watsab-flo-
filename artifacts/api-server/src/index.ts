@@ -64,6 +64,7 @@ import { ensureSimTables } from "./lib/org/sim-schema";
 import { ensureTicketTables } from "./lib/org/ledger";
 import { startOrgDocs } from "./lib/org/docs/dossier";
 import { seedAllPromptProposals } from "./lib/org/proposals";
+import { everyMs } from "./lib/org/workers";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -239,10 +240,7 @@ function startListening() {
     // Silence is an outcome. Hourly, a reply nobody answered for a day is
     // marked quiet, which is what lets the coach and the meeting see the
     // replies that lost the customer as well as the ones that won them.
-    setTimeout(() => {
-      void sweepQuietOutcomes().catch(() => {});
-      setInterval(() => void sweepQuietOutcomes().catch(() => {}), 60 * 60_000);
-    }, 45_000);
+    everyMs("agent_memory.quiet_outcomes", 60 * 60_000, sweepQuietOutcomes, { firstMs: 45_000 });
 
     // ── Connection Guardian ───────────────────────────────────────────
     // Runs every 90 seconds. For every user whose WA instance is loaded
@@ -300,10 +298,7 @@ function startConnectionGuardian() {
   }
 
   // First run after 30 s to let restoreAllSessions finish initialising
-  setTimeout(() => {
-    void runGuardian();
-    setInterval(() => void runGuardian(), INTERVAL_MS);
-  }, 30_000);
+  everyMs("whatsapp.connection_guardian", INTERVAL_MS, runGuardian, { firstMs: 30_000, scope: "wa_sessions" });
 
   logger.info({ intervalSec: INTERVAL_MS / 1000 }, "Connection guardian started");
 }
@@ -334,10 +329,7 @@ function startAutoMaintenanceScheduler() {
 
   // First run after 60 s (after guardian's 30 s head start) so it never
   // races an in-progress restoreAllSessions() init.
-  setTimeout(() => {
-    void runMaintenance();
-    setInterval(() => void runMaintenance(), INTERVAL_MS);
-  }, 60_000);
+  everyMs("whatsapp.auto_maintenance", INTERVAL_MS, runMaintenance, { firstMs: 60_000, scope: "wa_sessions" });
 
   logger.info({ intervalMin: INTERVAL_MS / 60_000 }, "Auto-maintenance scheduler started");
 }
@@ -368,10 +360,10 @@ function startKeepAlive(localPort: number): void {
     req.end();
   }
 
-  setInterval(() => {
+  everyMs("process.heartbeat", INTERVAL_MS, () => {
     ping(localUrl);
     if (publicUrl) ping(publicUrl);
-  }, INTERVAL_MS);
+  });
 
   logger.info({ localUrl, publicUrl, intervalMin: INTERVAL_MS / 60_000 }, "Heartbeat started");
 }

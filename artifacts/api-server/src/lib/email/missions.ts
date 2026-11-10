@@ -38,6 +38,7 @@ import { accountHalted } from "../org/controls";
 import { beat, runAs } from "../org/runtime";
 import { recordQualityFeedback } from "../org/handoffs";
 import { noteGuardResult } from "../org/providers";
+import { everyMs } from "../org/workers";
 
 async function log(missionId: number, text: string, kind = "note") {
   await db.insert(emailMissionLogTable).values({ missionId, kind, text: text.slice(0, 2000) });
@@ -461,10 +462,7 @@ export async function runMissions(): Promise<void> {
 }
 
 export function startMissionWorker(): void {
-  setTimeout(() => {
-    void runMissions().catch(() => {});
-    setInterval(() => void runMissions().catch((e) => logger.warn({ err: String(e?.message ?? e) }, "missions sweep failed")), 10 * 60_000);
-  }, 90_000);
+  everyMs("email.missions", 10 * 60_000, runMissions, { firstMs: 90_000 });
   logger.info("مهام نورة بدأت");
 }
 

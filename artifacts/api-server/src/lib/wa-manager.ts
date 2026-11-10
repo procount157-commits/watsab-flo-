@@ -33,6 +33,7 @@ import { runDeskAll, type DeskReport } from "./data-desk/desk";
 import { bucketOf, BUCKET_AR, targetsBrief, type Bucket } from "./data-desk/classify";
 import { evaluateDesk, evaluationFacts, type Evaluation } from "./team/evaluate";
 import { accountHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const WA_MANAGER_ROLE = "chief";
 /** من تُديرهم — ومن يغيب منهم يُذكر بأثره لا باسمه. */
@@ -317,6 +318,6 @@ export function startWaManagerLoop(): void {
       if (r?.brief) lastBrief.set(userId, Date.now());
     }
   };
-  setTimeout(() => { void round(); setInterval(() => void round(), SIX_H); }, 8 * 60_000);
+  everyMs("whatsapp.manager", SIX_H, round, { firstMs: 8 * 60_000 });
   logger.info("حلقة مديرة الواتساب بدأت — دورة كل ست ساعات");
 }

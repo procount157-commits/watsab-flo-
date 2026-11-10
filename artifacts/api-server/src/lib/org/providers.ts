@@ -3,20 +3,27 @@
 // بجمعٍ على الصف نفسه (حساب، مزوّد، نموذج، يوم، نوع مهمة). نداءٌ بلا موظف لا حساب له فلا
 // يُعدّ هنا؛ له عدّاده في graph/receipts. لا يغيّر هذا الملف ترتيب المزوّدين في شيء.
 //
-// التوكنات تقديرٌ من عدد الأحرف (tokensOf)، والكلفة غير معروفة ما لم يقلها المزوّد:
-// لا جدول أسعار هنا، فالتقرير يقول null بدل صفرٍ كاذب.
+// التوكنات تقديرٌ من عدد الأحرف (tokensOf). الكلفة من provider_prices (prices.ts) حيث يوجد سعر
+// لهذا المزوّد والنموذج، وإلا null («غير متاح») بدل صفرٍ كاذب.
+//
+// لكل صف صنف عمله (routing.ts: كاتب، رد، مصنِّف، محلل، سرد، صوت)، ومنه يُرتَّب المزوّدون:
+// النجاح والزمن هنا، والجودة في guard_passed/guard_failed — كل فحصٍ بالكود بعد المخرج يُسجَّل
+// بـnoteQuality (أو noteGuardResult للحارس).
 
 import { inSimulation } from "./simulation";
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { currentAgent, currentMeter } from "../agent-context";
 import { logger } from "../logger";
+import { taskClassOf, type TaskClass } from "./routing";
+import { priceMap, usdCost } from "./prices";
+import { everyMs } from "./workers";
 
 export const PROVIDER_FLUSH_MS = 60_000;
 export const GUARD_MIN_SAMPLE = 10;
 
 interface Bucket {
-  userId: number; provider: string; model: string; day: string; taskType: string;
+  userId: number; provider: string; model: string; day: string; taskType: string; taskClass: string;
   calls: number; failures: number; tokensIn: number; tokensOut: number; latencyMs: number; guardPassed: number; guardFailed: number;
 }
 const buckets = new Map<string, Bucket>();
@@ -26,17 +33,16 @@ const dubaiDay = (now = Date.now()) => new Date(now + 4 * 3_600_000).toISOString
 /** Tokens from characters, as in graph/receipts.tokensOf: imported from nowhere so llm.ts has no cycle through here. */
 const tokensOf = (chars: number) => Math.max(0, Math.round(chars / 4));
 
-function bucket(userId: number, provider: string, model: string, taskType: string): Bucket {
+function bucket(userId: number, provider: string, model: string, taskType: string, taskClass: string): Bucket {
   const day = dubaiDay();
-  const k = `${userId}|${provider}|${model}|${day}|${taskType}`;
+  const k = `${userId}|${provider}|${model}|${day}|${taskType}|${taskClass}`;
   let b = buckets.get(k);
   if (!b) {
-    b = { userId, provider: provider.slice(0, 40), model: model.slice(0, 120), day, taskType: taskType.slice(0, 60), calls: 0, failures: 0, tokensIn: 0, tokensOut: 0, latencyMs: 0, guardPassed: 0, guardFailed: 0 };
+    b = { userId, provider: provider.slice(0, 40), model: model.slice(0, 120), day, taskType: taskType.slice(0, 60), taskClass: taskClass.slice(0, 20), calls: 0, failures: 0, tokensIn: 0, tokensOut: 0, latencyMs: 0, guardPassed: 0, guardFailed: 0 };
     buckets.set(k, b);
   }
   if (!timer) {
-    timer = setInterval(() => void flushProviderMetrics().catch((err) => logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "مقاييس المزوّد لم تُكتب")), PROVIDER_FLUSH_MS);
-    timer.unref();
+    timer = everyMs("org.provider_metrics_flush", PROVIDER_FLUSH_MS, flushProviderMetrics, { unref: true });
   }
   return b;
 }
@@ -45,10 +51,10 @@ function bucket(userId: number, provider: string, model: string, taskType: strin
 const taskTypeNow = (role: string) => currentMeter()?.kind ?? `role:${role}`;
 
 /** محاولةٌ واحدة عند مزوّد واحد. لا يرمي ولا يمسّ الشبكة ولا القاعدة. */
-export function noteProviderCall(c: { provider: string; model: string; ok: boolean; ms: number; charsIn?: number; charsOut?: number }): void {
+export function noteProviderCall(c: { provider: string; model: string; ok: boolean; ms: number; charsIn?: number; charsOut?: number; taskClass?: TaskClass }): void {
   const who = currentAgent();
   if (!who || inSimulation()) return;
-  const b = bucket(who.userId, c.provider, c.model, taskTypeNow(who.role));
+  const b = bucket(who.userId, c.provider, c.model, taskTypeNow(who.role), c.taskClass ?? taskClassOf(who.role));
   b.calls++;
   if (!c.ok) b.failures++;
   b.latencyMs += Math.max(0, Math.round(c.ms));
@@ -63,8 +69,30 @@ export function noteProviderCall(c: { provider: string; model: string; ok: boole
 export function noteGuardResult(userId: number, role: string, passed: boolean): void {
   if (inSimulation()) return;
   const m = currentMeter();
-  const b = bucket(userId, m?.lastProvider ?? "unknown", m?.lastModel ?? "", m?.kind ?? `role:${role}`);
+  const b = bucket(userId, m?.lastProvider ?? "unknown", m?.lastModel ?? "", m?.kind ?? `role:${role}`, taskClassOf(role));
   if (passed) b.guardPassed++; else b.guardFailed++;
+}
+
+/**
+ * فحصٌ بالكود على مخرجٍ بعينه: فحص الرد قبل أن يصل العميل، نجاح تحليل JSON، قبول السرد.
+ * `from` هو LlmResult الذي كُتب به المخرج؛ بدونه آخر من أجاب في الجولة. خارج موظف، أو
+ * بلا مزوّد معروف (رد من قاعدة المعرفة)، لا يُسجَّل شيء: الجودة لا تُنسب لمن لم يكتب.
+ */
+export function noteQuality(passed: boolean, from?: { provider?: string | null; model?: string | null } | null, taskClass?: TaskClass, as?: { userId: number; role: string }): void {
+  const who = as ?? currentAgent();
+  if (!who || inSimulation()) return;
+  const m = currentMeter();
+  const provider = from ? from.provider : m?.lastProvider;
+  if (!provider || provider === "none") return;
+  const model = (from ? from.model : m?.lastModel) ?? "";
+  const b = bucket(who.userId, provider, model, taskTypeNow(who.role), taskClass ?? taskClassOf(who.role));
+  if (passed) b.guardPassed++; else b.guardFailed++;
+}
+
+/** نجاح تحليل مخرجٍ منظَّم: القيمة نفسها تعود، فيُلفّ بها التحليل في مكانه. */
+export function noteParsed<T>(value: T, from?: { provider?: string | null; model?: string | null } | null, taskClass?: TaskClass): T {
+  noteQuality(value != null, from, taskClass);
+  return value;
 }
 
 export async function flushProviderMetrics(): Promise<number> {
@@ -73,9 +101,9 @@ export async function flushProviderMetrics(): Promise<number> {
   buckets.clear();
   let n = 0;
   for (const b of rows) {
-    await db.execute(sql`INSERT INTO provider_metrics (user_id, provider, model, day, task_type, calls, failures, tokens_in, tokens_out, latency_ms, guard_passed, guard_failed)
-      VALUES (${b.userId}, ${b.provider}, ${b.model}, ${b.day}, ${b.taskType}, ${b.calls}, ${b.failures}, ${b.tokensIn}, ${b.tokensOut}, ${b.latencyMs}, ${b.guardPassed}, ${b.guardFailed})
-      ON CONFLICT (user_id, provider, model, day, task_type) DO UPDATE SET calls = provider_metrics.calls + EXCLUDED.calls, failures = provider_metrics.failures + EXCLUDED.failures,
+    await db.execute(sql`INSERT INTO provider_metrics (user_id, provider, model, day, task_type, task_class, calls, failures, tokens_in, tokens_out, latency_ms, guard_passed, guard_failed)
+      VALUES (${b.userId}, ${b.provider}, ${b.model}, ${b.day}, ${b.taskType}, ${b.taskClass}, ${b.calls}, ${b.failures}, ${b.tokensIn}, ${b.tokensOut}, ${b.latencyMs}, ${b.guardPassed}, ${b.guardFailed})
+      ON CONFLICT (user_id, provider, model, day, task_type, task_class) DO UPDATE SET calls = provider_metrics.calls + EXCLUDED.calls, failures = provider_metrics.failures + EXCLUDED.failures,
         tokens_in = provider_metrics.tokens_in + EXCLUDED.tokens_in, tokens_out = provider_metrics.tokens_out + EXCLUDED.tokens_out, latency_ms = provider_metrics.latency_ms + EXCLUDED.latency_ms,
         guard_passed = provider_metrics.guard_passed + EXCLUDED.guard_passed, guard_failed = provider_metrics.guard_failed + EXCLUDED.guard_failed`)
       .then(() => { n++; }, (err) => {
@@ -120,7 +148,11 @@ export async function providerReport(userId: number, days = 7) {
   const health = (await healthReport().catch(() => [] as any[])).map((h: any) => ({
     provider: h.provider, model: h.model, state: h.resting ? "cooldown" : "ok", ok: Number(h.ok ?? 0), fail: Number(h.fail ?? 0), avgMs: h.avgMs == null ? null : Number(h.avgMs), score: h.score,
   }));
-  return { days: d, byTask: r.rows.map(providerRow), health, notes: [LLM_SETTINGS_NOTE, "التوكنات تقدير من عدد الأحرف، والكلفة null تعني غير معروفة.", "فشل المحاولة يُعدّ عند مزوّدها، ونداءٌ بلا موظف لا يدخل هذا التقرير."] };
+  // الكلفة من جدول الأسعار وقت القراءة، لا من عمود cost_usd: سعرٌ وُضع اليوم يسعّر الأسبوع كله.
+  const prices = await priceMap();
+  const byTask = r.rows.map(providerRow).map((row) => ({ ...row, costUsd: usdCost(prices, row.provider, row.model, row.tokensIn, row.tokensOut) }));
+  return { days: d, byTask, health, pricing: { rows: prices.size, note: prices.size ? "الكلفة لمن له سعر في provider_prices؛ وغيره null (غير متاح)." : "لا أسعار مسجّلة: كل الكلفة null (غير متاح) حتى يضعها المالك بمصدرها." },
+    notes: [LLM_SETTINGS_NOTE, "التوكنات تقدير من عدد الأحرف، والكلفة تقدير مثلها؛ null تعني غير متاح (لا سعر).", "فشل المحاولة يُعدّ عند مزوّدها، ونداءٌ بلا موظف لا يدخل هذا التقرير."] };
 }
 
 // ── مخرجٌ منظَّم من نموذج ──────────────────────────────────────────

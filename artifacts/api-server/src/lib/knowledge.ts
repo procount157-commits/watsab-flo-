@@ -15,6 +15,7 @@ import { complete, resolveProvider } from "./llm";
 import { logger } from "./logger";
 import { WORK_PROTOCOL, MIRROR, NEVER, channelExamples, finalCheck as coreCheck } from "./prompt-core";
 import { checkReply, needsRewrite, rewritePrompt, blocksSend } from "./reply-check";
+import { noteQuality } from "./org/providers";
 import { receipt } from "./graph/receipts";
 import { read, replyPrompt, englishName, type Reading } from "./reply-brain";
 import { asWorker } from "./agent-context";
@@ -507,6 +508,8 @@ export async function answerFromKnowledge(
       };
       let reply = out.text.trim();
       let q = checkReply(reply, ctx);
+      // جودة من كتب المسودة الأولى (org/routing.ts): تجتاز إن لم تحتج إعادة كتابة ولا حجباً.
+      noteQuality(!needsRewrite(q) && !blocksSend(q), out, "customer_reply");
       let rewritten = false;
       const firstDraft = reply;
       if (needsRewrite(q)) {

@@ -112,7 +112,7 @@ const row = V.providerRow({ task_type: "t", provider: "p", model: "m", calls: 4,
 check("سطر المزوّد: كلفة غير معروفة null، وحارس بلا عيّنة null", row.costUsd === null && row.guardPassRate === null && row.successRate === 0.75 && row.avgLatencyMs === 100);
 
 // ── على قاعدة الاختبار ───────────────────────────────────────────
-if (!/127\.0\.0\.1:(55440|55441|55442|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55446|55445|55440|55441|55442|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`\n${pass} passed, ${fail} failed (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }
@@ -256,7 +256,9 @@ try { await P.approveProposal(B, extRow.change_id, B); } catch (e: any) { crossA
 check("حساب آخر لا يوافق على مقترحك", crossAcc === 409 && (await P.getProposal(A, extRow.change_id))!.status === "proposed");
 const done = await P.approveProposal(A, extRow.change_id, A);
 const after = await one(sql`SELECT persona, prompt_version FROM bot_employees WHERE user_id = ${A} AND employee_key = ${extKey}`);
-check("الموافقة تفعّل: النص المرسوم في persona", done.applied && done.proposal.status === "applied" && after.persona !== persona0 && after.persona.includes("## الهوية"));
+// الموظف المُوظَّف يأخذ مسودة ملفه فوراً (registry.backfillRegistry)، فالتفعيل يكتب نص الملف المجمَّع إن وُجد، وإلا نص المكتبة.
+const activeDoc = await one(sql`SELECT count(*)::int AS n FROM employee_documentation WHERE user_id = ${A} AND employee_key = ${extKey} AND status = 'active'`).catch(() => ({ n: 0 }));
+check("الموافقة تفعّل: النص المرسوم في persona", done.applied && done.proposal.status === "applied" && after.persona !== persona0 && (after.persona.includes("## الهوية") || Number(activeDoc?.n) === 1));
 check("نسختان محفوظتان، والجديدة النشطة", (await rows(sql`SELECT version, active FROM employee_prompt_versions WHERE user_id = ${A} AND employee_key = ${extKey} ORDER BY version`)).map((v: any) => `${v.version}:${v.active}`).join() === "1:false,2:true");
 check("كتلة الحساب من اسمه: لا تسريب بروكاونت", !after.persona.includes("Pro Count for Accounting"));
 check("التفعيل في السجل", (await one(sql`SELECT count(*)::int AS n FROM org_audit_log WHERE user_id = ${A} AND action = 'prompt.activated'`)).n === 1);
@@ -376,7 +378,8 @@ const report = await V.providerReport(A, 7);
 const byRole = report.byTask.find((r: any) => r.task_type === "role:email")!;
 check("التقرير لكل نوع مهمة", byRole.calls === 2 && byRole.failures === 1 && byRole.avgLatencyMs === 200 && byRole.tokensIn === 100, byRole);
 check("نوع المهمة من الجولة", report.byTask.some((r: any) => r.task_type === "kind_x" && r.calls === 1));
-check("الحارس على من كتب", report.byTask.reduce((a: number, r: any) => a + r.guardPassed, 0) === 1);
+// جودة السرد (noteQuality في ceo.ts) تُسجَّل على حساب أ أيضاً من جولات الرئيس أعلاه: الحارس يُقرأ في نوع مهمته.
+check("الحارس على من كتب", report.byTask.filter((r: any) => r.task_type === "kind_x").reduce((a: number, r: any) => a + r.guardPassed, 0) === 1);
 check("الكلفة غير المعروفة null", byRole.costUsd === null);
 check("ملاحظة llm_settings", report.notes.some((n: string) => n.includes("llm_settings")));
 check("عزل: لا شيء لحساب ب", (await V.providerReport(B, 7)).byTask.length === 0);

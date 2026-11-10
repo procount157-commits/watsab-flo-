@@ -204,11 +204,31 @@ export async function processComments(userId: number, p: SocialPlatform, max = 1
     const status = reply ? await settle(userId, p, a, reply, recent) : "skipped";
     await db.update(socialCommentsTable).set({ intent: t.intent, isLead: t.isLead, draft: reply, status, skipReason: reply ? null : t.why || "لا يحتاج رداً" }).where(eq(socialCommentsTable.id, c.id));
     if (reply) { drafted++; recent.unshift(reply); } else skipped++;
-    // A commenter who asked about a service is someone to talk to in private.
-    if (t.isLead && c.authorUrl) await db.insert(socialTargetsTable).values({ userId, platform: p, handle: c.author.toLowerCase().slice(0, 200), profileUrl: c.authorUrl, source: "comment", note: `علّق: ${c.text.slice(0, 200)}` }).onConflictDoNothing();
+    // نقل المعلّق المهتم إلى الخاص عمل الناقل (inviteCommenters)، بخطوته ونبضه في الجولة.
   }
   if (drafted || skipped) await activity(userId, p, "writer", "draft", `صنّفت ${fresh.length} تعليقاً وكتبت ${drafted} رداً${skipped ? `، وتركت ${skipped} بلا رد` : ""}`);
   return { drafted, skipped };
+}
+
+/**
+ * الناقل: كل معلّقٍ صنّفته المصنِّفة مهتماً (سأل عن خدمة أو ذكر نشاطه) يدخل قائمة الخاص
+ * (social_targets، source = comment)، فيكتب له الباحث رسالته الأولى في الجولة نفسها.
+ * لا يرسل شيئاً: يضيف صفاً، مرةً لكل معلّق.
+ */
+export async function inviteCommenters(userId: number, p: SocialPlatform, sinceDays = 7) {
+  const since = new Date(Date.now() - sinceDays * 86_400_000);
+  const leads = await db.select({ author: socialCommentsTable.author, authorUrl: socialCommentsTable.authorUrl, text: socialCommentsTable.text }).from(socialCommentsTable)
+    .where(and(eq(socialCommentsTable.userId, userId), eq(socialCommentsTable.platform, p), eq(socialCommentsTable.isLead, true), gte(socialCommentsTable.createdAt, since)))
+    .orderBy(asc(socialCommentsTable.createdAt)).limit(50);
+  let invited = 0;
+  for (const c of leads) {
+    if (!c.authorUrl) continue;
+    const r = await db.insert(socialTargetsTable).values({ userId, platform: p, handle: c.author.toLowerCase().slice(0, 200), profileUrl: c.authorUrl, source: "comment", note: `علّق: ${c.text.slice(0, 200)}` })
+      .onConflictDoNothing().returning({ id: socialTargetsTable.id });
+    invited += r.length;
+  }
+  if (invited) await activity(userId, p, "inviter", "invite", `نقلت ${invited} معلّقاً مهتماً إلى قائمة الخاص`);
+  return { leads: leads.length, invited };
 }
 
 // ── The inbox ────────────────────────────────────────────────────
@@ -488,7 +508,7 @@ export async function runRound(userId: number, p: SocialPlatform) {
   if (busy.has(key)) return { busy: true };
   busy.add(key);
   // لكل موظف له خطوة نبضُ خطوته: كل عشرين دقيقة نبض، وسطر تنفيذ في الساعة على الأكثر. المفتاح سُئل قبل الجولة،
-  // والبوابة تسأل قبل كل فعل. من لا خطوة له (الناقل، المحلل) لا يُكتب له نبضٌ لم يعمله.
+  // والبوابة تسأل قبل كل فعل. المحلل لا خطوة له هنا: تحليله يومي (analyst.ts) بنبضه هو.
   const step = <T>(job: Job, kind: string, fn: () => Promise<T>) => runAs(userId, roleOf(p, job), { kind, respect: "none", sampleMin: 60 }, fn) as Promise<T>;
   try {
     return await step("manager", "social_round", async () => {
@@ -496,12 +516,13 @@ export async function runRound(userId: number, p: SocialPlatform) {
       if (guard.state !== "logged_in") return { guard };
       const collected = await step("watcher", "social_watch", async () => { await discoverPosts(userId, p).catch(() => 0); return collectComments(userId, p); });
       const processed = await step("triage", "social_comments", () => processComments(userId, p));
+      const invited = await step("inviter", "social_invite", () => inviteCommenters(userId, p));
       const inbox = await step("dm", "social_inbox", () => syncInbox(userId, p));
       const outreach = await step("prospector", "social_outreach", () => prepareOutreach(userId, p));
       const followups = await step("followup", "social_followup", async () => (await agent.shopMode(userId)) ? prepareShopFollowups(userId, p) : prepareFollowups(userId, p));
       const sent = await sendApproved(userId, p);
       await db.update(socialAccountsTable).set({ lastRunAt: new Date() }).where(and(eq(socialAccountsTable.userId, userId), eq(socialAccountsTable.platform, p)));
-      return { guard, collected, processed, inbox, outreach, followups, sent };
+      return { guard, collected, processed, invited, inbox, outreach, followups, sent };
     });
   } finally { busy.delete(key); }
 }
@@ -517,5 +538,7 @@ export function startSocial(): void {
     }
   };
   setTimeout(() => { void sweep(); setInterval(() => void sweep(), 20 * 60_000); }, 6 * 60_000);
+  // المحلل: مرةً في اليوم لكل حساب له صف منصة، بالكود، ولا يرسل شيئاً.
+  void import("./analyst").then((m) => m.startEngagementAnalyst()).catch((err) => logger.warn({ err: String(err?.message ?? err) }, "محلل التفاعل لم يبدأ"));
   logger.info("مكاتب التواصل الاجتماعي بدأت");
 }

@@ -23,7 +23,9 @@ import { WAIT_APPROVAL_DAYS, watchdogFindings } from "./watchdog";
 import { lessonOutcome } from "./memory";
 import { dubaiNow } from "../accounts/pure";
 import { queueReview } from "./queue";
+import { noteQuality } from "./providers";
 import { ensureSimTables, REAL_TASK } from "./sim-schema";
+import { everyMs } from "./workers";
 
 export const CEO_ROLE = "ceo_agent";
 export const CEO_KEY = "executive.ceo";
@@ -203,7 +205,11 @@ export async function collectFacts(userId: number, now = new Date()): Promise<Fa
   // ما استهلكه كل قسم: توكنات الإيصالات، ونداءات llm_usage، وتجمعان بالدور إلى القسم.
   const receiptRows = (await db.execute<any>(sql`SELECT node, coalesce(sum(tokens_in), 0)::bigint + coalesce(sum(tokens_out), 0)::bigint AS tokens FROM receipts WHERE user_id = ${userId} AND action = 'llm.call' AND at >= ${from} GROUP BY node`)).rows;
   const usageRows = (await db.execute<any>(sql`SELECT role, sum(calls)::bigint AS calls FROM llm_usage WHERE user_id = ${userId} AND day >= ${fromDay}::date GROUP BY role`)).rows;
-  const costRows = (await db.execute<any>(sql`SELECT employee_key, sum(cost_usd) AS cost FROM employee_executions WHERE user_id = ${userId} AND started_at >= ${from} AND cost_usd IS NOT NULL GROUP BY employee_key`)).rows;
+  // الكلفة من provider_prices عبر سطر التنفيذ (runtime.meterFacts). جولةٌ نادت نموذجاً بلا سعر تجعل
+  // كلفة القسم null («غير متاح»): جمع المسعَّر وحده يقول رقماً أصغر من الحقيقة.
+  const costRows = (await db.execute<any>(sql`SELECT employee_key, coalesce(sum(cost_usd), 0) AS cost, count(*) FILTER (WHERE cost_usd IS NOT NULL)::int AS priced,
+      count(*) FILTER (WHERE cost_usd IS NULL AND model_calls > 0)::int AS unpriced
+    FROM employee_executions WHERE user_id = ${userId} AND started_at >= ${from} GROUP BY employee_key`)).rows;
   const execRows = (await db.execute<any>(sql`SELECT e.employee_key, b.role, count(*)::int AS total, count(*) FILTER (WHERE e.status = 'failed')::int AS failed FROM employee_executions e LEFT JOIN bot_employees b ON b.user_id = e.user_id AND b.employee_key = e.employee_key
     WHERE e.user_id = ${userId} AND e.started_at >= ${from} AND e.status IN ('succeeded','failed') GROUP BY 1, 2`)).rows;
   const emailPositive = Math.max(0, num(inb?.positive) - num(deskPos?.n));
@@ -215,12 +221,14 @@ export async function collectFacts(userId: number, now = new Date()): Promise<Fa
   const departments: DepartmentFact[] = DEPARTMENTS.map((d) => {
     const execs = execRows.filter((r: any) => (r.role ? orgDepartmentOf(r.role) : String(r.employee_key).split(".")[0]) === d);
     const executions = execs.reduce((a: number, r: any) => a + num(r.total), 0), failed = execs.reduce((a: number, r: any) => a + num(r.failed), 0);
-    const cost = costRows.filter((r: any) => String(r.employee_key).split(".")[0] === d).reduce((a: number, r: any) => a + Number(r.cost), 0);
+    const costs = costRows.filter((r: any) => String(r.employee_key).split(".")[0] === d);
+    const cost = costs.reduce((a: number, r: any) => a + Number(r.cost), 0);
+    const costKnown = costs.some((r: any) => num(r.priced) > 0) && !costs.some((r: any) => num(r.unpriced) > 0);
     return {
       department: d, executions, failed, successRate: executions >= 10 ? (executions - failed) / executions : null,
       tokens: receiptRows.filter((r: any) => orgDepartmentOf(r.node) === d).reduce((a: number, r: any) => a + num(r.tokens), 0),
       calls: usageRows.filter((r: any) => orgDepartmentOf(r.role) === d).reduce((a: number, r: any) => a + num(r.calls), 0),
-      costUsd: cost > 0 ? cost : null,
+      costUsd: costKnown ? Math.round(cost * 100_000) / 100_000 : null,
       outcome: outcomeOf[d]?.value ?? null, outcomeLabel: outcomeOf[d]?.label ?? null,
     };
   });
@@ -235,7 +243,10 @@ export async function collectFacts(userId: number, now = new Date()): Promise<Fa
   const failing = (await db.execute<any>(sql`SELECT employee_key, consecutive_failures, last_error FROM employee_heartbeats WHERE user_id = ${userId} AND consecutive_failures >= 3 ORDER BY consecutive_failures DESC LIMIT 20`)).rows
     .map((r: any) => ({ employeeKey: r.employee_key, consecutiveFailures: num(r.consecutive_failures), lastError: r.last_error ? String(r.last_error).slice(0, 160) : null }));
   const noExec = (await db.execute<any>(sql`SELECT b.employee_key FROM bot_employees b LEFT JOIN employee_heartbeats h ON h.user_id = b.user_id AND h.employee_key = b.employee_key
-    WHERE b.user_id = ${userId} AND b.is_active AND b.employee_key IS NOT NULL AND b.role <> ${CEO_ROLE} AND h.employee_key IS NULL ORDER BY 1`)).rows.map((r: any) => String(r.employee_key));
+    WHERE b.user_id = ${userId} AND b.is_active AND b.employee_key IS NOT NULL AND b.role <> ${CEO_ROLE} AND h.employee_key IS NULL
+      AND b.employee_key NOT LIKE 'linkedin.%'
+      AND NOT (b.role IN ('ig_inviter','ig_analyst','tt_inviter','tt_analyst') AND NOT EXISTS (SELECT 1 FROM social_accounts sa WHERE sa.user_id = b.user_id
+        AND sa.platform = CASE WHEN b.role LIKE 'ig_%' THEN 'instagram' ELSE 'tiktok' END)) ORDER BY 1`)).rows.map((r: any) => String(r.employee_key));
   const flows = (await db.execute<any>(sql`SELECT workflow, count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*)::int AS total FROM workflow_executions WHERE user_id = ${userId} AND started_at >= ${from} GROUP BY 1 HAVING count(*) FILTER (WHERE status = 'failed') > 0 ORDER BY 2 DESC LIMIT 10`)).rows
     .map((r: any) => ({ workflow: r.workflow, failed: num(r.failed), total: num(r.total) }));
   const campaigns = (await db.execute<any>(sql`SELECT c.id, c.name, count(DISTINCT lower(split_part(i.from_email, '@', 2)))::int AS positive FROM email_inbound i JOIN email_messages m ON m.id = i.message_id AND m.user_id = i.user_id JOIN email_campaigns c ON c.id = m.campaign_id
@@ -320,8 +331,10 @@ export async function writeNarrative(pack: FactPack, persona: string, llm: typeo
     if (!res?.text) continue;
     answered = true;
     const parsed = parseStructured<{ executive_summary: string; ranking: string[] }>(res.text, NARRATIVE_SHAPE);
-    if (!parsed.ok || !parsed.value.executive_summary.trim()) { violations = []; continue; }
+    if (!parsed.ok || !parsed.value.executive_summary.trim()) { violations = []; noteQuality(false, res, "narrative"); continue; }
     violations = unknownNumbers(parsed.value.executive_summary, pack);
+    // جودة السرد: شكلٌ صحيح وكل رقمٍ فيه من الوقائع (routing.ts).
+    noteQuality(!violations.length, res, "narrative");
     if (violations.length) continue;
     return { summary: parsed.value.executive_summary.trim().slice(0, 6000), ranking: parsed.value.ranking.filter((x) => ids.includes(x)), status: "validated", violations: [] };
   }
@@ -529,10 +542,7 @@ export async function ceoTick(now = new Date()): Promise<void> {
 let timer: NodeJS.Timeout | null = null;
 export function startCeoAgent(): void {
   if (timer) return;
-  const safe = () => void ceoTick().catch((err) => logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "مرور الرئيس التنفيذي فشل"));
-  setTimeout(safe, 3 * 60_000).unref();
-  timer = setInterval(safe, 5 * 60_000);
-  timer.unref();
+  timer = everyMs("executive.ceo", 5 * 60_000, () => ceoTick(), { firstMs: 3 * 60_000, unref: true });
   logger.info("الرئيس التنفيذي بدأ — البطاقات 07:00 والتقرير 07:30 بتوقيت دبي");
 }
 

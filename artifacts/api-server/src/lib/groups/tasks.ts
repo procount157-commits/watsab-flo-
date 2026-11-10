@@ -10,6 +10,7 @@ import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db, waGroupTasksTable, waGroupsTable, type WaGroupTask } from "@workspace/db";
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
+import { everyMs } from "../org/workers";
 
 /** Without a date in the request, a customer expects an answer within a working day. */
 export const TASK_SLA_HOURS = 24;
@@ -77,5 +78,5 @@ export async function remindOverdue(userId?: number) {
 }
 
 export function startTaskReminders() {
-  setInterval(() => void remindOverdue().catch((err) => logger.warn({ err: String(err) }, "task reminders failed")), 30 * 60_000);
+  everyMs("groups.task_reminders", 30 * 60_000, remindOverdue);
 }

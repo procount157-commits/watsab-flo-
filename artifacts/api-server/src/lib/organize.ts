@@ -21,6 +21,7 @@ import { folderForSector, fileUnfiledLists, AUTOPILOT_MARK } from "./folders";
 import { classifySector, UNCLASSIFIED } from "./email/sector";
 import { logger } from "./logger";
 import { accountHalted, platformHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 /** Arabic read as Latin-1 on an old upload («Ø§ÙÙÙ») back to Arabic. Pure. */
 export function fixMojibake(s: string): string {
@@ -306,7 +307,5 @@ export function startOrganizing(): void {
     for (const u of users.rows) if (!(await accountHalted(Number(u.id), "organize"))) await organizeAccount(Number(u.id));
     if (!(await platformHalted())) await fileUnfiledLists().catch(() => []);
   };
-  setTimeout(() => void run(), 60_000).unref();
-  sweep = setInterval(() => void run(), 10 * 60_000);
-  sweep.unref();
+  sweep = everyMs("lists.organize", 10 * 60_000, run, { firstMs: 60_000, unref: true });
 }

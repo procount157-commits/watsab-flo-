@@ -152,7 +152,7 @@ check("the shared standard names neither account", !PROCOUNT_PRIVATE.test(pStd) 
 
 // ── السجل والأدوات ────────────────────────────────────────────────
 check("tools come from the registry's execution function", Object.values(ROLE_MAP).filter((r) => r.fn && PROMPT_LIBRARY[r.key]).every((r) => build(r.key, OTHER).tools.includes(r.fn!)));
-check("an engine-less job says so in its tools", build("instagram.analyst", OTHER).tools.includes("بلا محرّك اليوم"));
+check("a job with its own worker says so in its tools", build("instagram.analyst", OTHER).tools.includes("له عامل يعمل باسمه"));
 check("internal roles have no external permission", keys.filter((k) => !PROMPT_LIBRARY[k]!.externalBehavior).every((k) => build(k, OTHER).tools.includes("لا إرسال خارجي")));
 check("a manager for every employee", keys.every((k) => /المدير: \S/.test(build(k, OTHER).identity)));
 check("the account name is filled in, no placeholder left", keys.every((k) => !M.dossierText(build(k, PROCOUNT)).includes("{account}") && build(k, PROCOUNT).identity.includes("Pro Count for Accounting")));

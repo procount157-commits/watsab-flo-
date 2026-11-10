@@ -117,6 +117,8 @@ export const employeeExecutionsTable = pgTable("employee_executions", {
   durationMs:  integer("duration_ms"),
   modelCalls:  integer("model_calls").notNull().default(0),
   workerId:    varchar("worker_id", { length: 80 }),
+  // من أجاب آخر نداء في الجولة (079): المزوّد هنا، والنموذج في model.
+  provider:    varchar("provider", { length: 40 }),
 }, (t) => [
   index("idx_employee_executions_user").on(t.userId, t.employeeKey, t.startedAt),
   index("idx_employee_executions_running").on(t.startedAt).where(sql`status = 'running'`),
@@ -327,8 +329,10 @@ export const providerMetricsTable = pgTable("provider_metrics", {
   latencyMs: bigint("latency_ms", { mode: "number" }).notNull().default(0),
   guardPassed: integer("guard_passed").notNull().default(0),
   guardFailed: integer("guard_failed").notNull().default(0),
+  // صنف العمل من دور الموظف (079): writer, customer_reply, classifier, analyst, narrative, voice, other.
+  taskClass: varchar("task_class", { length: 20 }).notNull().default(""),
 }, (t) => [
-  uniqueIndex("uq_provider_metrics_task").on(t.userId, t.provider, t.model, t.day, t.taskType),
+  uniqueIndex("uq_provider_metrics_class").on(t.userId, t.provider, t.model, t.day, t.taskType, t.taskClass),
   index("idx_provider_metrics_day").on(t.userId, t.day),
 ]);
 
@@ -378,3 +382,39 @@ export type OrgControl = typeof orgControlsTable.$inferSelect;
 export type OrgAuditEntry = typeof orgAuditLogTable.$inferSelect;
 export type EmployeeTask = typeof employeeTasksTable.$inferSelect;
 export type ImprovementProposal = typeof improvementProposalsTable.$inferSelect;
+
+// ── أسعار المزوّدين (079) ── تُبذر فارغة: لا سعر مخترع. يضعها المالك، ولكل سعر مصدره.
+export const providerPricesTable = pgTable("provider_prices", {
+  id:               serial("id").primaryKey(),
+  provider:         varchar("provider", { length: 40 }).notNull(),
+  model:            varchar("model", { length: 120 }).notNull().default(""),
+  inputPerMillion:  numeric("input_per_million", { precision: 14, scale: 6 }).notNull(),
+  outputPerMillion: numeric("output_per_million", { precision: 14, scale: 6 }).notNull(),
+  currency:         varchar("currency", { length: 3 }).notNull().default("USD"),
+  source:           text("source").notNull(),
+  updatedBy:        integer("updated_by"),
+  updatedAt:        at("updated_at").defaultNow().notNull(),
+}, (t) => [
+  unique("uq_provider_prices").on(t.provider, t.model),
+  check("provider_prices_nonneg", sql`${t.inputPerMillion} >= 0 AND ${t.outputPerMillion} >= 0`),
+]);
+
+// ── سجل العمّال (079) ── صفٌّ لكل حلقة في كل عملية، يُحدَّث مكانه ولا ينمو بالدقّات.
+export const workerRegistryTable = pgTable("worker_registry", {
+  workerId:       varchar("worker_id", { length: 80 }).notNull(),
+  name:           varchar("name", { length: 80 }).notNull(),
+  intervalMs:     integer("interval_ms").notNull(),
+  scope:          varchar("scope", { length: 40 }).notNull().default("all"),
+  startedAt:      at("started_at").defaultNow().notNull(),
+  firstDueAt:     at("first_due_at"),
+  lastTickAt:     at("last_tick_at"),
+  lastOkAt:       at("last_ok_at"),
+  lastError:      text("last_error"),
+  lastErrorAt:    at("last_error_at"),
+  lastDurationMs: integer("last_duration_ms"),
+  ticks:          bigint("ticks", { mode: "number" }).notNull().default(0),
+  errors:         bigint("errors", { mode: "number" }).notNull().default(0),
+  updatedAt:      at("updated_at").defaultNow().notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.workerId, t.name] }),
+]);

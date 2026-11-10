@@ -19,6 +19,7 @@ import { receipt } from "./graph/receipts";
 import { logger } from "./logger";
 import { runAs } from "./org/runtime";
 import { activeAccounts } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const KEEPER_ROLE = "intake";
 
@@ -94,7 +95,5 @@ export function startListKeeper() {
       await runAs(id, KEEPER_ROLE, { kind: "keeper_round", respect: "none" }, () => keeperRound(id)).catch((err) => logger.warn({ userId: id, err: String(err?.message ?? err) }, "جولة سالم فشلت"));
     }
   };
-  setTimeout(() => void run(), 4 * 60_000).unref();
-  timer = setInterval(() => void run(), 2 * 3_600_000);
-  timer.unref();
+  timer = everyMs("whatsapp.list_keeper", 2 * 3_600_000, run, { firstMs: 4 * 60_000, unref: true });
 }

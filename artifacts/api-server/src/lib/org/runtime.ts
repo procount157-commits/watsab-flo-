@@ -89,9 +89,21 @@ async function openExecution(userId: number, key: string, o: RunOpts): Promise<n
   } catch (err) { warn("سطر تنفيذ لم يُكتب", err); return null; }
 }
 
+/**
+ * من أجاب آخر نداء (المزوّد والنموذج)، والكلفة: مجموعٌ بالدولار إن كان لكل نداءٍ أجاب سعر في
+ * provider_prices، وإلا null («غير متاح») — لا صفر. جولة بلا نداء: null أيضاً، لا كلفة لها تُقال. Pure.
+ */
+export function meterFacts(m: Meter): { provider: string | null; model: string | null; costUsd: number | null } {
+  const provider = m.lastProvider ? m.lastProvider.slice(0, 40) : null;
+  const model = (m.lastProvider ? (m.lastModel || m.lastProvider) : m.model)?.slice(0, 120) ?? null;
+  const costUsd = m.calls > 0 && !m.costUnknown && m.costUsd != null ? Math.round(m.costUsd * 100_000) / 100_000 : null;
+  return { provider, model, costUsd };
+}
+
 async function closeExecution(id: number, status: string, m: Meter, ms: number, error: string | null) {
+  const f = meterFacts(m);
   await db.execute(sql`UPDATE employee_executions SET status = ${status}, finished_at = now(), duration_ms = ${ms}, model_calls = ${m.calls},
-      tokens_in = ${m.tokensIn}, tokens_out = ${m.tokensOut}, model = ${m.model?.slice(0, 120) ?? null}, error = ${error} WHERE id = ${id}`)
+      tokens_in = ${m.tokensIn}, tokens_out = ${m.tokensOut}, model = ${f.model}, provider = ${f.provider}, cost_usd = ${f.costUsd}, error = ${error} WHERE id = ${id}`)
     .catch((err) => warn("سطر تنفيذ لم يُغلق", err));
 }
 
@@ -101,8 +113,9 @@ async function sampledExecution(userId: number, key: string, o: RunOpts, status:
   if (Date.now() - (lastSample.get(k) ?? 0) < (o.sampleMin ?? 15) * 60_000) return null;
   lastSample.set(k, Date.now());
   try {
-    const r = await db.execute<{ id: number }>(sql`INSERT INTO employee_executions (user_id, employee_key, task_id, status, kind, worker_id, finished_at, duration_ms, model_calls, tokens_in, tokens_out, model, error)
-      VALUES (${userId}, ${key}, ${o.taskId ?? null}, ${status}, ${o.kind.slice(0, 60)}, ${workerId()}, now(), ${ms}, ${m.calls}, ${m.tokensIn}, ${m.tokensOut}, ${m.model?.slice(0, 120) ?? null}, ${error}) RETURNING id`);
+    const f = meterFacts(m);
+    const r = await db.execute<{ id: number }>(sql`INSERT INTO employee_executions (user_id, employee_key, task_id, status, kind, worker_id, finished_at, duration_ms, model_calls, tokens_in, tokens_out, model, provider, cost_usd, error)
+      VALUES (${userId}, ${key}, ${o.taskId ?? null}, ${status}, ${o.kind.slice(0, 60)}, ${workerId()}, now(), ${ms}, ${m.calls}, ${m.tokensIn}, ${m.tokensOut}, ${f.model}, ${f.provider}, ${f.costUsd}, ${error}) RETURNING id`);
     return Number(r.rows[0]!.id);
   } catch (err) { warn("عيّنة تنفيذ لم تُكتب", err); return null; }
 }

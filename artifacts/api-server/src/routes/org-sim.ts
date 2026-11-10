@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { requireAuth } from "../lib/auth";
 import { e2eRun, e2eRuns, runE2e } from "../lib/org/sandbox-e2e";
+import { autoApplyLowRisk } from "../lib/org/auto-apply";
 import { callsToday, runShadow, SHADOW_DAILY_CALLS, SHADOW_KEYS, shadowResults, shadowSummary } from "../lib/org/shadow";
 
 const router = Router();
@@ -28,7 +29,9 @@ router.post("/shadow/run", async (req, res) => {
   const key = typeof req.body?.employeeKey === "string" && req.body.employeeKey.trim() ? req.body.employeeKey.trim().slice(0, 60) : null;
   const r = await once(`shadow:${userId}`, () => runShadow(userId, { employeeKey: key, trigger: "manual" }));
   if (!r) return res.status(409).json({ error: "ظلٌّ يعمل الآن لهذا الحساب" });
-  res.json(r);
+  // المرحلة ٥: الداخلي منخفض الخطر الذي اجتاز الظل يُفعَّل بعد التشغيل، ويُقال ما فُعّل.
+  const autoApplied = await autoApplyLowRisk(userId, { trigger: "manual" });
+  res.json({ ...r, autoApplied });
 });
 
 router.get("/shadow/results", async (req, res) => {

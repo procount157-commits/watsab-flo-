@@ -23,6 +23,7 @@ import { key9 } from "./wa-firewall-rules";
 import { logger } from "./logger";
 import { runAs } from "./org/runtime";
 import { accountHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const VETTER_ROLE = "vetter";
 export const VETTER = {
@@ -335,7 +336,7 @@ export function startVetting(): void {
       const users = await db.selectDistinct({ userId: contactGroupsTable.userId }).from(contactGroupsTable);
       for (const u of users) if (u.userId && getStatus(u.userId)?.connected && !(await accountHalted(u.userId, "wa_vetting"))) await vetPending(u.userId, "daily").catch(() => {});
     };
-    setInterval(() => void tick(), 24 * 3_600_000);
+    everyMs("whatsapp.vetting", 24 * 3_600_000, tick, { scope: "wa_sessions" });
   }, 10 * 60_000);
   logger.info("سيف، فاحص الأرقام، على رأس عمله");
 }

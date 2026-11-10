@@ -13,6 +13,7 @@ import { db, emailContactsTable, emailMessagesTable, emailSourceTrialsTable, ema
 import { checkMailboxes, needsCheck } from "./mailbox-check";
 import { activity } from "./team";
 import { logger } from "../logger";
+import { everyMs } from "../org/workers";
 
 export const SAMPLE = 50, MAX_BAD_RATE = 0.08;
 /** يُنتظر بعد آخر رسالةٍ في العيّنة: أغلب الارتداد يصل خلال ساعات. */
@@ -149,8 +150,7 @@ export function startBounceGuard(): void {
       await judgeTrials().catch((err) => logger.warn({ err: String(err) }, "judge trials failed"));
       await precheck().catch((err) => logger.warn({ err: String(err) }, "mailbox precheck failed"));
     };
-    void tick();
-    setInterval(() => void tick(), 5 * 60_000);
+    everyMs("email.bounce_guard", 5 * 60_000, tick, { firstMs: 0 });
   }, 90_000);
   logger.info("حارسا الارتداد بدآ: فحص الصناديق وعيّنة الملفات");
 }

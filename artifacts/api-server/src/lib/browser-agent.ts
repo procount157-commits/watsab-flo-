@@ -24,6 +24,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { logger } from "./logger";
+import { everyMs } from "./org/workers";
 
 /**
  * Where each employee's cookies live.
@@ -317,7 +318,7 @@ function normalizeUrl(url: string): string {
 
 /** Close idle sessions. Chrome contexts are not free to leave sitting. */
 export function startBrowserReaper(): void {
-  setInterval(() => {
+  everyMs("browser.reaper", 5 * 60_000, () => {
     for (const [k, s] of sessions) {
       // A window the owner opened stays open. They may be halfway through a
       // sign-in, and closing it would lose it.
@@ -331,5 +332,5 @@ export function startBrowserReaper(): void {
       void browser.close().catch(() => {});
       browser = null;
     }
-  }, 5 * 60_000);
+  });
 }

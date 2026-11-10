@@ -32,6 +32,7 @@ import { logger } from "./logger";
 import { overview as emailOverview } from "./email/service";
 import { asWorker } from "./agent-context";
 import { accountHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const CHAIR = "chief";
 
@@ -528,6 +529,6 @@ export function startMeetings(): void {
         logger.error({ userId, err: String(err?.message ?? err) }, "فشل اجتماع الفريق"));
     }
   };
-  setTimeout(() => { void sweep(); setInterval(() => void sweep(), 30 * 60_000); }, 5 * 60_000);
+  everyMs("team.daily_meeting", 30 * 60_000, sweep, { firstMs: 5 * 60_000 });
   logger.info({ hour: HOUR }, "اجتماع الفريق اليومي مجدول");
 }

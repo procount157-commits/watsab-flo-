@@ -92,7 +92,7 @@ const action = (fn: Act) => wrap(async (req, res) => {
 router.post("/:id/assign", action((u, id, b) => assignTicket(u, id, str(b["employeeKey"], 60), ownerActor(u), str(b["reason"]) || null)));
 router.post("/:id/reassign", action((u, id, b) => assignTicket(u, id, str(b["employeeKey"], 60), ownerActor(u), str(b["reason"]) || null)));
 router.post("/:id/comment", action(async (u, id, b) => { await commentTicket(u, id, str(b["text"], 4000), ownerActor(u)); return null; }));
-router.post("/:id/approve", action((u, id, b) => approveTicket(u, id, u, str(b["payloadHash"], 64))));
+router.post("/:id/approve", action((u, id, b) => approveTicket(u, id, u, str(b["payloadHash"], 64), str(b["note"]) || null)));
 router.post("/:id/reject", action((u, id, b) => rejectTicket(u, id, u, str(b["reason"]) || null)));
 router.post("/:id/pause", action((u, id, b) => pauseTicket(u, id, ownerActor(u), str(b["reason"]) || null)));
 router.post("/:id/cancel", action((u, id, b) => cancelTicket(u, id, ownerActor(u), str(b["reason"]) || null)));

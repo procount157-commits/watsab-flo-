@@ -38,6 +38,8 @@ export type Meter = {
   calls: number; tokensIn: number; tokensOut: number; model: string | null;
   /** نوع المهمة (RunOpts.kind) وآخر من أجاب: مقاييس المزوّد، وحكم الحارس على ما كتبه. */
   kind?: string; lastProvider?: string; lastModel?: string;
+  /** الكلفة بالدولار من provider_prices، و costUnknown إن أجاب نداءٌ واحد بلا سعر: عندها الجولة كلها null. */
+  costUsd?: number; costUnknown?: boolean;
 };
 const meters = new AsyncLocalStorage<Meter>();
 export function withMeter<T>(m: Meter, fn: () => Promise<T>): Promise<T> { return meters.run(m, fn); }

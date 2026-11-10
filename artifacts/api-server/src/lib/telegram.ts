@@ -10,6 +10,7 @@
 import { and, asc, eq, isNotNull, lte, sql } from "drizzle-orm";
 import { db, telegramSettingsTable, notifyOutboxTable, type TelegramSettings } from "@workspace/db";
 import { logger } from "./logger";
+import { everyMs } from "./org/workers";
 
 const API = (token: string, method: string) => `https://api.telegram.org/bot${token}/${method}`;
 
@@ -202,8 +203,7 @@ export async function outboxState(userId: number) {
  * again is short, and a queue that checks rarely will keep missing it.
  */
 export function startOutboxWorker(): void {
-  setInterval(() => void flushOutbox().catch((err) =>
-    logger.error({ err: String(err?.message ?? err) }, "فشل تفريغ صندوق التقارير")), 60_000);
+  everyMs("telegram.outbox", 60_000, flushOutbox);
   logger.info("عامل صندوق التقارير بدأ");
 }
 

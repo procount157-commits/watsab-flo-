@@ -45,6 +45,7 @@ import { verdictFor } from "./service";
 import { accountHalted } from "../org/controls";
 import { runAs } from "../org/runtime";
 import { directiveFrom, issueDirectives } from "../org/handoffs";
+import { everyMs } from "../org/workers";
 
 /** الإصلاحات التي يأذن بها المدير بلا رجوع: كلها تُعيد السجل إلى ما حدث فعلاً. */
 const SAFE_REPAIRS: Array<NonNullable<LedgerFinding["repair"]>> = ["resync_counters", "cancel_orphans", "mark_bounced", "restore_policy_rejected"];
@@ -432,6 +433,6 @@ export function startManagerLoop(): void {
       if (r?.brief) lastBrief.set(userId, Date.now());
     }
   };
-  setTimeout(() => { void round(); setInterval(() => void round(), SIX_H); }, 5 * 60_000);
+  everyMs("email.manager", SIX_H, round, { firstMs: 5 * 60_000 });
   logger.info("حلقة مدير البريد بدأت — دورة كل ست ساعات");
 }

@@ -23,6 +23,7 @@ import { assessAccountHealth } from "./delivery-health";
 import { getDailySentCount, getEffectiveDailyLimit } from "./daily-limit";
 import { logger } from "./logger";
 import { runAs } from "./org/runtime";
+import { everyMs } from "./org/workers";
 
 export const MONITOR_INTERVAL_MS = 20 * 60_000;
 
@@ -293,8 +294,7 @@ export function startMonitorAgent() {
   if (timer) return;
   // First pass shortly after boot, so a restart is visible in the record
   // rather than leaving a twenty-minute hole.
-  setTimeout(() => { void runMonitorSweep(); }, 90_000);
-  timer = setInterval(() => { void runMonitorSweep(); }, MONITOR_INTERVAL_MS);
+  timer = everyMs("ops.monitor", MONITOR_INTERVAL_MS, runMonitorSweep, { firstMs: 90_000 });
   logger.info({ intervalMinutes: MONITOR_INTERVAL_MS / 60_000 }, "monitor agent started");
 }
 

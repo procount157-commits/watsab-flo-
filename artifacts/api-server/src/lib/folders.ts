@@ -75,6 +75,7 @@ export async function ownFolder(userId: number, name: string, sector: string | n
 
 import { contactGroupsTable } from "@workspace/db";
 import { isNull, sql } from "drizzle-orm";
+import { everyMs } from "./org/workers";
 
 /**
  * The WhatsApp autopilot's own lists (a test half, a winner's wave) carry
@@ -164,7 +165,5 @@ let filing: NodeJS.Timeout | null = null;
 export function startListFiling(): void {
   if (filing) return;
   const run = async () => { if (!(await platformHalted())) await fileUnfiledLists().catch(() => []); };
-  setTimeout(() => void run(), 60_000).unref();
-  filing = setInterval(() => void run(), 10 * 60_000);
-  filing.unref();
+  filing = everyMs("lists.filing", 10 * 60_000, run, { firstMs: 60_000, unref: true });
 }

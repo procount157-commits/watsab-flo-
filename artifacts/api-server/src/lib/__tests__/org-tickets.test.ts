@@ -54,7 +54,7 @@ const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const mig = norm(readFileSync(join(here, "../../../../../lib/db/migrations/076_tickets.sql"), "utf8"));
 check("076 يحمل كل ما عند الإقلاع", L.TICKET_SQL.every((q) => mig.includes(norm(q))));
 
-if (!/127\.0\.0\.1:(55440|55441)/.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55445|55440|55441)/.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`\n${pass} نجح، ${fail} فشل (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }

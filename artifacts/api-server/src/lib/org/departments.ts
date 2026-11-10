@@ -77,7 +77,8 @@ const SOCIAL: Array<{ prefix: string; department: Department; driven: boolean }>
   { prefix: "li", department: "linkedin", driven: false },
 ];
 const SOCIAL_SCHED = "lib/social/engine.ts startSocial (٢٠ دقيقة، لمن شغّل الطيار)";
-const SOCIAL_JOBS: Record<string, { fn: string | null; execution: ExecutionKind; carriedBy?: string }> = {
+const ANALYST_SCHED = "lib/social/analyst.ts startEngagementAnalyst (كل يوم، لكل حساب له صف في social_accounts)";
+const SOCIAL_JOBS: Record<string, { fn: string | null; execution: ExecutionKind; carriedBy?: string; intervalSec?: number }> = {
   manager: { fn: "social/engine.runRound + sendApproved", execution: "own" },
   guard: { fn: "social/engine.guardCheck", execution: "own" },
   watcher: { fn: "social/engine.discoverPosts + collectComments", execution: "own" },
@@ -88,15 +89,17 @@ const SOCIAL_JOBS: Record<string, { fn: string | null; execution: ExecutionKind;
   writer: { fn: "social/agent.draftCommentReply داخل processComments", execution: "part_of", carriedBy: "triage" },
   qualify: { fn: "social/agent.triage داخل draftReplies", execution: "part_of", carriedBy: "dm" },
   creator: { fn: "social/agent.draftPost (بطلب صاحب العمل)", execution: "on_demand" },
-  inviter: { fn: null, execution: "none" },
-  analyst: { fn: null, execution: "none" },
+  // الناقل: خطوته في الجولة نفسها، بعد المصنِّفة (engine.inviteCommenters ينقل المعلّق المهتم إلى قائمة الخاص).
+  inviter: { fn: "social/engine.inviteCommenters", execution: "own" },
+  // المحلل: تحليل يومي بالكود من جداول التواصل، والنموذج يصوغ فقط (social/analyst.ts).
+  analyst: { fn: "social/analyst.runEngagementAnalysis", execution: "own", intervalSec: D },
 };
 for (const s of SOCIAL) for (const [job, j] of Object.entries(SOCIAL_JOBS)) {
   const role = `${s.prefix}_${job}`;
   // لينكدإن بلا مشغّل: الفريق كله جاهزيةٌ على الورق، لا عامل يمرّ عليه.
   const execution: ExecutionKind = s.driven ? j.execution : "none";
-  ROLE_MAP[role] = e(`${s.department}.${job}`, s.department, "lib/social/team.ts teamDefs + voiceFor", s.driven && j.execution !== "none" && j.execution !== "on_demand" ? SOCIAL_SCHED : null,
-    s.driven ? j.fn : null, execution, execution === "own" || execution === "part_of" ? 20 * M : null,
+  ROLE_MAP[role] = e(`${s.department}.${job}`, s.department, "lib/social/team.ts teamDefs + voiceFor", s.driven && j.execution !== "none" && j.execution !== "on_demand" ? (job === "analyst" ? ANALYST_SCHED : SOCIAL_SCHED) : null,
+    s.driven ? j.fn : null, execution, execution === "own" || execution === "part_of" ? j.intervalSec ?? 20 * M : null,
     execution === "part_of" ? { carriedBy: `${s.department}.${j.carriedBy}` } : {});
 }
 

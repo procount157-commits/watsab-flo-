@@ -34,6 +34,7 @@ import {
   RULES, LADDER, TOP_RUNG, startRung, clampRung, budgetFor, paceFor, coldWait, nextRung, tripwire, readStanding, downgrade, key9,
   type SendKind, type Mode, type WaWarning, type Pace, type RungStats,
 } from "./wa-firewall-rules";
+import { everyMs } from "./org/workers";
 
 export { RULES, LADDER, TOP_RUNG, downgrade };
 export type { SendKind, Mode, Pace };
@@ -435,8 +436,7 @@ export function startWaFirewall(): void {
         } catch (err) { logger.warn({ userId: r.userId, err: msgOf(err) }, "فحص الحاجز تعذّر"); }
       }
     };
-    void tick();
-    setInterval(() => void tick(), 60_000);
+    everyMs("whatsapp.firewall", 60_000, tick, { firstMs: 0, scope: "wa_sessions" });
   }, 30_000);
   logger.info("الحاجز التلقائي من الحظر يعمل");
 }

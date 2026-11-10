@@ -15,6 +15,7 @@ import { execute, workerId } from "./runtime";
 import { ensureOrgTables } from "./schema";
 import { employeeKeyOf, orgDepartmentOf } from "./departments";
 import { ensureTicketTables, payloadHash, recordAction, ticketPayload } from "./ledger";
+import { everyMs } from "./workers";
 
 export type TaskStatus = "draft" | "pending" | "queued" | "running" | "waiting_for_dependency" | "waiting_for_approval" | "waiting_for_owner" | "blocked" | "completed" | "failed" | "cancelled" | "expired";
 export type PriorityLevel = "critical" | "high" | "normal" | "low";
@@ -360,8 +361,7 @@ let timer: NodeJS.Timeout | null = null;
 export function startTaskWorker(): void {
   if (timer) return;
   // سجل الأفعال: سجلات الأمس تُغلق بأعدادها، والأحداث الأقدم من ٩٠ يوماً تُحذف. كل ساعة.
-  setInterval(() => void import("./ledger").then((l) => l.ledgerMaintenance()).catch((err) => logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "صيانة سجل التذاكر فشلت")), 3_600_000).unref();
-  timer = setInterval(() => void runTaskWorkerOnce().catch((err) => logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "مرور الطابور فشل")), 30_000);
-  timer.unref();
+  everyMs("org.ledger_maintenance", 3_600_000, () => import("./ledger").then((l) => l.ledgerMaintenance()), { unref: true });
+  timer = everyMs("org.task_worker", 30_000, runTaskWorkerOnce, { unref: true });
   logger.info("طابور مهام الموظفين بدأ — مرور كل ٣٠ ثانية");
 }

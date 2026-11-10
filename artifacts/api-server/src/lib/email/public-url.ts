@@ -17,6 +17,7 @@
 import { eq } from "drizzle-orm";
 import { db, emailSettingsTable } from "@workspace/db";
 import { logger } from "../logger";
+import { everyMs } from "../org/workers";
 
 const clean = (u: string | null | undefined): string => (u ?? "").trim().replace(/\/+$/, "");
 
@@ -189,7 +190,7 @@ export function startTrackingWatch(): void {
     }
   };
   // أول فحصٍ بعد دقيقة من الإقلاع، ثم كل ربع ساعة.
-  setTimeout(() => { void round(); setInterval(() => void round(), EVERY); }, 60_000);
+  everyMs("email.tracking_watch", EVERY, round, { firstMs: 60_000 });
   logger.info("حارس العنوان العام بدأ");
 }
 

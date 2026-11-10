@@ -14,6 +14,7 @@ import { db, meetingSettingsTable, clientMeetingsTable, dealsTable, type Meeting
 import { notify, esc } from "../telegram";
 import { logger } from "../logger";
 import { advance, dealBrief, openDeal } from "./deals";
+import { everyMs } from "../org/workers";
 
 const GULF = 4 * 3_600_000;
 export const DOW_AR = ["", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"];
@@ -139,7 +140,7 @@ export async function remindMeetings(now = new Date(), userId?: number) {
 }
 
 export function startMeetingReminders() {
-  setInterval(() => void remindMeetings().catch((err) => logger.warn({ err: String(err) }, "meeting reminders failed")), 5 * 60_000);
+  everyMs("deals.meeting_reminders", 5 * 60_000, remindMeetings);
 }
 
 /** The meeting as a calendar file, for the owner's own calendar. */

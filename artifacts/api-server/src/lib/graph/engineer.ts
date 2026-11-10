@@ -40,6 +40,7 @@ import { logger } from "../logger";
 import { runAs } from "../org/runtime";
 import { HUMAN_VOICE } from "../voice-doctrine";
 import { accountHalted } from "../org/controls";
+import { everyMs } from "../org/workers";
 
 export const ENGINEER_ROLE = "engineer";
 export const ENGINEER = { name: "غانم", title: "مهندس الجراف — مدير الفريق", avatar: "🧭" };
@@ -450,6 +451,5 @@ export function startEngineerRounds() {
       AND NOT EXISTS (SELECT 1 FROM assistant_messages m JOIN assistant_threads t ON t.id = m.thread_id WHERE t.user_id = e.user_id AND t.title = 'جولات غانم اليومية' AND m.role = 'user' AND m.created_at > now() - interval '20 hours')`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
     for (const u of users.rows) if (!(await accountHalted(Number(u.user_id), "engineer"))) await runAs(Number(u.user_id), ENGINEER_ROLE, { kind: "engineer_round", respect: "none" }, () => dailyRound(Number(u.user_id))).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err).slice(0, 160) }, "جولة غانم فشلت"));
   };
-  dailyTimer = setInterval(() => void tick(), 15 * 60_000);
-  dailyTimer.unref();
+  dailyTimer = everyMs("executive.engineer", 15 * 60_000, tick, { unref: true });
 }

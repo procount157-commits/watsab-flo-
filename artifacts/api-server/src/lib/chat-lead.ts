@@ -21,10 +21,12 @@ import { asAgent } from "./agent-context";
 import { logger } from "./logger";
 import { runAs } from "./org/runtime";
 import { parseLoose } from "./loose-json";
+import { noteQuality } from "./org/providers";
 import { ENDEARMENT } from "./voice-doctrine";
 import { priceOrWeight } from "./reply-check";
 import { normalizeArabic } from "./intent";
 import { accountHalted } from "./org/controls";
+import { everyMs } from "./org/workers";
 
 export const CHAT_LEAD_ROLE = "chat_lead";
 /** Who reads the handbook: the reply desk, the follow-up desk, the WhatsApp campaign writer. */
@@ -155,6 +157,7 @@ export async function runChatLead(userId: number): Promise<{ ok: boolean; why?: 
     ], 150_000)).catch((err) => { why = String(err?.message ?? err).slice(0, 120); return null; });
     if (!out?.text) { why = why || "النموذج لم يستجب"; continue; }
     raw = parseLoose<Playbook>(out.text);
+    noteQuality(raw != null, out, "analyst", { userId, role: CHAT_LEAD_ROLE });
     if (!raw) why = `ردّ النموذج ليس JSON (${out.provider ?? "?"}): ${out.text.slice(0, 80)}`;
   }
   if (!raw) { logger.warn({ userId, why }, "مسؤول الشات لم يكتب الدليل"); return { ok: false, why }; }
@@ -179,7 +182,5 @@ export function startChatLead(): void {
     const users = await db.execute<{ user_id: number }>(sql`SELECT DISTINCT user_id FROM wa_thread_messages WHERE created_at > now() - interval '7 days'`).catch(() => ({ rows: [] as Array<{ user_id: number }> }));
     for (const u of users.rows) if (!(await accountHalted(Number(u.user_id), "chat_lead"))) await runAs(Number(u.user_id), CHAT_LEAD_ROLE, { kind: "chat_lead_round", respect: "none" }, () => runChatLead(Number(u.user_id))).catch((err) => logger.warn({ userId: u.user_id, err: String(err?.message ?? err) }, "مسؤول الشات تعذّر"));
   };
-  setTimeout(() => void run(), 15 * 60_000).unref();
-  timer = setInterval(() => void run(), 24 * 3_600_000);
-  timer.unref();
+  timer = everyMs("whatsapp.chat_lead", 24 * 3_600_000, run, { firstMs: 15 * 60_000, unref: true });
 }

@@ -24,6 +24,8 @@ import { receipt, tokensOf, noteUnattributedCall } from "./graph/receipts";
 import { departmentOf, isHalted } from "./org/controls";
 import { inSimulation, takeSimCall } from "./org/simulation";
 import { noteProviderCall } from "./org/providers";
+import { orderByEvidence, routingEvidence, taskClassOf, type TaskClass } from "./org/routing";
+import { cachedPrices, priceMap, usdCost } from "./org/prices";
 
 export type Provider =
   | "anthropic" | "gemini" | "groq" | "openrouter"
@@ -78,7 +80,11 @@ const MAX_OUTPUT_TOKENS = 800;
  * 800 the tail follow-ups were cut mid-block and silently dropped by the
  * parser. Callers that need more say so; everyone else keeps the default.
  */
-export interface CompleteOpts { maxTokens?: number }
+export interface CompleteOpts {
+  maxTokens?: number;
+  /** صنف العمل حين لا يكفي الدور (مكالمة المالك: voice). وإلا يُشتق من دور الموظف. */
+  taskClass?: TaskClass;
+}
 function outputCap(opts?: CompleteOpts): number {
   const n = Number(opts?.maxTokens);
   return Number.isFinite(n) && n > 0 ? Math.round(n) : MAX_OUTPUT_TOKENS;
@@ -458,7 +464,16 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000, opts?
   if (!who) noteUnattributedCall();
   const out = await completeInner(messages, timeoutMs, opts);
   const meter = currentMeter();
-  if (meter) { meter.calls++; meter.tokensIn += tokensOf(charsIn); meter.tokensOut += tokensOf(out?.text.length ?? 0); meter.model = out?.provider ?? meter.model; if (out) { meter.lastProvider = out.provider; meter.lastModel = out.model ?? ""; } }
+  if (meter) {
+    meter.calls++; meter.tokensIn += tokensOf(charsIn); meter.tokensOut += tokensOf(out?.text.length ?? 0); meter.model = out?.provider ?? meter.model;
+    if (out) {
+      meter.lastProvider = out.provider; meter.lastModel = out.model ?? "";
+      // الكلفة حيث يوجد سعر لهذا المزوّد والنموذج بعينه، وإلا تصير الجولة كلها «غير متاح».
+      if (!sim) await priceMap().catch(() => cachedPrices());
+      const cost = usdCost(cachedPrices(), out.provider, out.model ?? "", tokensOf(charsIn), tokensOf(out.text.length));
+      if (cost == null) meter.costUnknown = true; else meter.costUsd = (meter.costUsd ?? 0) + cost;
+    }
+  }
   if (who && !sim) receipt({
     userId: who.userId, node: who.role, action: "llm.call", status: out ? "ok" : "failed",
     model: out?.provider ?? null, tokensIn: tokensOf(charsIn), tokensOut: tokensOf(out?.text.length ?? 0), durationMs: Date.now() - t0,
@@ -499,11 +514,12 @@ export function gridAllowed(userId: number | undefined, users = process.env["THE
   if (!userId) return false;
   return users.split(",").map((x) => Number(x.trim())).filter(Boolean).includes(userId);
 }
+const PAID_FIRST = ["thegrid", "gemini"];
 function paidFirst<T extends { provider: string }>(ordered: T[], userId: number | undefined): T[] {
   if (!gridAllowed(userId)) return ordered;
   // The Grid first (the cheapest the owner asked for), Gemini second (better
   // Gulf Arabic, 1–2s, measured on both accounts' questions), then the free chain.
-  const paid = ["thegrid", "gemini"];
+  const paid = PAID_FIRST;
   return [...paid.flatMap((p) => ordered.filter((c) => c.provider === p)), ...ordered.filter((c) => !paid.includes(c.provider))];
 }
 
@@ -538,10 +554,19 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number, opts?: C
 
   // routedAgent, not currentAgent: a background job named for the switches (asWorker) keeps the route it always had.
   const route = routedAgent();
-  const ranked = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }), route?.role ?? null);
+  const resting = new Set<string>();
+  const ranked = routeByTask(await rank(candidates, { provider: resolved.provider, model: pinnedModel }, resting), route?.role ?? null);
   // Gemini is the owner's paid key too (2026-10-19), for the same two accounts.
   const onlyNamed = (p: string) => p === "thegrid" || p === "openrouter2" || p === "gemini";
-  const ordered = paidFirst(ranked.filter((c) => !onlyNamed(c.provider) || gridAllowed(route?.userId)), route?.userId);
+  const allowed = paidFirst(ranked.filter((c) => !onlyNamed(c.provider) || gridAllowed(route?.userId)), route?.userId);
+  // بالدليل لكل صنف عمل (org/routing.ts)، داخل ما سُمح به وبطبقاته: لا يُضاف مزوّد ولا يُحذف.
+  // الدور من currentAgent: عملٌ مسمّى للمفاتيح (asWorker) يبقى بقائمته، ويُرتَّب داخلها بدليل صنفه.
+  const who = currentAgent();
+  const taskClass: TaskClass = opts?.taskClass ?? taskClassOf(who?.role);
+  const ordered = who ? orderByEvidence(allowed, taskClass, await routingEvidence(), {
+    fixed: (c) => (c.provider === resolved.provider && c.model === pinnedModel) || resting.has(`${c.provider}|${c.model}`),
+    tierOf: gridAllowed(route?.userId) ? (c) => (PAID_FIRST.includes(c.provider) ? 0 : 1) : undefined,
+  }) : allowed;
 
   let lastErr = "";
   for (const step of ordered) {
@@ -558,16 +583,16 @@ async function completeInner(messages: LlmMessage[], timeoutMs: number, opts?: C
         await recordOk(step.provider, step.model, Date.now() - t0);
         if (step.provider !== resolved.provider || step.model !== pinnedModel) {
           logger.info({ pinned: `${resolved.provider}/${pinnedModel}`, answered: `${step.provider}/${step.model}` },
-            "الخيار المفضّل تعذّر — أجاب بديل");
+            "أجاب غير المثبَّت — تعذّر المثبَّت أو قدّم الدليل غيره");
         }
-        noteProviderCall({ provider: step.provider, model: step.model, ok: true, ms: Date.now() - t0, charsIn: messages.reduce((a, m) => a + m.content.length, 0), charsOut: text.length });
+        noteProviderCall({ provider: step.provider, model: step.model, ok: true, ms: Date.now() - t0, charsIn: messages.reduce((a, m) => a + m.content.length, 0), charsOut: text.length, taskClass });
         return { text, provider: step.provider as Provider, model: step.model };
       } catch (err: any) {
         lastErr = String(err?.message ?? err).slice(0, 160);
         // Our own in-flight cap is not the provider failing: no cooldown for it.
         if (!lastErr.includes("ثلاثة طلبات جارية")) {
           await recordFail(step.provider, step.model, lastErr);
-          noteProviderCall({ provider: step.provider, model: step.model, ok: false, ms: Date.now() - t0 });
+          noteProviderCall({ provider: step.provider, model: step.model, ok: false, ms: Date.now() - t0, taskClass });
         }
         const transient = isTransient(err);
         logger.warn({ provider: step.provider, model: step.model, attempt, transient, err: lastErr }, "LLM call failed");

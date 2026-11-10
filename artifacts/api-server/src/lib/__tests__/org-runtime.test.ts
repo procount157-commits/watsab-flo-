@@ -43,7 +43,8 @@ const allKeys = Object.values(R.ROLE_MAP).map((x) => x.key);
 check("كل مفتاح فريد", new Set(allKeys).size === allKeys.length);
 check("أقسام الهيكل فقط", Object.values(R.ROLE_MAP).every((x) => (R.DEPARTMENTS as readonly string[]).includes(x.department)));
 check("لينكدإن كله بلا تنفيذ", Object.entries(R.ROLE_MAP).filter(([r]) => r.startsWith("li_")).every(([, x]) => x.execution === "none" && !x.fn));
-check("الناقل والمحلل في السوشيال بلا تنفيذ", R.ROLE_MAP["ig_inviter"]!.execution === "none" && R.ROLE_MAP["tt_analyst"]!.execution === "none");
+// الناقل خطوته في الجولة (engine.inviteCommenters)، والمحلل تحليل يومي (social/analyst.ts).
+check("الناقل والمحلل في السوشيال لهما تنفيذ حقيقي", R.ROLE_MAP["ig_inviter"]!.execution === "own" && R.ROLE_MAP["tt_analyst"]!.execution === "own" && R.ROLE_MAP["tt_analyst"]!.intervalSec === 86_400);
 check("part_of يقول من يحمله", Object.values(R.ROLE_MAP).filter((x) => x.execution === "part_of").every((x) => allKeys.includes(x.carriedBy!)));
 check("own له دالة", Object.values(R.ROLE_MAP).filter((x) => x.execution === "own").every((x) => !!x.fn));
 const now = Date.now();
@@ -103,7 +104,7 @@ const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const mig = norm(readFileSync(join(here, "../../../../../lib/db/migrations/073_org_runtime.sql"), "utf8"));
 check("073 يحمل كل ما عند الإقلاع", ORG_RUNTIME_SQL.every((q) => mig.includes(norm(q))));
 
-if (!/127\.0\.0\.1:(55439|55440|55441|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55446|55445|55439|55440|55441|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`\n${pass} نجح، ${fail} فشل (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }
@@ -155,7 +156,7 @@ check("حسابٌ آخر مفتاحه له", (await one(sql`SELECT employee_key 
 check("لا نبض قبل أي تشغيل", !(await hb(A, "email.director")));
 let inv = await R.orgRegistry(A);
 check("الجرد: بلا عامل يقول no_execution لا سليم", inv.find((x) => x.role === "email_manager")!.heartbeat_status === "no_execution");
-check("الجرد: الناقل بلا تنفيذ", inv.find((x) => x.role === "ig_inviter")!.execution === "none");
+check("الجرد: الناقل خطوته في الجولة (own)", inv.find((x) => x.role === "ig_inviter")!.execution === "own");
 check("الجرد: دورٌ غير معروف بلا تنفيذ", inv.find((x) => x.role === "tax_helper")!.execution === "none");
 check("الجرد: مكان الجدولة والدالة", !!inv.find((x) => x.role === "email_manager")!.scheduler_location && !!inv.find((x) => x.role === "email_manager")!.execution_function);
 

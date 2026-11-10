@@ -34,6 +34,7 @@ import { activity, ensureEmailTeam, onDuty } from "./team";
 import { accountHalted } from "../org/controls";
 import { runAs } from "../org/runtime";
 import { approvedRetargets, markUsed, orderByPriority, strategistDirective, strategistSubjects } from "../org/handoffs";
+import { everyMs } from "../org/workers";
 
 export const STAGES = {
   opened:   "فتحوا ولم يردّوا",
@@ -433,9 +434,6 @@ export async function runAllAutopilots(): Promise<void> {
 }
 
 export function startAutopilotWorker(): void {
-  setTimeout(() => {
-    void runAllAutopilots();
-    setInterval(() => void runAllAutopilots(), 15 * 60_000);
-  }, 120_000);
+  everyMs("email.autopilot", 15 * 60_000, runAllAutopilots, { firstMs: 120_000 });
   logger.info("الطيار الآلي للبريد بدأ");
 }
