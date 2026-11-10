@@ -24,5 +24,12 @@ ALTER TABLE provider_metrics ADD COLUMN IF NOT EXISTS latency_ms bigint NOT NULL
 ALTER TABLE provider_metrics ADD COLUMN IF NOT EXISTS guard_passed integer NOT NULL DEFAULT 0;
 ALTER TABLE provider_metrics ADD COLUMN IF NOT EXISTS guard_failed integer NOT NULL DEFAULT 0;
 ALTER TABLE provider_metrics DROP CONSTRAINT IF EXISTS uq_provider_metrics;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_metrics_task ON provider_metrics (user_id, provider, model, day, task_type);
+-- 079 replaced this index with uq_provider_metrics_class (adds task_class), after which rows that
+-- share (…, task_type) are legitimate; the deploy re-runs every file, so build the old one only
+-- on a database that hasn't reached 079 yet (10 Nov 2026: the re-run failed the deploy).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_provider_metrics_class') THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_metrics_task ON provider_metrics (user_id, provider, model, day, task_type);
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_provider_metrics_day ON provider_metrics (user_id, day);
