@@ -153,6 +153,7 @@ export const READINESS: Record<string, { label: string; cls: string }> = {
   READY: { label: "جاهز", cls: G },
   BLOCKED: { label: "محجوب", cls: R },
   NEEDS_TEST: { label: "يحتاج اختباراً", cls: Y },
+  OPTIONAL: { label: "متوقف عمداً", cls: N },
 };
 export const DEPARTMENT: Record<string, string> = {
   executive: "التنفيذي", email: "البريد", target_accounts: "الحسابات المستهدفة", whatsapp: "واتساب",

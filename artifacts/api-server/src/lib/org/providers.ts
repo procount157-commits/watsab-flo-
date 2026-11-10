@@ -6,6 +6,7 @@
 // التوكنات تقديرٌ من عدد الأحرف (tokensOf)، والكلفة غير معروفة ما لم يقلها المزوّد:
 // لا جدول أسعار هنا، فالتقرير يقول null بدل صفرٍ كاذب.
 
+import { inSimulation } from "./simulation";
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { currentAgent, currentMeter } from "../agent-context";
@@ -46,7 +47,7 @@ const taskTypeNow = (role: string) => currentMeter()?.kind ?? `role:${role}`;
 /** محاولةٌ واحدة عند مزوّد واحد. لا يرمي ولا يمسّ الشبكة ولا القاعدة. */
 export function noteProviderCall(c: { provider: string; model: string; ok: boolean; ms: number; charsIn?: number; charsOut?: number }): void {
   const who = currentAgent();
-  if (!who) return;
+  if (!who || inSimulation()) return;
   const b = bucket(who.userId, c.provider, c.model, taskTypeNow(who.role));
   b.calls++;
   if (!c.ok) b.failures++;
@@ -60,6 +61,7 @@ export function noteProviderCall(c: { provider: string; model: string; ok: boole
  * (الحكم على مسودةٍ من جولةٍ سابقة) تُسجَّل على مزوّدٍ غير معروف، لا على من لم يكتب.
  */
 export function noteGuardResult(userId: number, role: string, passed: boolean): void {
+  if (inSimulation()) return;
   const m = currentMeter();
   const b = bucket(userId, m?.lastProvider ?? "unknown", m?.lastModel ?? "", m?.kind ?? `role:${role}`);
   if (passed) b.guardPassed++; else b.guardFailed++;

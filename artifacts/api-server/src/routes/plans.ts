@@ -5,18 +5,28 @@ import { pool } from "@workspace/db";
 
 const router = Router();
 
-// ── Public ────────────────────────────────────────────────────────
-// GET /api/plans — active plans sorted for landing page
-router.get("/", async (_req, res) => {
-  const { rows } = await pool.query(`
+// subscription_plans ليس في مخطط drizzle ولا في أي ترحيل، وغائبٌ في الإنتاج: كان GET يرمي
+// ٥٠٠. لا يُخترع له مخطط هنا؛ الجدول الغائب يعني «لا خطط» للقراءة، و٥٠٣ واضحة للكتابة.
+type Query = (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+export const missingTable = (err: any) => err?.code === "42P01";
+const ACTIVE_PLANS = `
     SELECT id, name, name_en, price, period, period_label,
            description, description_en, features, features_en,
            badge, badge_en, is_featured, sort_order
     FROM subscription_plans
     WHERE is_active = true
     ORDER BY sort_order ASC, id ASC
-  `);
-  res.json(rows);
+  `;
+/** الخطط الفعّالة، أو قائمة فارغة إن لم يكن الجدول. أي خطأ آخر يُرمى كما هو. */
+export async function listPlans(q: Query = (t, p) => pool.query(t, p as any[]), admin = false): Promise<any[]> {
+  try { return (await q(admin ? `SELECT * FROM subscription_plans ORDER BY sort_order ASC, id ASC` : ACTIVE_PLANS)).rows; }
+  catch (err) { if (missingTable(err)) return []; throw err; }
+}
+
+// ── Public ────────────────────────────────────────────────────────
+// GET /api/plans — active plans sorted for landing page
+router.get("/", async (_req, res) => {
+  res.json(await listPlans());
 });
 
 // ── Admin CRUD ────────────────────────────────────────────────────
@@ -24,10 +34,7 @@ router.use("/admin", requireAuth, requireAdmin as any);
 
 // GET /api/plans/admin — all plans
 router.get("/admin", async (_req, res) => {
-  const { rows } = await pool.query(
-    `SELECT * FROM subscription_plans ORDER BY sort_order ASC, id ASC`
-  );
-  res.json(rows);
+  res.json(await listPlans(undefined, true));
 });
 
 // POST /api/plans/admin — create plan
@@ -96,6 +103,12 @@ router.delete("/admin/:id", async (req, res) => {
   await pool.query(`DELETE FROM subscription_plans WHERE id=$1`, [id]);
   logger.info({ planId: id }, "Admin deleted subscription plan");
   res.json({ success: true });
+});
+
+// كتابةٌ على جدولٍ غائب: سببٌ مفهوم لا ٥٠٠ صامت.
+router.use((err: any, _req: any, res: any, next: any) => {
+  if (missingTable(err)) return res.status(503).json({ error: "جدول الخطط غير موجود على هذا الخادم" });
+  next(err);
 });
 
 export default router;

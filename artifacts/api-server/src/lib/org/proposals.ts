@@ -14,6 +14,7 @@ import { audit } from "./controls";
 import { backfillRegistry } from "./registry";
 import { ensureOrgTables } from "./schema";
 import { PROMPT_LIBRARY, renderPrompt } from "./prompts";
+import { activateDossier, DossierRefused, linkDossierProposal, rollbackDossier } from "./docs/activation";
 
 export const APPROVAL_CATEGORIES = ["external_strategy", "pricing", "promises", "limits", "channel_activation", "prompt_external", "permissions", "account_config", "financial", "deletion", "security"] as const;
 export const LOW_RISK_CATEGORIES = ["prompt_internal", "memory", "internal_analytics"] as const;
@@ -120,14 +121,20 @@ export async function activatePrompt(userId: number, employeeKey: string, o: { a
     const previousVersion = await nextVersion(tx, userId, employeeKey);
     await tx.execute(sql`INSERT INTO employee_prompt_versions (user_id, employee_key, version, prompt, note, active, created_by)
       VALUES (${userId}, ${employeeKey}, ${previousVersion}, ${emp.persona ?? ""}, ${"ما كان يعمل به قبل التفعيل"}, false, ${"system.activate"})`);
-    const rendered = await renderFor(tx, userId, entry);
+    // ملف الموظف مصدر الحقيقة: النسخة التي يحملها المقترح (أو بذرة المكتبة الحالية) تُجمَّع
+    // للتشغيل؛ ولا ملف = نص المكتبة كما كان.
+    const dossierVersion = approved?.new_value?.dossierVersion == null ? null : Number(approved.new_value.dossierVersion);
+    const dossier = await activateDossier(tx, userId, employeeKey, dossierVersion, o.actor ?? null).catch((e) => {
+      throw e instanceof DossierRefused ? new ProposalRefused(e.message, e.status) : e;
+    });
+    const rendered = dossier?.rendered ?? await renderFor(tx, userId, entry);
     const version = previousVersion + 1;
     await tx.execute(sql`UPDATE employee_prompt_versions SET active = false WHERE user_id = ${userId} AND employee_key = ${employeeKey} AND active`);
     await tx.execute(sql`INSERT INTO employee_prompt_versions (user_id, employee_key, version, prompt, note, active, created_by)
-      VALUES (${userId}, ${employeeKey}, ${version}, ${rendered}, ${`المكتبة v${entry.version}`}, true, ${o.actor ? `user:${o.actor}` : "system.activate"})`);
+      VALUES (${userId}, ${employeeKey}, ${version}, ${rendered}, ${dossier ? `الملف v${dossier.version} (المكتبة v${entry.version})` : `المكتبة v${entry.version}`}, true, ${o.actor ? `user:${o.actor}` : "system.activate"})`);
     await tx.execute(sql`UPDATE bot_employees SET persona = ${rendered}, prompt_version = ${version}, updated_at = now() WHERE id = ${emp.id}`);
     const oldValue = { persona: emp.persona ?? null, promptVersion: emp.prompt_version == null ? null : Number(emp.prompt_version), version: previousVersion };
-    const newValue = { libraryVersion: entry.version, version };
+    const newValue = { libraryVersion: entry.version, version, ...(dossier ? { dossierVersion: dossier.version } : {}) };
     let changeId: number;
     if (approved) {
       await tx.execute(sql`UPDATE improvement_proposals SET status = 'applied', applied_at = now(), old_value = ${JSON.stringify(oldValue)}::jsonb, new_value = ${JSON.stringify(newValue)}::jsonb, rollback_version = ${previousVersion} WHERE change_id = ${approved.change_id}`);
@@ -137,6 +144,7 @@ export async function activatePrompt(userId: number, employeeKey: string, o: { a
         VALUES (${userId}, ${o.actor ? `user:${o.actor}` : "system.low_risk"}, ${target}, ${"تفعيل نسخة المكتبة: تحليل داخلي منخفض الخطر"}, ${JSON.stringify(oldValue)}::jsonb, ${JSON.stringify(newValue)}::jsonb, ${cls.category}, ${cls.risk}, 'applied', now(), ${previousVersion}) RETURNING change_id`)).rows;
       changeId = Number(row.change_id);
     }
+    if (dossier) await linkDossierProposal(tx, userId, employeeKey, dossier.version, changeId);
     return { employeeKey, version, previousVersion, changeId };
   });
   await audit({ userId, action: "prompt.activated", kind: cls.category, actor: o.actor ?? null, meta: res });
@@ -169,6 +177,7 @@ export async function rollbackProposal(userId: number, id: number, actor: number
     await tx.execute(sql`UPDATE employee_prompt_versions SET active = (version = ${p.rollback_version}) WHERE user_id = ${userId} AND employee_key = ${key}`);
     await tx.execute(sql`UPDATE bot_employees SET persona = ${p.old_value?.persona ?? null}, prompt_version = ${p.old_value?.promptVersion ?? null}, updated_at = now() WHERE id = ${emp.id}`);
     await tx.execute(sql`UPDATE improvement_proposals SET status = 'rolled_back', rolled_back_at = now() WHERE change_id = ${id} AND user_id = ${userId}`);
+    await rollbackDossier(tx, userId, key, id);
   });
   await audit({ userId, action: "prompt.rolled_back", kind: p.category, actor, meta: { changeId: id, employeeKey: key, restoredVersion: p.rollback_version } });
   return (await getProposal(userId, id))!;

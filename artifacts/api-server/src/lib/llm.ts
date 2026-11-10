@@ -22,6 +22,7 @@ import { logger } from "./logger";
 import { rank, recordOk, recordFail, type Candidate } from "./llm-health";
 import { receipt, tokensOf, noteUnattributedCall } from "./graph/receipts";
 import { departmentOf, isHalted } from "./org/controls";
+import { inSimulation, takeSimCall } from "./org/simulation";
 import { noteProviderCall } from "./org/providers";
 
 export type Provider =
@@ -451,17 +452,20 @@ export async function complete(messages: LlmMessage[], timeoutMs = 20_000, opts?
     if (who) receipt({ userId: who.userId, node: who.role, action: "llm.call", status: "blocked", why: halt.reason ?? "موقوف" });
     return null;
   }
+  // المحاكاة (lib/org/simulation.ts): لها سقف نداءاتها، ولا يُسجَّل عملها في الإيصالات ولا الاستهلاك.
+  const sim = inSimulation();
+  if (sim && !takeSimCall()) return null;
   if (!who) noteUnattributedCall();
   const out = await completeInner(messages, timeoutMs, opts);
   const meter = currentMeter();
   if (meter) { meter.calls++; meter.tokensIn += tokensOf(charsIn); meter.tokensOut += tokensOf(out?.text.length ?? 0); meter.model = out?.provider ?? meter.model; if (out) { meter.lastProvider = out.provider; meter.lastModel = out.model ?? ""; } }
-  if (who) receipt({
+  if (who && !sim) receipt({
     userId: who.userId, node: who.role, action: "llm.call", status: out ? "ok" : "failed",
     model: out?.provider ?? null, tokensIn: tokensOf(charsIn), tokensOut: tokensOf(out?.text.length ?? 0), durationMs: Date.now() - t0,
     why: out ? null : "لم يرد أي مزوّد",
   });
   // Imported late: feedback reads the knowledge module, which calls back into this one.
-  if (who) void import("./feedback").then((f) => f.recordUsage(who.userId, who.role, { ok: !!out, charsIn: messages.reduce((a, m) => a + m.content.length, 0), charsOut: out?.text.length ?? 0, ms: Date.now() - t0 })).catch(() => {});
+  if (who && !sim) void import("./feedback").then((f) => f.recordUsage(who.userId, who.role, { ok: !!out, charsIn: messages.reduce((a, m) => a + m.content.length, 0), charsOut: out?.text.length ?? 0, ms: Date.now() - t0 })).catch(() => {});
   return out;
 }
 

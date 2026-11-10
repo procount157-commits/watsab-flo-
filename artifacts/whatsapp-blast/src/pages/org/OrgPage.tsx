@@ -3,7 +3,7 @@
 
 import { Component, type ReactNode } from "react";
 import { Link, useRoute } from "wouter";
-import { BadgeCheck, Crown, Gauge, ListTodo, Network, ShieldAlert, Stethoscope, Users } from "lucide-react";
+import { BadgeCheck, Crown, FlaskConical, Gauge, ListTodo, Network, PhoneCall, ShieldAlert, Stethoscope, Ticket, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Preparing } from "./shared";
 import CommandTab from "./CommandTab";
@@ -14,15 +14,21 @@ import ApprovalsTab from "./ApprovalsTab";
 import SafetyTab from "./SafetyTab";
 import ReadinessTab from "./ReadinessTab";
 import EmployeeDetail from "./EmployeeDetail";
+import TicketsTab from "./tickets/TicketsTab";
+import ControlRoom from "./control-room/ControlRoom";
+import SimulationPage from "./simulation";
 
 const TABS = [
   { key: "command", label: "القيادة", icon: Gauge, view: CommandTab },
   { key: "ceo", label: "المدير التنفيذي", icon: Crown, view: CeoTab },
   { key: "employees", label: "الموظفون", icon: Users, view: EmployeesTab },
   { key: "tasks", label: "المهام", icon: ListTodo, view: TasksTab },
+  { key: "tickets", label: "التذاكر", icon: Ticket, view: TicketsTab },
+  { key: "control-room", label: "غرفة التحكم", icon: PhoneCall, view: ControlRoom },
   { key: "approvals", label: "الموافقات", icon: BadgeCheck, view: ApprovalsTab },
   { key: "safety", label: "الأمان", icon: ShieldAlert, view: SafetyTab },
   { key: "readiness", label: "الجاهزية", icon: Stethoscope, view: ReadinessTab },
+  { key: "simulation", label: "المحاكاة", icon: FlaskConical, view: SimulationPage },
 ];
 
 /** بيانات بشكل غير متوقع لا تُسقط التطبيق: تُحصر في التبويب. */

@@ -18,7 +18,8 @@ import { departmentOf, employeeNames, haltNames } from "./departments";
 export { departmentOf };
 
 export const SCOPES = ["global", "account", "channel", "department", "employee"] as const;
-export type Scope = (typeof SCOPES)[number];
+/** task: مفتاح تذكرةٍ بعينها (target = رقمها)، تضعه التذاكر عند الإيقاف المؤقت والإلغاء (tickets.ts). */
+export type Scope = (typeof SCOPES)[number] | "task";
 export const CHANNELS = ["whatsapp", "email", "instagram", "tiktok", "linkedin"] as const;
 export type Channel = (typeof CHANNELS)[number];
 
@@ -29,6 +30,8 @@ export interface HaltQuery {
   department?: string | string[] | null;
   role?: string | null;
   channel?: string | null;
+  /** التذكرة التي يعمل لها هذا الفعل: مفتاحها يوقفه وحده. */
+  taskId?: number | null;
 }
 export interface Halt {
   halted: boolean;
@@ -81,7 +84,17 @@ export function decideHalt(rows: ControlRow[], q: HaltQuery, legacy: { teamPause
     if (e) return { halted: true, scope: "employee", reason: why(e, "الموظف موقوف") };
     if (legacy.employeeOff) return { halted: true, scope: "employee", reason: "الموظف موقوف", legacy: true };
   }
+  if (q.taskId != null) {
+    const t = taskControl(rows, q.userId, q.taskId);
+    if (t) return t;
+  }
   return CLEAR;
+}
+
+/** مفتاح التذكرة وحده: لحسابها فقط، فرقم تذكرة حسابٍ آخر لا يوقف شيئاً هنا. Pure. */
+export function taskControl(rows: ControlRow[], userId: number | null | undefined, taskId: number): Halt | null {
+  const t = rows.find((r) => r.engaged && r.scope === "task" && r.target === String(taskId) && userId != null && r.userId === userId);
+  return t ? { halted: true, scope: "task", reason: why(t, `التذكرة #${taskId} موقوفة`) } : null;
 }
 
 // ── القراءة ───────────────────────────────────────────────────────
@@ -123,6 +136,12 @@ export async function isHalted(q: HaltQuery = {}): Promise<Halt> {
     legacy = { teamPaused: off === "الفريق كله موقوف", employeeOff: off === "الموظف موقوف" };
   }
   return decideHalt(rows, q, legacy);
+}
+
+/** مفتاح التذكرة وحده، بلا مفاتيح الحساب والموظف: يُسأل حتى في الجولة المعفاة (respect: none). لا يرمي. */
+export async function taskHalted(userId: number, taskId: number): Promise<Halt> {
+  try { return taskControl(await readControls(userId), userId, taskId) ?? CLEAR; }
+  catch { return UNAVAILABLE; }
 }
 
 /** أيُوقف النموذج المباشر (الرؤية، التفريغ، التصنيف)؟ الحساب إن عُرف، وإلا المنصة وحدها. */
@@ -188,7 +207,7 @@ export type ControlInput = { scope: string; target?: string | null; engaged: boo
 export function controlScopeFor(input: ControlInput, actor: { userId: number; isAdmin: boolean; forUserId?: number | null; platformWide?: boolean }):
   { ok: true; scope: Scope; userId: number | null; target: string } | { ok: false; status: number; error: string } {
   const scope = String(input.scope ?? "") as Scope;
-  if (!SCOPES.includes(scope)) return { ok: false, status: 400, error: "نطاق غير معروف" };
+  if (!(SCOPES as readonly string[]).includes(scope)) return { ok: false, status: 400, error: "نطاق غير معروف" };
   const target = String(input.target ?? "").trim().slice(0, 60);
   if (scope === "global") {
     if (!actor.isAdmin) return { ok: false, status: 403, error: "الإيقاف على مستوى المنصة للمدير وحده" };

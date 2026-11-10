@@ -8,12 +8,13 @@ import { memoryFor } from "./memory";
 import { listProposals, promptTarget } from "./proposals";
 import { PROMPT_LIBRARY } from "./prompts";
 import { orgRegistry, DEPARTMENTS, type InventoryRow } from "./registry";
-import { readiness } from "./readiness";
+import { readiness, waLoggedOut } from "./readiness";
 import { latestScorecards, scorecardHistory } from "./scorecards";
 import { STALE_DAYS } from "./queue";
 import { watchdogFindings } from "./watchdog";
 import { collectFacts } from "./ceo";
 import { APPROVAL_CATEGORIES } from "./proposals";
+import { REAL_TASK } from "./sim-schema";
 
 const num = (v: unknown) => Number(v ?? 0);
 const BUCKETS = { healthy: "healthy", running: "running", late: "delayed", failed: "failed", halted: "paused", no_execution: "no_execution" } as const;
@@ -66,10 +67,10 @@ export async function orgOverview(userId: number) {
 
 async function buildOverview(userId: number) {
   const staff = await orgRegistry(userId);
-  const [tasks] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status IN ('pending','queued','running','waiting_for_dependency','waiting_for_approval'))::int AS active, count(*) FILTER (WHERE ${OVERDUE})::int AS overdue FROM employee_tasks WHERE user_id = ${userId}`)).rows;
+  const [tasks] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status IN ('pending','queued','running','waiting_for_dependency','waiting_for_approval'))::int AS active, count(*) FILTER (WHERE ${OVERDUE})::int AS overdue FROM employee_tasks WHERE user_id = ${userId} AND ${REAL_TASK}`)).rows;
   const [q] = (await db.execute<any>(sql`SELECT count(*)::int AS n, min(created_at) AS oldest, count(*) FILTER (WHERE created_at <= now() - make_interval(days => ${STALE_DAYS}) AND stale_released_at IS NULL)::int AS held FROM email_messages WHERE user_id = ${userId} AND status = 'queued'`)).rows;
-  const [qt] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued, count(*) FILTER (WHERE dead_letter)::int AS dead FROM employee_tasks WHERE user_id = ${userId}`)).rows;
-  const [appr] = (await db.execute<any>(sql`SELECT (SELECT count(*)::int FROM employee_tasks WHERE user_id = ${userId} AND status = 'waiting_for_approval') AS tasks,
+  const [qt] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued, count(*) FILTER (WHERE dead_letter)::int AS dead FROM employee_tasks WHERE user_id = ${userId} AND ${REAL_TASK}`)).rows;
+  const [appr] = (await db.execute<any>(sql`SELECT (SELECT count(*)::int FROM employee_tasks WHERE user_id = ${userId} AND status = 'waiting_for_approval' AND ${REAL_TASK}) AS tasks,
       (SELECT count(*)::int FROM improvement_proposals WHERE user_id = ${userId} AND status = 'proposed') AS proposals,
       (SELECT count(*)::int FROM agent_memory WHERE user_id = ${userId} AND approval_status = 'pending') AS lessons`)).rows;
   let health = (await db.execute<any>(sql`SELECT integration, status, detail, last_ok_at, last_fail_at, checked_at FROM integration_health WHERE user_id = ${userId} ORDER BY integration`)).rows;
@@ -78,6 +79,7 @@ async function buildOverview(userId: number) {
     health = (await db.execute<any>(sql`SELECT integration, status, detail, last_ok_at, last_fail_at, checked_at FROM integration_health WHERE user_id = ${userId} ORDER BY integration`)).rows;
   }
   const findings = await watchdogFindings(userId);
+  const loggedOut = await waLoggedOut(userId).catch(() => null);
   const facts = await collectFacts(userId);
   const cards = await latestScorecards(userId, "weekly");
   const departments = DEPARTMENTS.map((d) => {
@@ -95,7 +97,10 @@ async function buildOverview(userId: number) {
     generatedAt: new Date().toISOString(), employees: countStates(staff), tasks: { active: num(tasks?.active), overdue: num(tasks?.overdue) }, departments,
     queue: { emailQueued: num(q?.n), emailOldest: q?.oldest ?? null, emailHeldStale: num(q?.held), tasksQueued: num(qt?.queued), deadLetter: num(qt?.dead) },
     integrations: health.map((h: any) => ({ integration: h.integration, status: h.status, detail: h.detail, lastOkAt: h.last_ok_at, lastFailAt: h.last_fail_at, checkedAt: h.checked_at })),
-    risks: findings.map((f) => ({ kind: f.kind, subject: f.subject, severity: f.severity, detail: f.detail })),
+    risks: [
+      ...(loggedOut ? [{ kind: "wa_logged_out", subject: "whatsapp", severity: "critical", detail: `خرج واتساب ${loggedOut.toISOString().slice(0, 16).replace("T", " ")} ومُسحت الجلسة: امسح رمز QR من /connect` }] : []),
+      ...findings.map((f) => ({ kind: f.kind, subject: f.subject, severity: f.severity, detail: f.detail })),
+    ],
     approvals: { tasks: num(appr?.tasks), proposals: num(appr?.proposals), lessons: num(appr?.lessons) },
     outcomes: await outcomeTrends(userId),
   };
@@ -134,5 +139,7 @@ export async function employeeProfile(userId: number, key: string) {
     tools: entry ? entry.sections.approvedTools.split("\n").map((x: string) => x.trim()).filter(Boolean) : [],
     permissions: { status: profile.permission_status, is_active: !!emp.is_active, approvalRequiredFor: [...APPROVAL_CATEGORIES] },
     heartbeat: heartbeat.rows[0] ?? null, heartbeatHistory: executions.rows, tasks: tasks.rows, errors: errors.rows, memory, trends, feedback: feedback.rows, proposals,
+    // الظل: آخر مقارنة لتعليماته المقترحة (lib/org/shadow.ts). تحميلٌ متأخر: لا دورة استيراد.
+    shadow: entry ? await (await import("./shadow")).shadowSummary(userId, { employeeKey: key }) : null,
   };
 }

@@ -11,8 +11,10 @@ import { db } from "@workspace/db";
 import { logger } from "../logger";
 import { audit, departmentOf, departmentOfChannel, isHalted, isUnavailable, type Channel, type Halt } from "./controls";
 import { key9 } from "../wa-firewall-rules";
+import { currentTicket, recordAction, recordGate } from "./ledger";
+import { currentSimulation, recordSandbox } from "./simulation";
 
-export type GateCode = "ok" | "halted" | "opted_out" | "no_driver" | "not_owner" | "duplicate";
+export type GateCode = "ok" | "halted" | "opted_out" | "no_driver" | "not_owner" | "duplicate" | "simulation";
 export interface GateInput {
   userId: number; channel: Channel; kind: string; recipient?: string | null; role?: string | null; department?: string | null;
   /** مفتاح تكرار: لا يخرج الشيء نفسه مرتين، حتى بعد إعادة التشغيل. يتضمّن المحاولة إن كانت الإعادة مقصودة. */
@@ -99,15 +101,42 @@ async function logRefusal(i: GateInput, r: GateResult) {
     .catch((err) => logger.error({ userId: i.userId, channel: i.channel, kind: i.kind, why: r.why, err: String(err?.message ?? err).slice(0, 160) }, "رفضٌ لم يُكتب في السجل"));
 }
 
-/** الإذن. لا يرمي: الجواب دائماً allowed وwhy، وكل رفضٍ سطرٌ في org_audit_log. */
+/**
+ * الإذن. لا يرمي: الجواب دائماً allowed وwhy، وكل رفضٍ سطرٌ في org_audit_log. وكل قرارٍ —
+ * سُمح أو رُفض — سطرٌ تحت التذكرة الحالية في ticket_action_events (ledger.ts)، إلا الفحص
+ * الثاني المسموح قبيل السلك: محاولة الإرسال سطرٌ واحد لا اثنان.
+ */
 export async function gateSend(i: GateInput): Promise<GateResult> {
-  const finish = async (r: GateResult) => { if (!r.allowed) await logRefusal(i, r); return r; };
+  // المحاكاة أولاً، قبل أي قراءة أو قناة: لا يخرج منها شيءٌ أبداً، ولا إشعار صاحب العمل نفسه.
+  const sim = currentSimulation();
+  if (sim) {
+    const why = `محاكاة (${sim.kind}): لا يخرج شيء`;
+    recordSandbox({ channel: i.channel, kind: i.kind, recipient: i.recipient ?? null, role: i.role ?? null, why });
+    await audit({ userId: i.userId, action: "gate.simulation", channel: i.channel, kind: i.kind, recipient: i.recipient ?? null, role: i.role ?? null, why, meta: { runId: sim.runId } }).catch(() => {});
+    const r = refuse("simulation", why);
+    // تحت تذكرةٍ معروفة في السياق: الرفض سطرٌ في سجلها. بلا تذكرة: لا يُفتح سجل عمليات يومي
+    // (صفٌّ حقيقي) من أجل محاكاة؛ يكفي سجل المحاكاة.
+    const tctx = currentTicket();
+    if (tctx && tctx.userId === i.userId && tctx.ticketId != null) {
+      await recordAction({ userId: i.userId, ticketId: tctx.ticketId, role: i.role ?? tctx.role, actionType: `gate.${i.channel}`.slice(0, 60), status: "refused",
+        input: { channel: i.channel, kind: i.kind, recipient: i.recipient ?? null, simulation: true, runId: sim.runId }, output: { code: r.code, why: r.why, scope: r.scope } });
+    }
+    return r;
+  }
+  const finish = async (r: GateResult) => {
+    if (!r.allowed) await logRefusal(i, r);
+    if (!(i.recheck && r.allowed)) await recordGate(i, r);
+    return r;
+  };
 
   // ما لا يحتاج مفتاحاً: لينكدإن وإشعار صاحب العمل.
   if (i.channel === "linkedin" || i.kind === "owner_notice") return finish(decideGate({ channel: i.channel, kind: i.kind, selfAddressed: i.selfAddressed, halt: { halted: false, scope: null, reason: null } }));
 
   const department = [...new Set([i.department ?? departmentOf(i.role), departmentOfChannel(i.channel)].filter((d): d is string => !!d))];
-  const halt = await isHalted({ userId: i.userId, channel: i.channel, department, role: i.role ?? null });
+  // تذكرة السياق إن كانت لهذا الحساب: مفتاحها (إيقافٌ مؤقت أو إلغاء) يوقف إرسالها.
+  const ctx = currentTicket();
+  const taskId = ctx && ctx.userId === i.userId ? ctx.ticketId : null;
+  const halt = await isHalted({ userId: i.userId, channel: i.channel, department, role: i.role ?? null, taskId });
   if (i.recheck) return finish(decideGate({ channel: i.channel, kind: i.kind, selfAddressed: i.selfAddressed, halt }));
 
   let optedOut: boolean | null = false;
@@ -127,7 +156,7 @@ export async function gateSend(i: GateInput): Promise<GateResult> {
     if (!claimed.rows.length) return finish(refuse("duplicate", "خرج من قبل بالمفتاح نفسه"));
   }
   countAllowed(i.userId, i.channel);
-  return OK;
+  return finish(OK);
 }
 
 export { isUnavailable };

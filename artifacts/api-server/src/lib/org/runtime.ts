@@ -11,7 +11,8 @@ import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { logger } from "../logger";
 import { asWorker, withMeter, type Meter } from "../agent-context";
-import { isHalted, type Halt } from "./controls";
+import { isHalted, taskHalted, type Halt } from "./controls";
+import { opsTicketFor, withTicket, type TicketContext } from "./ledger";
 import { employeeKeyOf, intervalOf } from "./departments";
 
 export const workerId = () => `${hostname()}:${process.pid}`.slice(0, 80);
@@ -106,6 +107,19 @@ async function sampledExecution(userId: number, key: string, o: RunOpts, status:
   } catch (err) { warn("عيّنة تنفيذ لم تُكتب", err); return null; }
 }
 
+// ── التذكرة ───────────────────────────────────────────────────────
+/**
+ * جولةٌ بلا مهمة لا تفتح تذكرة لكل دقّة: سجل العمليات اليومي يُفتح عند أول فعلٍ فيها
+ * (قرار بوابة)، أو حين نادت النموذج. حينها يُربط سطر تنفيذها به، فالنداءات في receipts
+ * ومجموعها في employee_executions يُريان من التذكرة بلا نسخ.
+ */
+async function linkRunTicket(ctx: TicketContext, executionId: number | null, m: Meter) {
+  if (!executionId || ctx.ticketId != null) return;
+  const id = (await ctx.lazy?.catch(() => null)) ?? (m.calls > 0 ? await opsTicketFor(ctx.userId, ctx.role, ctx.kind).catch(() => null) : null);
+  if (id == null) return;
+  await db.execute(sql`UPDATE employee_executions SET task_id = ${id} WHERE id = ${executionId} AND task_id IS NULL`).catch((err) => warn("التنفيذ لم يُربط بتذكرته", err));
+}
+
 // ── التشغيل ───────────────────────────────────────────────────────
 async function haltFor(userId: number, role: string, respect: RunOpts["respect"]): Promise<Halt | null> {
   if (respect === "none") return null;
@@ -114,11 +128,14 @@ async function haltFor(userId: number, role: string, respect: RunOpts["respect"]
   return h.halted ? h : null;
 }
 
+const nonClear = (h: Halt): Halt | null => (h.halted ? h : null);
+
 /** الجولة كاملة، وتقول إن لم تعمل ولماذا. يرمي ما يرميه العمل نفسه، بعد أن يُكتب. */
 export async function execute<T>(userId: number, role: string, o: RunOpts, fn: () => Promise<T>): Promise<RunOutcome<T>> {
   const key = employeeKeyOf(role);
   const interval = o.intervalSec === undefined ? intervalOf(role) : o.intervalSec;
-  const halt = await haltFor(userId, role, o.respect);
+  // مفتاح التذكرة يُسأل دائماً، حتى في الجولة المعفاة: أوقفها صاحب العمل أو ألغاها.
+  const halt = await haltFor(userId, role, o.respect) ?? (o.taskId != null ? nonClear(await taskHalted(userId, o.taskId)) : null);
   if (halt) {
     // العامل حيّ وسأل، والعمل لم يبدأ: لا سطر تنفيذ. الحالة تُرى ولا تُعدّ نجاحاً.
     await coalescedBeat({ userId, key, status: "halted", intervalSec: interval, kind: o.kind });
@@ -128,9 +145,11 @@ export async function execute<T>(userId: number, role: string, o: RunOpts, fn: (
   const executionId = sampled ? null : await openExecution(userId, key, o);
   if (!sampled) await safeBeat({ userId, key, status: "running", intervalSec: interval, kind: o.kind, executionId, started: true });
   const meter: Meter = { calls: 0, tokensIn: 0, tokensOut: 0, model: null, kind: o.kind };
+  const ctx: TicketContext = { userId, role, kind: o.kind.slice(0, 60), ticketId: o.taskId ?? null, executionId };
   const t0 = Date.now();
   try {
-    const value = await withMeter(meter, () => asWorker(userId, role, fn));
+    const value = await withTicket(ctx, () => withMeter(meter, () => asWorker(userId, role, fn)));
+    await linkRunTicket(ctx, executionId, meter);
     const ms = Date.now() - t0;
     if (sampled) {
       const id = await sampledExecution(userId, key, o, "succeeded", meter, ms, null);
@@ -143,6 +162,7 @@ export async function execute<T>(userId: number, role: string, o: RunOpts, fn: (
   } catch (err) {
     const ms = Date.now() - t0;
     const error = short(err);
+    await linkRunTicket(ctx, executionId, meter);
     if (sampled) {
       const id = await sampledExecution(userId, key, o, "failed", meter, ms, error);
       await coalescedBeat({ userId, key, status: "failed", intervalSec: interval, kind: o.kind, executionId: id, started: true, completed: true, ok: false, error });

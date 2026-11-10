@@ -58,6 +58,7 @@ import { HUMAN_VOICE } from "./voice-doctrine";
 import { quote, discounted, discountText } from "./catalog/pricing";
 import { normalizeArabic } from "./intent";
 import { accountHalted } from "./org/controls";
+import { simPersona } from "./org/simulation";
 
 const H = 3_600_000;
 /** Hours after our last message, per rung. A warm lead is followed sooner. */
@@ -133,7 +134,7 @@ export const SERVICE_VOICE = [
 /** Phrases the owner refused by name (2026-10-22: «هلا وغلا غير مقبولة»). */
 export const BANNED_PHRASES = /هلا\s*و\s*غلا|هلا\s*وغلا|حبيت\s*أطم[ّ]?ن|حبيت\s*اطم[ّ]?ن/;
 const ENDEARMENT = /حبيبت|حبيبي|حبيبة|صاحبت|صاحبتي|قلبي|عمري|روحي|حياتي|يا ?قمر|يا ?عسل|غناتي|يا ?بعد|عيوني|يا ?روح/;
-const MONEY = /سعر|أسعار|اسعار|درهم|د\.إ|aed|dhs|خصم|تخفيض|عرض|عروض|وزن|جرام|غرام|عيار|مصنعية|قيراط/i;
+export const MONEY = /سعر|أسعار|اسعار|درهم|د\.إ|aed|dhs|خصم|تخفيض|عرض|عروض|وزن|جرام|غرام|عيار|مصنعية|قيراط/i;
 
 /** What the service style must never carry. Pure, so it is tested. */
 export function serviceIssues(text: string): string[] {
@@ -569,7 +570,7 @@ export function adaptLines(a: Adapt = {}): string {
   ].filter(Boolean).join("\n\n");
 }
 
-async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null, style = "rich", adapt: Adapt = {}): Promise<Draft> {
+export async function compose(userId: number, phone: string, turns: Turn[], rung: number, earlier: string[], rungs = MAX_RUNGS, vertical: string | null = null, style = "rich", adapt: Adapt = {}): Promise<Draft> {
   if (style === "service" || style === "sales") return composeService(userId, phone, turns, rung, earlier, rungs, style, undefined, adapt);
   const angle = angleFor(rung, rungs, vertical);
   const [[me], [profile], card, company] = await Promise.all([
@@ -715,6 +716,8 @@ async function composeService(userId: number, phone: string, turns: Turn[], rung
     AND verdict IN ('pending', 'approved', 'send') AND coalesce(draft, '') <> '' AND created_at > now() - interval '48 hours' ORDER BY created_at DESC LIMIT 25`)).rows.map((r) => r.draft);
   const system = [
     `اسمك ${me?.name ?? "خالد"}، تعمل في ${profile?.name ?? "المحل"}. تكتب رسالة متابعة واحدة لزبونة سكتت بعد محادثتها معنا.`,
+    // الظل: التعليمات المقترحة لخالد؛ خارج المحاكاة فارغ ويُحذف (filter أدناه).
+    simPersona(FOLLOWUP_ROLE) ?? "",
     others.length ? `═══ رسائل كُتبت لزبونات أخريات — لا تشبهها في الكلمات ولا في البناء ═══\n${others.slice(0, 8).map((e) => `- ${e}`).join("\n")}` : "",
     sales ? SALES_VOICE : SERVICE_VOICE,
     analysis || last.words ? `═══ تحليل محادثتها — ابنِ رسالتك عليه أولاً ═══\n${analysis}${last.words ? `\nآخر ما كتبته هي: «${last.words.slice(0, 300)}»` : ""}\nرسالتك ترد على آخر ما قالته وآخر سؤال سألته، بطريقة تخصها هي — لا كلاماً عاماً يصلح لأي زبونة. إن كان سؤالها عن السعر أو الوزن فلا تذكر أي رقم ولا كلمة سعر: قل إن تفاصيل القطعة وصورها كلها في الموقع، أو اعرض أن تساعدها تختار. وإن سألت عن التوصيل أو توفر قطعة أو بيعها لحالها، فلا تَعِد بشيء: قل «أتأكد لك وأرد عليك» واعرض عليها الموقع.` : "",

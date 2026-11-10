@@ -12,13 +12,16 @@ import {
   text, timestamp, uniqueIndex, unique, varchar,
 } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
+import { ticketColumns, TICKET_STATUSES } from "./org-tickets";
 
 const at = (name: string) => timestamp(name, { withTimezone: true });
 const created = () => at("created_at").defaultNow().notNull();
 const owner = () => integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" });
 
-export const ORG_TASK_STATUSES = ["pending", "queued", "running", "waiting_for_dependency", "waiting_for_approval", "completed", "failed", "cancelled", "expired"] as const;
-export const ORG_CONTROL_SCOPES = ["global", "account", "department", "employee", "channel"] as const;
+/** حالات المهمة، وهي حالات التذكرة (org-tickets.ts): draft وwaiting_for_owner وblocked زادتها التذاكر. */
+export const ORG_TASK_STATUSES = TICKET_STATUSES;
+/** task: مفتاح إيقاف تذكرة بعينها (target = رقمها). */
+export const ORG_CONTROL_SCOPES = ["global", "account", "department", "employee", "channel", "task"] as const;
 
 /** مفتاح إيقاف. user_id فارغ = على مستوى المنصة كلها (للمدير وحده)؛ target فارغ للعام والحساب. */
 export const orgControlsTable = pgTable("org_controls", {
@@ -33,7 +36,7 @@ export const orgControlsTable = pgTable("org_controls", {
 }, (t) => [
   uniqueIndex("uq_org_controls").on(t.scope, sql`COALESCE(user_id, 0)`, t.target),
   index("idx_org_controls_user").on(t.userId, t.engaged),
-  check("org_controls_scope", sql`${t.scope} IN ('global','account','department','employee','channel')`),
+  check("org_controls_scope", sql`${t.scope} IN ('global','account','department','employee','channel','task')`),
   check("org_controls_global", sql`${t.scope} <> 'global' OR ${t.userId} IS NULL`),
   check("org_controls_account", sql`${t.scope} <> 'account' OR ${t.userId} IS NOT NULL`),
 ]);
@@ -149,6 +152,7 @@ export const employeeTasksTable = pgTable("employee_tasks", {
   expiresAt:      at("expires_at"),
   createdAt:      created(),
   updatedAt:      at("updated_at").defaultNow().notNull(),
+  ...ticketColumns(),
 }, (t) => [
   unique("uq_employee_tasks_idem").on(t.userId, t.idempotencyKey),
   index("idx_employee_tasks_queue").on(t.userId, t.status, t.nextAttemptAt, t.priority),
@@ -158,7 +162,9 @@ export const employeeTasksTable = pgTable("employee_tasks", {
   index("idx_employee_tasks_lease").on(t.leaseExpiresAt).where(sql`status = 'running'`),
   index("idx_employee_tasks_expiry").on(t.expiresAt).where(sql`expires_at IS NOT NULL`),
   index("idx_employee_tasks_inbox").on(t.userId, t.ownerRole, t.taskType, t.status),
-  check("employee_tasks_status", sql`${t.status} IN ('pending','queued','running','waiting_for_dependency','waiting_for_approval','completed','failed','cancelled','expired')`),
+  check("employee_tasks_status", sql`${t.status} IN ('draft','pending','queued','running','waiting_for_dependency','waiting_for_approval','waiting_for_owner','blocked','completed','failed','cancelled','expired')`),
+  index("idx_employee_tasks_assigned").on(t.userId, t.assignedTo, t.status),
+  index("idx_employee_tasks_due_at").on(t.userId, t.dueAt).where(sql`due_at IS NOT NULL`),
   check("employee_tasks_approval", sql`${t.approvalStatus} IS NULL OR ${t.approvalStatus} IN ('pending','approved','rejected')`),
 ]);
 
@@ -348,6 +354,12 @@ export const executiveReportsTable = pgTable("executive_reports", {
   actionsRequiringApproval: jsonb("actions_requiring_approval"),
   previousImprovementResults: jsonb("previous_improvement_results"),
   answers: jsonb("answers"),
+  // §8 (075_shadow.sql): بالكود وحده.
+  verifiedMetrics: jsonb("verified_metrics"),
+  overdueTickets: jsonb("overdue_tickets"),
+  assignedTicketIds: jsonb("assigned_ticket_ids"),
+  dataGaps: jsonb("data_gaps"),
+  confidence: varchar("confidence", { length: 10 }),
   createdAt: created(),
 }, (t) => [unique("uq_executive_reports").on(t.userId, t.period, t.periodKey)]);
 

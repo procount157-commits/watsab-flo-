@@ -36,3 +36,7 @@ export * from "./wa_firewall";
 export * from "./contact_vetting";
 export * from "./accounts";
 export * from "./org";
+export * from "./org-voice";
+export * from "./org-docs";
+export * from "./org-tickets";
+export * from "./org-sim";

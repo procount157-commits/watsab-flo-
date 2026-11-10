@@ -4,6 +4,8 @@ import { useState, type ReactNode } from "react";
 import { Check, RotateCcw, Unlock, X } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
+import { ShadowCompare } from "./simulation";
+import { PersuasionLibrary } from "./docs/EmployeeDossier";
 import { Confirm, Empty, Filters, PROPOSAL, Pill, Pre, Q, Section, Stat, ago, card, list, num, pill, show, useOrg, useOrgAction, when } from "./shared";
 
 const hasValue = (v: unknown) => v != null && v !== "" && !(typeof v === "object" && Object.keys(v as object).length === 0);
@@ -33,6 +35,7 @@ export function ProposalCard({ p }: { p: any }) {
         <Field label="القيمة الجديدة"><Pre>{show(p.new_value)}</Pre></Field>
       </div>
       <Field label="الدليل">{hasValue(p.evidence) ? <Pre>{show(p.evidence)}</Pre> : <p className="text-[11px] text-muted-foreground">لا دليل مرفق.</p>}</Field>
+      {applies && <ShadowCompare proposalId={p.change_id} />}
       {p.decision_note && <Field label="سبب القرار"><p className="text-xs whitespace-pre-wrap" dir="auto">{p.decision_note}</p></Field>}
       {p.status === "approved" && <p className="text-[11px] text-muted-foreground">وافقت عليه، وهذا الهدف لا يُطبَّق آلياً: تنفيذه بيدك.</p>}
       {p.applied_at && <p className="text-[11px] text-muted-foreground">طُبِّق {when(p.applied_at)}{p.rollback_version != null ? ` · يعود إلى النسخة ${num(p.rollback_version)}` : ""}</p>}
@@ -189,6 +192,7 @@ export default function ApprovalsTab() {
       )}
       <Proposals />
       <Lessons />
+      <PersuasionLibrary />
       <Held />
     </div>
   );

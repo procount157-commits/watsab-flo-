@@ -23,6 +23,7 @@ import type { Intent } from "./intent";
 import { logger } from "./logger";
 import { briefColleague } from "./agent-comms";
 import { charterBlock } from "./roles/charters";
+import { personaFor } from "./org/simulation";
 
 export type Agent = BotEmployee & { specialties: string[] };
 
@@ -183,7 +184,8 @@ export function agentJob(r: Routing): string[] | undefined {
  */
 export function personaPreamble(r: Routing): string {
   const lines = [`اسمك ${r.agent.name}${r.agent.title ? `، ${r.agent.title}` : ""}.`];
-  if (r.agent.persona) lines.push(`شخصيتك: ${r.agent.persona}`);
+  const persona = personaFor(r.agent.role, r.agent.persona);
+  if (persona) lines.push(`شخصيتك: ${persona}`);
   const charter = charterBlock(r.agent.role);
   if (charter) lines.push("", charter);
   if (r.handoff) {

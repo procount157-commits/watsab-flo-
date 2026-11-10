@@ -16,8 +16,9 @@ import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { logger } from "../logger";
-import { createTask, registerTaskHandler, type Task } from "./tasks";
+import { approvalMatches, createTask, refuseChangedPayload, registerTaskHandler, toTask, type Task } from "./tasks";
 import { employeeKeyOf } from "./departments";
+import { contextTicketId, noteHandoff, ticketPayload } from "./ledger";
 import { angleById, TRACK_AR } from "../email/policy";
 
 const DAY = 86_400_000;
@@ -71,10 +72,15 @@ const pickVerdicts = (r: any): Verdicts => ({
 
 /** انتهى جاسم: أحكامه بأدلتها مهمةٌ لمنصور، مرةً في اليوم. */
 export async function handoffReviewResults(userId: number, report: unknown): Promise<number | null> {
+  // التسليم تذكرةٌ ابنة لتذكرة جاسم الحالية، ومكلَّفها مفتاح موظف لا اسم.
+  const parent = contextTicketId(userId);
   const r = await createTask({
-    userId, ownerRole: "email_manager", createdByRole: "email_analyst", taskType: "review_results",
+    userId, ownerRole: "email_manager", createdByRole: "email_analyst", taskType: "review_results", parentTaskId: parent,
     input: pickVerdicts(report), idempotencyKey: `review_results:${dubaiDay()}`, expiresAt: new Date(Date.now() + 2 * DAY),
+    title: "أحكام النتائج من جاسم", objective: "يقرّر المدير ما يُتجنَّب وما يتقدّم من أحكامٍ بأدلتها", actionType: "review_results",
+    expectedOutput: "توجيه strategy_directive لسلمى ونورة، أو لا شيء إن لم يكن ما يُقال",
   }).catch(soft("review_results"));
+  if (r && !r.duplicate) await noteHandoff(userId, parent, r.task.taskId, employeeKeyOf("email_manager"));
   return r?.task.taskId ?? null;
 }
 
@@ -104,11 +110,13 @@ export async function issueDirectives(userId: number, d: Directive, source: { ta
   const made: number[] = [];
   const key = hash({ a: [...d.avoidAngles].sort(), p: [...d.priorityAngles].sort(), l: d.lines });
   for (const owner of ["email_strategist", "email"]) {
+    const parent = source.taskId ?? contextTicketId(userId);
     const r = await createTask({
-      userId, ownerRole: owner, createdByRole: "email_manager", parentTaskId: source.taskId ?? null, taskType: "strategy_directive", input: d,
+      userId, ownerRole: owner, createdByRole: "email_manager", parentTaskId: parent, taskType: "strategy_directive", input: d,
       idempotencyKey: `strategy_directive:${owner}:${dubaiDay()}:${key}`, expiresAt: new Date(Date.now() + 7 * DAY),
+      title: "توجيه المدير للموجة والكتابة", actionType: "strategy_directive", expectedOutput: "يُقرأ في الجولة التالية ويُعلَّم مستعملاً",
     });
-    if (!r.duplicate) await supersede(userId, owner, "strategy_directive", r.task.taskId);
+    if (!r.duplicate) { await supersede(userId, owner, "strategy_directive", r.task.taskId); await noteHandoff(userId, parent, r.task.taskId, employeeKeyOf(owner)); }
     made.push(r.task.taskId);
   }
   return made;
@@ -148,11 +156,13 @@ export async function handoffSubjectGuidance(userId: number, report: { measurabl
   if (!patterns.length) return [];
   const made: number[] = [];
   for (const owner of ["email", "email_strategist"]) {
+    const parent = contextTicketId(userId);
     const r = await createTask({
-      userId, ownerRole: owner, createdByRole: "email_opens", taskType: "subject_guidance", input: { patterns, measurable: report.measurable },
+      userId, ownerRole: owner, createdByRole: "email_opens", taskType: "subject_guidance", input: { patterns, measurable: report.measurable }, parentTaskId: parent,
       idempotencyKey: `subject_guidance:${owner}:${hash(patterns)}`, expiresAt: new Date(Date.now() + 14 * DAY),
+      title: "عناوين أثبتت نفسها (حصّة)", actionType: "subject_guidance", expectedOutput: "تُقرأ في الكتابة التالية",
     });
-    if (!r.duplicate) await supersede(userId, owner, "subject_guidance", r.task.taskId);
+    if (!r.duplicate) { await supersede(userId, owner, "subject_guidance", r.task.taskId); await noteHandoff(userId, parent, r.task.taskId, employeeKeyOf(owner)); }
     made.push(r.task.taskId);
   }
   return made;
@@ -194,18 +204,29 @@ export async function handoffRetarget(userId: number, plans: Parameters<typeof p
   if (!p) return null;
   const [open] = (await db.execute(sql`SELECT 1 FROM employee_tasks WHERE user_id = ${userId} AND task_type = 'retarget_proposal' AND status = 'waiting_for_approval' LIMIT 1`)).rows;
   if (open) return null;
+  const parent = contextTicketId(userId);
   const r = await createTask({
-    userId, ownerRole: "email_strategist", createdByRole: "email_retarget", taskType: "retarget_proposal", input: p, approvalRequired: true,
+    userId, ownerRole: "email_strategist", createdByRole: "email_retarget", taskType: "retarget_proposal", input: p, approvalRequired: true, parentTaskId: parent,
     idempotencyKey: `retarget_proposal:${p.cohort}:${isoWeek()}`, expiresAt: new Date(Date.now() + 14 * DAY),
+    title: `موجة إعادة استهداف: ${p.label}`.slice(0, 300), objective: p.angle.why, actionType: "retarget_proposal",
+    expectedOutput: `موجةٌ لـ${p.eligible} جهة بعد موافقتك`,
   });
+  if (!r.duplicate) await noteHandoff(userId, parent, r.task.taskId, employeeKeyOf("email_strategist"));
   return r.duplicate ? null : r.task.taskId;
 }
 
 /** ما وافق عليه صاحب العمل ولم تُنشأ موجته بعد. */
 export async function approvedRetargets(userId: number): Promise<Array<{ taskId: number; input: RetargetProposal }>> {
-  const rows = (await db.execute<{ task_id: number; input_refs: RetargetProposal }>(sql`SELECT task_id, input_refs FROM employee_tasks
+  const rows = (await db.execute<any>(sql`SELECT * FROM employee_tasks
     WHERE user_id = ${userId} AND task_type = 'retarget_proposal' AND status = 'queued' AND approval_status = 'approved' AND (expires_at IS NULL OR expires_at > now()) ORDER BY task_id`)).rows;
-  return rows.map((r) => ({ taskId: Number(r.task_id), input: r.input_refs }));
+  // ما تغيّرت حمولته بعد الموافقة لا يُنشئ موجة: يعود ينتظر موافقةً على ما هو الآن.
+  const out: Array<{ taskId: number; input: RetargetProposal }> = [];
+  for (const r of rows) {
+    const t = toTask(r);
+    if (approvalMatches(t, ticketPayload(t))) out.push({ taskId: t.taskId, input: r.input_refs });
+    else await refuseChangedPayload(t, ticketPayload(t)).catch(soft("retarget payload"));
+  }
+  return out;
 }
 
 // ── ماجد ← الكاتب ─────────────────────────────────────────────────
@@ -291,8 +312,9 @@ export type DeliveryFailure = "policy" | "address" | "mailbox" | "hold";
 export async function handoffDeliveryFailure(userId: number, kind: DeliveryFailure, detail: Record<string, unknown> = {}): Promise<void> {
   for (const owner of ["email_registrar", "monitor"]) {
     await createTask({
-      userId, ownerRole: owner, createdByRole: "email_queue", taskType: "delivery_failure", input: { kind, ...detail },
+      userId, ownerRole: owner, createdByRole: "email_queue", taskType: "delivery_failure", input: { kind, ...detail }, parentTaskId: contextTicketId(userId),
       idempotencyKey: `delivery_failure:${owner}:${kind}:${dubaiDay()}`, expiresAt: new Date(Date.now() + 2 * DAY), maxRetries: 2,
+      title: `فشل تسليم بريد (${kind})`, actionType: "delivery_failure", priorityLevel: "high", expectedOutput: "مطابقة السجل أو فحص المراقب، بحكمٍ مكتوب",
     }).catch(soft("delivery_failure"));
   }
 }

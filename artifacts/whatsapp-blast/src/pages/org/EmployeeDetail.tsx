@@ -9,6 +9,8 @@ import {
   Bars, EXECUTION, Empty, Filters, HEARTBEAT, Pill, Pre, Q, Score, Section, TASK, ago, card, day, dept, list, num, pct, pill, show, useOrg, when,
 } from "./shared";
 import { ProposalCard } from "./ApprovalsTab";
+import { CallEmployeeButton } from "./control-room/CallEmployeeButton";
+import { EmployeeDossier } from "./docs/EmployeeDossier";
 
 const CONFIDENCE: Record<string, string> = { high: "عالية", medium: "متوسطة", low: "منخفضة", none: "لا ثقة" };
 const insufficient = (c: any) => c?.status === "INSUFFICIENT DATA" || c?.score == null;
@@ -135,6 +137,7 @@ export default function EmployeeDetail({ employeeKey }: { employeeKey: string })
                   <Pill map={HEARTBEAT} value={p.heartbeat_status} />
                   <span className={cn(pill, "border-border")}>{dept(p.department)}</span>
                   <span className={cn(pill, "border-border text-muted-foreground")}>{EXECUTION[p.execution] ?? p.execution}</span>
+                  <CallEmployeeButton employeeKey={p.key ?? employeeKey} />
                 </div>
                 <p className="text-[11px] text-muted-foreground font-mono" dir="ltr">{p.key ?? employeeKey} · {p.role} · account {p.account}</p>
                 <p className="text-sm">{p.title ?? "—"}</p>
@@ -181,6 +184,8 @@ export default function EmployeeDetail({ employeeKey }: { employeeKey: string })
                   </details>
                 )}
               </Section>
+
+              <EmployeeDossier employeeKey={p.key ?? employeeKey} />
 
               <div className="grid md:grid-cols-2 gap-4">
                 <Section title="الأدوات">

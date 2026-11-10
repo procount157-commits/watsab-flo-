@@ -201,3 +201,54 @@ Body: `{ "reason": "…" }` → `{ "proposal": Proposal }`.
 ## مسار المدير
 
 `GET /org/admin/overview` — `isAdmin` وحده، وإلا `403`: أعداد مجمّعة فقط (`accounts, employees, activeTasks, failedTasks, reports7d, proposalsPending`) بلا أسماء ولا محتوى حساب.
+
+## التذاكر وسجل الأفعال (`/org/tickets`)
+
+التذكرة هي `employee_tasks` نفسها بحقول العمل (لا جدول مكرر؛ `/org/tasks` يعمل كما كان). كل فعلٍ له معنى سطرٌ في `ticket_action_events`: كل قرار بوابة (سُمح أو رُفض، إلا الفحص الثاني المسموح قبيل السلك)، كل تغيير حالة أو تكليف أو موافقة أو تعليق أو تسليم. نداءات النموذج لا تُنسخ: التذكرة تُربط بـ`employee_executions.task_id` وتلك بإيصالاتها. فعلٌ خارج أي تذكرة يُعلَّق على «سجل عمليات» يومي للموظف (`task_type = 'ops_daily'`)، يُفتح عند أول فعل ويُغلق في اليوم التالي بأعداده دليلاً. الأحداث تُحذف بعد ٩٠ يوماً. كل المسارات `requireAuth` ومقيَّدة بحساب الجلسة: رقم تذكرة حسابٍ آخر `404`.
+
+**Ticket** (يمتد على Task في `/org/tasks`):
+
+```jsonc
+{
+  "taskId": 12, "status": "draft|pending|queued|running|waiting_for_dependency|waiting_for_approval|waiting_for_owner|blocked|completed|failed|cancelled|expired",
+  "title": "…", "objective": "…", "description": "…",
+  "assignedTo": "email.copywriter",            // مفتاح موظف، لا اسم عرض
+  "ownerRole": "email", "department": "email",
+  "createdBy": { "kind": "owner|employee|system", "id": "7|executive.ceo|ledger" },
+  "related": { "customerId": null, "campaignId": null, "conversationId": null },
+  "actionType": "send_message", "taskType": "…",
+  "priority": 50, "priorityLevel": "critical|high|normal|low",   // ≤25 حرجة، ≤75 عالية، ≤150 عادية، وإلا منخفضة
+  "inputRefs": {}, "expectedOutput": "…", "actualOutput": {}, "evidence": [{ "type": "gate_event|execution|message_id|…", "id": 5 }],
+  "attemptCount": 1, "durationMs": 830, "failureReason": null, "failureCode": null, "retryable": null, "responsibleParty": null, "nextAction": null,
+  "handoffTarget": "email.director", "parentTaskId": null, "auditEventIds": [101, 102],
+  "approvalPayloadHash": "sha256…", "approvedPayloadHash": "sha256…", "approvedBy": 7, "approvedAt": "…",
+  "dueAt": "…", "overdue": false,
+  "payloadHash": "sha256…"                     // بصمة الحمولة الحاضرة الآن: ترسلها الموافقة
+}
+```
+
+### القراءة
+
+| المسار | الوصف |
+|---|---|
+| `GET /org/tickets?status=a,b&department=&employee=<key>&priority=&overdue=1&approval=1&q=&parent=&ops=1&limit=&offset=` | `{ tickets: Ticket[], total }`. السجلات اليومية مخفية إلا بـ`ops=1`. حالة أو أولوية مجهولة `400` |
+| `GET /org/tickets/inbox` | `{ approvals, waitingForOwner, escalations, counts }`. التصعيد: المحجوبة، الميتة في ١٤ يوماً، المتأخرة من الحرجة والعالية |
+| `GET /org/tickets/queues` | `{ departments: [{ department, open, overdue, byStatus }] }` |
+| `GET /org/tickets/graph?root=<id>` | `{ nodes: [{ id, title, status, assignedTo, priority, overdue, department }], edges: [{ from, to, kind: "dependency"\|"child" }] }`. `from` يسبق `to` |
+| `GET /org/tickets/employees/:key` | `{ employeeKey, role, counts, tickets }`. مفتاح مجهول `404` |
+| `GET /org/tickets/:id` | `{ ticket, parent, children, dependsOn, dependents, events, timeline, executions, evidence, control }`. `timeline` يدمج الأحداث وسجل التدقيق، الأحدث أولاً. `control` حال مفتاح التذكرة |
+
+### الأفعال (كلها `POST`، الجواب `{ ok: true, ticket }`؛ الرفض `{ error, code }`)
+
+| المسار | Body | ملاحظات |
+|---|---|---|
+| `/org/tickets` | `{ title, objective?, description?, priority?, actionType?, expectedOutput?, dueAt?, assignTo?, idempotencyKey? }` | `201`؛ تبدأ `draft`، و`assignTo` يكلّفها فوراً. المفتاح نفسه يعيدها (`200`, `duplicate: true`) |
+| `/:id/assign`, `/:id/reassign` | `{ employeeKey, reason? }` | مفتاح بعينه فقط (`email.copywriter`، `custom.<role>` إن كان في الحساب). اسم عرض أو دور أو قسم: `400 invalid_assignee`. لا يُكلَّف ما يعمل الآن أو أُغلق: `409` |
+| `/:id/comment` | `{ text }` | سطرٌ في السجل |
+| `/:id/approve` | `{ payloadHash }` | **إلزامية** وتساوي `payloadHash` المعروضة. تغيّرت الحمولة منذ عُرضت: `409 payload_changed`. والعامل لا ينفّذ إلا ما تطابق بصمته المعتمدة؛ وإلا تعود `waiting_for_approval` بـ`failureCode: payload_changed` |
+| `/:id/reject` | `{ reason? }` | لما ينتظر موافقة، وإلا `409` |
+| `/:id/pause` | `{ reason? }` | يضع مفتاح التذكرة (`org_controls` scope `task`, target رقمها) وتصير `blocked`. `runAs` والبوابة يرفضان عملها فوراً، حتى في الجولة المعفاة |
+| `/:id/cancel` | `{ reason? }` | المفتاح نفسه + `cancelled`، وما يعتمد عليها يُلغى. يصحّ والتذكرة تعمل |
+| `/:id/reopen` | `{ reason? }` | للمغلقة والمحجوبة: يرفع المفتاح، عدّاد جديد، `queued` (أو `draft` إن لم تُكلَّف، أو `waiting_for_approval` إن كانت مرفوضة) |
+
+الحالات الجديدة في `/org/tasks` أيضاً. `org_controls` يقبل `scope: "task"`؛ `PUT /org/controls` لم يتغيّر ولا يضعه (التذاكر تضعه). الإغلاق مكتملاً من الشيفرة (`closeTicket`) يتطلب `actualOutput` ودليلاً من نوع الفعل؛ الفشل والحجب يتطلبان السبب وهل يُعاد والمسؤول والحل المقترح.

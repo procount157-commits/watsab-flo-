@@ -18,6 +18,7 @@ import { adminOverview, listReports, runCeoDaily } from "../lib/org/ceo";
 import { readiness } from "../lib/org/readiness";
 import { approveProposal, createProposal, getProposal, listProposals, ProposalRefused, rejectProposal, rollbackProposal } from "../lib/org/proposals";
 import { providerReport } from "../lib/org/providers";
+import { employeeOfTarget, shadowSummary } from "../lib/org/shadow";
 
 const router = Router();
 router.use(requireAuth);
@@ -220,7 +221,9 @@ router.get("/proposals/:id", async (req, res) => {
   if (id == null) return;
   const proposal = await getProposal(req.session.userId!, id);
   if (!proposal) return res.status(404).json({ error: "ليس لهذا الحساب" });
-  res.json({ proposal });
+  // الظل (lib/org/shadow.ts): آخر مقارنة للتعليمات المقترحة على مدخلات الحساب، وإنذاراتها.
+  const key = employeeOfTarget(proposal.target);
+  res.json({ proposal, shadow: key ? await shadowSummary(req.session.userId!, { proposalId: id }) : null });
 });
 router.post("/proposals/:id/approve", async (req, res) => {
   const id = proposalId(req, res);

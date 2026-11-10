@@ -21,6 +21,7 @@ import { dialectOf } from "../reply-brain";
 import { receipt } from "./receipts";
 import { logger } from "../logger";
 import { AD_PREFILL } from "../ad-prefill";
+import { simPersona } from "../org/simulation";
 
 export const REVIEW_ROLE = "collector";
 const REVIEW_CONCURRENCY = 3;
@@ -99,6 +100,8 @@ export async function reviewOne(userId: number, phone: string, vertical: string 
   const transcript = turns.map(line).join("\n");
   const out = await asAgent(userId, REVIEW_ROLE, () => complete([
     { role: "system", content: [
+      // الظل: التعليمات المقترحة لريم تسبق القواعد؛ خارج المحاكاة لا يُضاف شيء.
+      ...[simPersona(REVIEW_ROLE)].filter((x): x is string => !!x),
       `أنت ريم، محللة بيانات ${vertical === "jewelry" ? "في محل ذهب ومجوهرات" : "في شركة خدمات"}. تقرئين محادثة واتساب كاملة وتصنّفين العميل من كلامه هو، لا من كلامنا.`,
       "أجيبي بـ JSON واحد فقط بلا أي نص خارجه:",
       `{"label": "<${Object.keys(LABELS).join("|")}>", "score": <0-100 قربه من الشراء>, "piece": "<القطعة أو الخدمة التي يريدها إن ذُكرت، وإلا null>", "summary": "<سطر واحد كما تكتبه موظفة لزميلتها: من هو وماذا يريد>", "next": "<الخطوة التالية في سطر: ماذا نرسل له ومتى>"}`,

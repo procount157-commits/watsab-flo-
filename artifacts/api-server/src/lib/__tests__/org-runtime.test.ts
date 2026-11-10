@@ -103,7 +103,7 @@ const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const mig = norm(readFileSync(join(here, "../../../../../lib/db/migrations/073_org_runtime.sql"), "utf8"));
 check("073 يحمل كل ما عند الإقلاع", ORG_RUNTIME_SQL.every((q) => mig.includes(norm(q))));
 
-if (!/127\.0\.0\.1:(55439|55440)/.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55439|55440|55441|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`\n${pass} نجح، ${fail} فشل (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }
@@ -401,7 +401,9 @@ check("بعد المراجعة تعود بالموافقة", appr?.status === "q
 // الاحتفاظ.
 await db.execute(sql`INSERT INTO employee_executions (user_id, employee_key, status, started_at) VALUES (${A}, 'old', 'succeeded', now() - interval '31 days'), (${A}, 'new', 'succeeded', now() - interval '29 days')`);
 await db.execute(sql`INSERT INTO execution_events (user_id, event, created_at) VALUES (${A}, 'old', now() - interval '31 days'), (${A}, 'new', now() - interval '29 days')`);
+const [oldDone] = (await db.execute<any>(sql`INSERT INTO employee_tasks (user_id, owner_role, task_type, status, updated_at, created_at) VALUES (${A}, 'email', 'retention_probe', 'completed', now() - interval '400 days', now() - interval '400 days') RETURNING task_id`)).rows;
 const kept = await W.orgRetention();
+check("الاحتفاظ لا يحذف التذاكر المغلقة القديمة", (await rows(sql`SELECT 1 FROM employee_tasks WHERE task_id = ${oldDone.task_id}`)).length === 1);
 check("الاحتفاظ: ٣٠ يوماً للتنفيذ والأحداث", kept.executions >= 1 && kept.events >= 1 && (await rows(sql`SELECT 1 FROM employee_executions WHERE employee_key = 'old'`)).length === 0 && (await rows(sql`SELECT 1 FROM employee_executions WHERE employee_key = 'new'`)).length === 1 && (await rows(sql`SELECT 1 FROM execution_events WHERE event = 'new'`)).length === 1);
 
 // ── الدرس المعلّق لا يصل prompt ──

@@ -10,6 +10,7 @@ import { logger } from "../logger";
 import { MISSED_FACTOR, backfillRegistry } from "./registry";
 import { expireTasks, reclaimExpiredLeases } from "./tasks";
 import { ensureOrgTables } from "./schema";
+import { ledgerMaintenance } from "./ledger";
 
 export type FindingKind = "missed_heartbeat" | "lease_requeued" | "lease_needs_review" | "lease_dead_letter" | "stuck_execution" | "repeated_failures" | "queue_age" | "waiting_too_long" | "duplicate_task" | "duplicate_execution";
 export interface Finding { userId: number | null; kind: FindingKind; subject: string; severity: "warn" | "critical"; detail: string; ref?: Record<string, unknown> }
@@ -35,7 +36,7 @@ export async function watchdogFindings(userId?: number): Promise<Finding[]> {
       WHERE ((status = 'waiting_for_approval' AND updated_at < now() - make_interval(days => ${WAIT_APPROVAL_DAYS}))
         OR (status = 'waiting_for_dependency' AND updated_at < now() - make_interval(days => ${WAIT_DEPENDENCY_DAYS}))) ${scope()} LIMIT 100`),
     db.execute<any>(sql`SELECT user_id, owner_role, task_type, count(*)::int AS n FROM employee_tasks
-      WHERE status IN ('queued','running','waiting_for_dependency','waiting_for_approval') ${scope()} GROUP BY user_id, owner_role, task_type, md5(input_refs::text) HAVING count(*) > 1 LIMIT 100`),
+      WHERE status IN ('queued','running','waiting_for_dependency','waiting_for_approval') AND task_type <> 'ops_daily' ${scope()} GROUP BY user_id, owner_role, task_type, md5(input_refs::text) HAVING count(*) > 1 LIMIT 100`),
     db.execute<any>(sql`SELECT user_id, employee_key, kind, count(*)::int AS n FROM employee_executions WHERE status = 'running' AND started_at > now() - interval '1 day' AND task_id IS NULL ${scope()}
       GROUP BY user_id, employee_key, kind HAVING count(*) > 1 LIMIT 100`),
   ]);
@@ -85,19 +86,21 @@ export async function watchdogRound(): Promise<{ findings: Finding[]; raised: nu
 // ── الاحتفاظ ──────────────────────────────────────────────────────
 export const EXECUTIONS_KEEP_DAYS = 30;
 export const EVENTS_KEEP_DAYS = 30;
+/** لسجلات workflow_executions. التذاكر نفسها لا تُحذف. */
 export const TASKS_KEEP_DAYS = 90;
 export const PROVIDER_METRICS_KEEP_DAYS = 180;
 const BATCH = 2000;
 
-/** يُحذف ما فات مهلته دفعاتٍ صغيرة، فلا قفل طويل على VPS متواضع. */
-export async function orgRetention(): Promise<{ executions: number; events: number; tasks: number; workflows: number; providerMetrics: number }> {
+/** يُحذف ما فات مهلته دفعاتٍ صغيرة، فلا قفل طويل على VPS متواضع.
+ * التذاكر (employee_tasks) تبقى أبداً: يُحذف سجل أفعالها وحده بعد ٩٠ يوماً (ledgerMaintenance). */
+export async function orgRetention(): Promise<{ executions: number; events: number; ticketEvents: number; workflows: number; providerMetrics: number }> {
   const chunks = async (q: () => ReturnType<typeof db.execute>) => { let n = 0; for (let i = 0; i < 20; i++) { const r = await q(); n += r.rowCount ?? 0; if ((r.rowCount ?? 0) < BATCH) break; } return n; };
   const executions = await chunks(() => db.execute(sql`DELETE FROM employee_executions WHERE id IN (SELECT id FROM employee_executions WHERE started_at < now() - make_interval(days => ${EXECUTIONS_KEEP_DAYS}) AND status <> 'running' LIMIT ${BATCH})`));
   const events = await chunks(() => db.execute(sql`DELETE FROM execution_events WHERE id IN (SELECT id FROM execution_events WHERE created_at < now() - make_interval(days => ${EVENTS_KEEP_DAYS}) LIMIT ${BATCH})`));
-  const tasks = await chunks(() => db.execute(sql`DELETE FROM employee_tasks WHERE task_id IN (SELECT task_id FROM employee_tasks WHERE status IN ('completed','cancelled','expired','failed') AND updated_at < now() - make_interval(days => ${TASKS_KEEP_DAYS}) LIMIT ${BATCH})`));
+  const ticketEvents = (await ledgerMaintenance().catch((err) => { logger.warn({ err: String(err?.message ?? err).slice(0, 200) }, "صيانة سجل التذاكر فشلت"); return { deleted: 0 }; })).deleted;
   const workflows = await chunks(() => db.execute(sql`DELETE FROM workflow_executions WHERE id IN (SELECT id FROM workflow_executions WHERE started_at < now() - make_interval(days => ${TASKS_KEEP_DAYS}) AND status <> 'running' LIMIT ${BATCH})`));
   const providerMetrics = await chunks(() => db.execute(sql`DELETE FROM provider_metrics WHERE id IN (SELECT id FROM provider_metrics WHERE day < to_char(now() - make_interval(days => ${PROVIDER_METRICS_KEEP_DAYS}), 'YYYY-MM-DD') LIMIT ${BATCH})`));
-  return { executions, events, tasks, workflows, providerMetrics };
+  return { executions, events, ticketEvents, workflows, providerMetrics };
 }
 
 let timer: NodeJS.Timeout | null = null;

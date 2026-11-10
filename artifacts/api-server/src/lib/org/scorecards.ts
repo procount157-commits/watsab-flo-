@@ -17,6 +17,7 @@ import { employeeKeyOf, intervalOf } from "./departments";
 import { ensureOrgTables } from "./schema";
 import { FREE_MAIL } from "../email/service";
 import { MIN_SAMPLE as RESULTS_MIN_SAMPLE, SCALE_RATE } from "../email/results";
+import { REAL_TASK } from "./sim-schema";
 
 export const INSUFFICIENT = "INSUFFICIENT DATA" as const;
 export type ScoreStatus = "OK" | typeof INSUFFICIENT;
@@ -208,7 +209,7 @@ async function generalMetrics(userId: number, role: string, key: string, w: Wind
     `تنفيذات ناجحة ${n(ex?.ok)} ÷ منتهية ${total} (employee_executions، بلا الموقوف).`, { employee_executions: ids(ex?.ids) });
 
   const [dl] = (await db.execute<any>(sql`SELECT count(*)::int AS deadlines, count(*) FILTER (WHERE status = 'expired')::int AS missed, (array_agg(task_id ORDER BY task_id DESC) FILTER (WHERE status = 'expired'))[1:${EVIDENCE_CAP}] AS ids
-    FROM employee_tasks WHERE user_id = ${userId} AND owner_role = ${role} AND expires_at >= ${w.from} AND expires_at < ${w.to}`)).rows;
+    FROM employee_tasks WHERE user_id = ${userId} AND owner_role = ${role} AND expires_at >= ${w.from} AND expires_at < ${w.to} AND ${REAL_TASK}`)).rows;
   const [hb] = (await db.execute<any>(sql`SELECT count(*)::int AS missed, (array_agg(id ORDER BY id DESC))[1:${EVIDENCE_CAP}] AS ids FROM org_audit_log
     WHERE user_id = ${userId} AND action = 'watchdog.finding' AND kind = 'missed_heartbeat' AND meta->>'subject' = ${key} AND created_at >= ${w.from} AND created_at < ${w.to}`)).rows;
   const [days] = (await db.execute<any>(sql`SELECT count(DISTINCT (started_at at time zone 'Asia/Dubai')::date)::int AS n FROM employee_executions WHERE user_id = ${userId} AND employee_key = ${key} AND started_at >= ${w.from} AND started_at < ${w.to}`)).rows;
@@ -419,7 +420,7 @@ async function researcherMetrics(userId: number, role: string, w: Window): Promi
 
 async function operationsMetrics(userId: number, role: string, key: string, w: Window): Promise<Metric[]> {
   const [t] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE status = 'completed')::int AS done, count(*) FILTER (WHERE status IN ('failed','expired'))::int AS bad, (array_agg(task_id ORDER BY task_id DESC) FILTER (WHERE status IN ('failed','expired')))[1:${EVIDENCE_CAP}] AS ids
-    FROM employee_tasks WHERE user_id = ${userId} AND owner_role = ${role} AND updated_at >= ${w.from} AND updated_at < ${w.to} AND status IN ('completed','failed','expired')`)).rows;
+    FROM employee_tasks WHERE user_id = ${userId} AND owner_role = ${role} AND updated_at >= ${w.from} AND updated_at < ${w.to} AND status IN ('completed','failed','expired') AND ${REAL_TASK}`)).rows;
   const closed = n(t?.done) + n(t?.bad);
   const completion = buildMetric({ key: "task_completion", label: "إنجاز المهام", weight: 25, minSample: 5 }, closed, closed ? n(t.done) / closed : null, closed ? (n(t.done) / closed) * 100 : null,
     `أُنجز ${n(t?.done)} من ${closed} مهمة أُغلقت.`, { employee_tasks: ids(t?.ids) });

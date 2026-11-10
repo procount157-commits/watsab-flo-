@@ -32,6 +32,7 @@ import { asLanguage, languageRule } from "./language";
 import { INTENSITY, FOLLOW_PROMPT, asIntensity } from "./intensity";
 import { isShop } from "./seed";
 import { markUsed, writerGuidance } from "../org/handoffs";
+import { dryRun, personaFor } from "../org/simulation";
 
 export const EMAIL_ROLE = "email";
 const KNOWLEDGE = "knowledge";
@@ -144,7 +145,7 @@ async function voice(userId: number) {
     agent, profile,
     head: [
       `اسمك ${agent.name}${agent.title ? `، ${agent.title}` : ""}.`,
-      agent.persona ?? "",
+      personaFor(EMAIL_ROLE, agent.persona) ?? "",
       profile?.name ? `تعملين لدى ${profile.name}${profile.industry ? ` — ${profile.industry}` : ""}.` : "",
       profile?.description ? `عن الشركة: ${profile.description}` : "",
       profile?.guardrails ? `ما لا يُقال أبداً: ${profile.guardrails}` : "",
@@ -435,7 +436,8 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
   const draft = parseDraft(out.text);
   if (!draft) { logger.warn({ userId, sample: out.text.slice(0, 300) }, "مسودة نورة لم تُقرأ"); return null; }
   // كُتبت بها فعلاً: الآن فقط تُعدّ مستعملة.
-  for (const id of guidance.taskIds) await markUsed(userId, id, { by: input.role ?? "email", subject: draft.subjects[0] ?? null }).catch(() => {});
+  // المحاكاة لا تستهلك توجيهاً حقيقياً (lib/org/simulation.ts).
+  if (!dryRun()) for (const id of guidance.taskIds) await markUsed(userId, id, { by: input.role ?? "email", subject: draft.subjects[0] ?? null }).catch(() => {});
   // A button's link: WhatsApp with the request written, else the website, else a reply.
   const s = await getSettings(userId).catch(() => null);
   const wa = (s?.phone ?? "").replace(/\D/g, "");

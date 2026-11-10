@@ -18,6 +18,7 @@
 // competent employee behaves in any of them.
 
 import { charterBlock } from "./roles/charters";
+import { personaFor } from "./org/simulation";
 
 export type Channel = "whatsapp" | "email" | "social" | "groups" | "proposal" | "internal";
 
@@ -142,7 +143,7 @@ export type CoreInput = {
 export function corePrompt(i: CoreInput): string {
   return [
     i.identity,
-    i.persona ?? "",
+    personaFor(i.role, i.persona) ?? "",
     i.firm ? `الشركة: ${i.firm}` : "",
     i.role ? `\n${charterBlock(i.role)}` : "",
     "",

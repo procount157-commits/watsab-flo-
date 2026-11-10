@@ -59,6 +59,10 @@ import { registerOrgHandlers } from "./lib/org/handoffs";
 import { startTaskWorker } from "./lib/org/tasks";
 import { startWatchdog } from "./lib/org/watchdog";
 import { startCeoAgent } from "./lib/org/ceo";
+import { startShadowJob } from "./lib/org/shadow";
+import { ensureSimTables } from "./lib/org/sim-schema";
+import { ensureTicketTables } from "./lib/org/ledger";
+import { startOrgDocs } from "./lib/org/docs/dossier";
 import { seedAllPromptProposals } from "./lib/org/proposals";
 
 // ── Process-level crash guard ─────────────────────────────────────
@@ -155,6 +159,8 @@ function startListening() {
     startTaskWorker();
     startWatchdog();
     startCeoAgent();
+    // الظل: أيام العمل 06:30 دبي، يقارن ولا يفعّل شيئاً ولا يرسل.
+    startShadowJob();
     // بعد أن يوظّف كلٌّ فريقه (ensureEmailAgent بعد ٢٥ ثانية).
     setTimeout(() => void backfillRegistry().catch((err) => logger.warn({ err: String(err?.message ?? err) }, "تعذّر ملء سجل الموظفين")), 45_000);
     // مقترحات معلّقة فقط: لا يُفعَّل شيء عند الإقلاع.
@@ -263,7 +269,7 @@ function startListening() {
 // The new columns on bot_employees and agent_memory are in the Drizzle schema, so
 // no query may run before they exist. Bounded: a lock that never clears must not
 // keep the server down; sends and model calls fail closed until the tables are there.
-void Promise.race([ensureOrgTables(), new Promise((r) => setTimeout(r, 30_000))]).finally(startListening);
+void Promise.race([ensureOrgTables().then(() => ensureTicketTables()).then(() => ensureSimTables()).then(() => startOrgDocs()), new Promise((r) => setTimeout(r, 30_000))]).finally(startListening);
 
 // ── Global Connection Guardian ────────────────────────────────────────
 // Second safety net on top of the per-instance watchdog.

@@ -31,7 +31,7 @@ export default function ReadinessTab() {
             <>
               <div className={cn(card, "p-4 flex items-center gap-3 flex-wrap")}>
                 <Pill map={READINESS} value={d.status} />
-                <span className="text-xs text-muted-foreground">جاهز {num(count("READY"))} · محجوب {num(count("BLOCKED"))} · يحتاج اختباراً {num(count("NEEDS_TEST"))}</span>
+                <span className="text-xs text-muted-foreground">جاهز {num(count("READY"))} · محجوب {num(count("BLOCKED"))} · يحتاج اختباراً {num(count("NEEDS_TEST"))}{count("OPTIONAL") ? ` · متوقف عمداً ${num(count("OPTIONAL"))} (لا يُحسب محجوباً)` : ""}</span>
                 <span className="text-[10px] text-muted-foreground" title={when(d.checkedAt)}>{d.verified ? "فحص حي" : "بلا اتصال"} · {ago(d.checkedAt)}</span>
                 <button className={cn(ghost, "mr-auto")} disabled={q.isFetching} onClick={check}>
                   {q.isFetching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Stethoscope className="w-3 h-3" />} فحص حي (بلا إرسال)

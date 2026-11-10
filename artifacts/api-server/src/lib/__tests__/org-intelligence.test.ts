@@ -112,7 +112,7 @@ const row = V.providerRow({ task_type: "t", provider: "p", model: "m", calls: 4,
 check("سطر المزوّد: كلفة غير معروفة null، وحارس بلا عيّنة null", row.costUsd === null && row.guardPassRate === null && row.successRate === 0.75 && row.avgLatencyMs === 100);
 
 // ── على قاعدة الاختبار ───────────────────────────────────────────
-if (!/127\.0\.0\.1:55440/.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55440|55441|55442|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`\n${pass} passed, ${fail} failed (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }

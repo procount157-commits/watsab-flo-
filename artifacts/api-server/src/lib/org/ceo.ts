@@ -23,6 +23,7 @@ import { WAIT_APPROVAL_DAYS, watchdogFindings } from "./watchdog";
 import { lessonOutcome } from "./memory";
 import { dubaiNow } from "../accounts/pure";
 import { queueReview } from "./queue";
+import { ensureSimTables, REAL_TASK } from "./sim-schema";
 
 export const CEO_ROLE = "ceo_agent";
 export const CEO_KEY = "executive.ceo";
@@ -137,11 +138,52 @@ export function bestDepartment(ds: DepartmentFact[]) {
   const top = ds.filter((d) => (d.outcome ?? 0) > 0).sort((a, b) => b.outcome! - a.outcome!)[0];
   return top ? { department: top.department, value: top.outcome!, basis: top.outcomeLabel ?? "" } : null;
 }
-/** أكثر قسمٍ استهلاكاً بلا نتيجة. Pure. */
+/**
+ * أكثر قسمٍ استهلاكاً بلا نتيجة. Pure. قسمٌ لا نتيجة تجارية له بطبيعته (المشترك، التنفيذي:
+ * outcomeLabel فارغ) لا يُحكم عليه بالهدر: عمله خدمة غيره، لا ردود ولا اجتماعات.
+ */
 export function wastefulDepartment(ds: DepartmentFact[]) {
-  const top = ds.filter((d) => d.tokens >= WASTE_MIN_TOKENS && !d.outcome).sort((a, b) => b.tokens - a.tokens)[0];
+  const top = ds.filter((d) => d.outcomeLabel != null && d.tokens >= WASTE_MIN_TOKENS && !d.outcome).sort((a, b) => b.tokens - a.tokens)[0];
   return top ? { department: top.department, tokens: top.tokens, calls: top.calls, costUsd: top.costUsd, outcome: top.outcome ?? 0 } : null;
 }
+
+// ── حقول §8: بالكود وحده ───────────────────────────────────────────
+export interface VerifiedMetric { key: string; value: number | null; source: string; windowDays: number; note?: string }
+/** الأرقام التي جاءت من صفوف، بمصدرها. نسبةٌ بلا عيّنتها الدنيا null لا صفر. Pure. */
+export function verifiedMetrics(p: FactPack): VerifiedMetric[] {
+  const w = p.windowDays;
+  const m = (key: string, value: number | null, source: string, note?: string): VerifiedMetric => ({ key, value, source, windowDays: w, ...(note ? { note } : {}) });
+  return [
+    m("emails_sent", p.activity.emailsSent, "email_messages.sent_at"),
+    m("positive_replies", p.outcomes.positiveReplies, "email_inbound.intent"),
+    m("companies_positive", p.outcomes.companiesPositive, "email_inbound.from_email (نطاق)"),
+    m("qualified_leads", p.outcomes.qualifiedLeads, "conversation_reviews.label"),
+    m("meetings", p.outcomes.meetings, "target_accounts.meeting_at"),
+    m("bounced", p.outcomes.bounced, "email_messages.bounced_at"),
+    m("bounce_rate", p.outcomes.bounceRate, "email_messages", p.outcomes.bounceRate == null ? `أقل من ${BOUNCE_ALERT_MIN} رسالة: لا نسبة` : undefined),
+    m("wa_sends", p.activity.waSends, "wa_firewall_sends"),
+    m("executions", p.activity.executions, "employee_executions"),
+    m("tasks_closed", p.activity.tasksClosed, "employee_tasks (بلا تذاكر المحاكاة)"),
+  ];
+}
+export interface DataGap { key: string; detail: string }
+/** ما لا تكفي له البيانات، مسمّى. Pure. */
+export function dataGaps(p: FactPack): DataGap[] {
+  const out: DataGap[] = [];
+  if (p.thin) out.push({ key: "thin", detail: `أقل من ${THIN_ACTIVITY} عملاً في ${p.windowDays} أيام` });
+  if (p.outcomes.bounceRate == null) out.push({ key: "bounce_rate", detail: `أقل من ${BOUNCE_ALERT_MIN} رسالة بريد: نسبة الارتداد غير محسوبة` });
+  for (const d of p.departments) if (d.executions > 0 && d.successRate == null) out.push({ key: `success_rate:${d.department}`, detail: `قسم ${d.department}: ${d.executions} تنفيذ، أقل من ١٠ لنسبة نجاح` });
+  for (const k of p.noExecutionEmployees) out.push({ key: `no_execution:${k}`, detail: `${k} بلا تنفيذ مسجَّل` });
+  for (const c of p.channels) if (["unknown", "no_session", "no_account", "no_driver"].includes(c.state)) out.push({ key: `channel:${c.channel}`, detail: `قناة ${c.channel}: ${c.state}` });
+  return out;
+}
+/** ثقة التقرير: قليل الوقائع منخفض، وكثير الفجوات أو نصٌّ لم يُتحقق منه متوسط. Pure. */
+export function reportConfidence(p: FactPack, gaps: DataGap[], status: string): "low" | "medium" | "high" {
+  if (p.thin || gaps.length >= 6) return "low";
+  if (gaps.length >= 3 || status !== "validated") return "medium";
+  return "high";
+}
+export interface OverdueTicket { taskId: number; ownerRole: string; taskType: string; status: string; dueAt: unknown; expiresAt: unknown }
 
 export async function collectFacts(userId: number, now = new Date()): Promise<FactPack> {
   const days = 7, from = new Date(now.getTime() - days * 86_400_000);
@@ -156,7 +198,7 @@ export async function collectFacts(userId: number, now = new Date()): Promise<Fa
   const [wa] = (await db.execute<any>(sql`SELECT count(*)::int AS n FROM wa_firewall_sends WHERE user_id = ${userId} AND at >= ${from}`)).rows;
   const [leads] = (await db.execute<any>(sql`SELECT count(*)::int AS n FROM conversation_reviews WHERE user_id = ${userId} AND label IN ${LEAD_LABELS} AND reviewed_at >= ${from}`)).rows;
   const [meet] = (await db.execute<any>(sql`SELECT count(*)::int AS n FROM target_accounts WHERE user_id = ${userId} AND meeting_at >= ${from}`)).rows;
-  const [closed] = (await db.execute<any>(sql`SELECT count(*)::int AS n FROM employee_tasks WHERE user_id = ${userId} AND status IN ('completed','failed') AND updated_at >= ${from}`)).rows;
+  const [closed] = (await db.execute<any>(sql`SELECT count(*)::int AS n FROM employee_tasks WHERE user_id = ${userId} AND status IN ('completed','failed') AND updated_at >= ${from} AND ${REAL_TASK}`)).rows;
 
   // ما استهلكه كل قسم: توكنات الإيصالات، ونداءات llm_usage، وتجمعان بالدور إلى القسم.
   const receiptRows = (await db.execute<any>(sql`SELECT node, coalesce(sum(tokens_in), 0)::bigint + coalesce(sum(tokens_out), 0)::bigint AS tokens FROM receipts WHERE user_id = ${userId} AND action = 'llm.call' AND at >= ${from} GROUP BY node`)).rows;
@@ -184,7 +226,7 @@ export async function collectFacts(userId: number, now = new Date()): Promise<Fa
   });
 
   const findings = await watchdogFindings(userId);
-  const overdue = (await db.execute<any>(sql`SELECT owner_role, count(*)::int AS n FROM employee_tasks WHERE user_id = ${userId} AND ((status IN ('queued','pending','waiting_for_dependency') AND expires_at IS NOT NULL AND expires_at <= now()) OR (status = 'expired' AND updated_at >= ${from}) OR (status = 'running' AND lease_expires_at <= now())) GROUP BY 1`)).rows
+  const overdue = (await db.execute<any>(sql`SELECT owner_role, count(*)::int AS n FROM employee_tasks WHERE user_id = ${userId} AND ${REAL_TASK} AND ((status IN ('queued','pending','waiting_for_dependency') AND expires_at IS NOT NULL AND expires_at <= now()) OR (status = 'expired' AND updated_at >= ${from}) OR (status = 'running' AND lease_expires_at <= now())) GROUP BY 1`)).rows
     .map((r: any) => ({ employeeKey: employeeKeyOf(r.owner_role), overdue: num(r.n) }));
   for (const f of findings.filter((x) => x.kind === "missed_heartbeat")) {
     const hit = overdue.find((o: any) => o.employeeKey === f.subject);
@@ -216,7 +258,7 @@ export async function collectFacts(userId: number, now = new Date()): Promise<Fa
     { channel: "linkedin", state: "no_driver", sent: 0, positive: null },
   ];
   const q = await queueReview(userId);
-  const [appr] = (await db.execute<any>(sql`SELECT count(*)::int AS n, count(*) FILTER (WHERE updated_at < now() - make_interval(days => ${WAIT_APPROVAL_DAYS}))::int AS old FROM employee_tasks WHERE user_id = ${userId} AND status = 'waiting_for_approval'`)).rows;
+  const [appr] = (await db.execute<any>(sql`SELECT count(*)::int AS n, count(*) FILTER (WHERE updated_at < now() - make_interval(days => ${WAIT_APPROVAL_DAYS}))::int AS old FROM employee_tasks WHERE user_id = ${userId} AND status = 'waiting_for_approval' AND ${REAL_TASK}`)).rows;
 
   const sent = num(mail?.sent), bounced = num(mail?.bounced);
   const bounceRate = sent >= BOUNCE_ALERT_MIN ? bounced / sent : null;
@@ -319,6 +361,10 @@ export async function issueRecommendations(userId: number, ranked: Problem[], no
       userId, ownerRole: p.owner, createdByRole: CEO_ROLE, taskType: "ceo_recommendation", approvalRequired: need, priority: p.severity === "critical" ? 20 : 60,
       input: { title: p.problem, why: p.why, category: p.category, baseline: p.metric, problemId: p.id },
       idempotencyKey: `ceo_rec:${weekKey(now)}:${hash(p.id)}`, expiresAt: new Date(now.getTime() + 14 * 86_400_000),
+      // المدير يكلّف بتذكرة: المكلَّف مفتاح موظف بعينه، ومنشئها المدير نفسه.
+      title: p.problem.slice(0, 300), objective: p.why, actionType: "ceo_recommendation", assignedTo: employeeKeyOf(p.owner),
+      createdBy: { kind: "employee", id: employeeKeyOf(CEO_ROLE) }, dueAt: new Date(now.getTime() + 7 * 86_400_000),
+      expectedOutput: "حركة المقياس المذكور في الأسبوع التالي (measureImprovements)",
     });
     const row = { title: p.problem, why: p.why, taskId: task.taskId, approvalRequired: need, category: p.category, evidence: p.metric };
     all.push(row);
@@ -369,9 +415,10 @@ export function improvementsVerdict(rows: ImprovementResult[]): "improved" | "wo
 // ── التقرير ───────────────────────────────────────────────────────
 export interface CeoRunResult { ran: boolean; reason?: string; report?: any }
 
-const REPORT_COLUMNS = sql`id, user_id AS account_id, period, period_key, created_at, narrative_status, executive_summary, thin_data, department_performance, employee_alerts, operational_risks, revenue_opportunities, resource_issues, top_priorities, recommended_actions, actions_requiring_approval, previous_improvement_results, answers`;
+const REPORT_COLUMNS = sql`id, user_id AS account_id, period, period_key, created_at, narrative_status, executive_summary, thin_data, department_performance, employee_alerts, operational_risks, revenue_opportunities, resource_issues, top_priorities, recommended_actions, actions_requiring_approval, previous_improvement_results, answers, verified_metrics, overdue_tickets, assigned_ticket_ids, data_gaps, confidence`;
 
 async function buildReport(userId: number, llm: typeof complete, now: Date) {
+  await ensureSimTables();
   const pack = await collectFacts(userId, now);
   const [emp] = (await db.execute<any>(sql`SELECT persona FROM bot_employees WHERE user_id = ${userId} AND role = ${CEO_ROLE}`)).rows;
   const narrative: Narrative = pack.thin
@@ -400,12 +447,23 @@ async function buildReport(userId: number, llm: typeof complete, now: Date) {
   const resources = waste ? [{ department: waste.department, tokens: waste.tokens, calls: waste.calls, costUsd: waste.costUsd, outcome: waste.outcome, detail: "يستهلك النموذج بلا نتيجة مقاسة" }] : [];
   const risks = findings.map((f) => ({ kind: f.kind, subject: f.subject, severity: f.severity, detail: f.detail }));
   const priorities = ranked.slice(0, 3).map((p, i) => ({ rank: i + 1, problem: p.problem, why: p.why, id: p.id }));
+  // §8: بالكود من الصفوف نفسها.
+  const overdueTickets: OverdueTicket[] = (await db.execute<any>(sql`SELECT task_id, owner_role, task_type, status, due_at, expires_at FROM employee_tasks WHERE user_id = ${userId} AND ${REAL_TASK}
+      AND ((due_at IS NOT NULL AND due_at < now() AND status NOT IN ('completed','cancelled','failed','expired')) OR (status = 'running' AND lease_expires_at <= now())
+        OR (expires_at IS NOT NULL AND expires_at <= now() AND status IN ('pending','queued','waiting_for_dependency','waiting_for_approval')))
+      ORDER BY coalesce(due_at, expires_at, lease_expires_at) LIMIT 20`)).rows
+    .map((r: any) => ({ taskId: Number(r.task_id), ownerRole: r.owner_role, taskType: r.task_type, status: r.status, dueAt: r.due_at, expiresAt: r.expires_at }));
+  const assignedTicketIds = rec.all.map((r) => Number(r["taskId"])).filter((x) => Number.isFinite(x));
+  const gaps = dataGaps(pack);
+  const confidence = reportConfidence(pack, gaps, narrative.status);
   const [row] = (await db.execute<any>(sql`INSERT INTO executive_reports (user_id, period, period_key, body, metrics, created_by, executive_summary, narrative_status, thin_data, department_performance, employee_alerts, operational_risks,
-      revenue_opportunities, resource_issues, top_priorities, recommended_actions, actions_requiring_approval, previous_improvement_results, answers)
-    VALUES (${userId}, ${period}, ${periodKey}, ${summary ?? factsBody(pack)}, ${J(pack)}, ${CEO_ROLE}, ${summary}, ${narrative.status}, ${pack.thin}, ${J(pack.departments)}, ${J(alerts)}, ${J(risks)}, ${J(opportunities)}, ${J(resources)}, ${J(priorities)}, ${J(rec.all)}, ${J(rec.approval)}, ${J(improvements)}, ${J(answers)})
+      revenue_opportunities, resource_issues, top_priorities, recommended_actions, actions_requiring_approval, previous_improvement_results, answers, verified_metrics, overdue_tickets, assigned_ticket_ids, data_gaps, confidence)
+    VALUES (${userId}, ${period}, ${periodKey}, ${summary ?? factsBody(pack)}, ${J(pack)}, ${CEO_ROLE}, ${summary}, ${narrative.status}, ${pack.thin}, ${J(pack.departments)}, ${J(alerts)}, ${J(risks)}, ${J(opportunities)}, ${J(resources)}, ${J(priorities)}, ${J(rec.all)}, ${J(rec.approval)}, ${J(improvements)}, ${J(answers)},
+      ${J(verifiedMetrics(pack))}, ${J(overdueTickets)}, ${J(assignedTicketIds)}, ${J(gaps)}, ${confidence})
     ON CONFLICT (user_id, period, period_key) DO UPDATE SET body = EXCLUDED.body, metrics = EXCLUDED.metrics, executive_summary = EXCLUDED.executive_summary, narrative_status = EXCLUDED.narrative_status, thin_data = EXCLUDED.thin_data,
       department_performance = EXCLUDED.department_performance, employee_alerts = EXCLUDED.employee_alerts, operational_risks = EXCLUDED.operational_risks, revenue_opportunities = EXCLUDED.revenue_opportunities, resource_issues = EXCLUDED.resource_issues,
-      top_priorities = EXCLUDED.top_priorities, recommended_actions = EXCLUDED.recommended_actions, actions_requiring_approval = EXCLUDED.actions_requiring_approval, previous_improvement_results = EXCLUDED.previous_improvement_results, answers = EXCLUDED.answers, created_at = now()
+      top_priorities = EXCLUDED.top_priorities, recommended_actions = EXCLUDED.recommended_actions, actions_requiring_approval = EXCLUDED.actions_requiring_approval, previous_improvement_results = EXCLUDED.previous_improvement_results, answers = EXCLUDED.answers,
+      verified_metrics = EXCLUDED.verified_metrics, overdue_tickets = EXCLUDED.overdue_tickets, assigned_ticket_ids = EXCLUDED.assigned_ticket_ids, data_gaps = EXCLUDED.data_gaps, confidence = EXCLUDED.confidence, created_at = now()
     RETURNING ${REPORT_COLUMNS}`)).rows;
   return row;
 }
@@ -421,6 +479,7 @@ export async function runCeoDaily(userId: number, o: { llm?: typeof complete; no
 
 export async function listReports(userId: number, limit = 30): Promise<any[]> {
   await ensureOrgTables();
+  await ensureSimTables();
   const r = await db.execute<any>(sql`SELECT ${REPORT_COLUMNS} FROM executive_reports WHERE user_id = ${userId} ORDER BY period_key DESC, id DESC LIMIT ${Math.min(Math.max(limit, 1), 100)}`);
   return r.rows;
 }
@@ -430,8 +489,8 @@ export async function adminOverview() {
   await ensureOrgTables();
   const [r] = (await db.execute<any>(sql`SELECT
       (SELECT count(DISTINCT user_id)::int FROM bot_employees) AS accounts, (SELECT count(*)::int FROM bot_employees WHERE employee_key IS NOT NULL) AS employees,
-      (SELECT count(*)::int FROM employee_tasks WHERE status IN ('queued','running','waiting_for_dependency','waiting_for_approval','pending')) AS active_tasks,
-      (SELECT count(*)::int FROM employee_tasks WHERE status = 'failed') AS failed_tasks,
+      (SELECT count(*)::int FROM employee_tasks WHERE status IN ('queued','running','waiting_for_dependency','waiting_for_approval','pending') AND ${REAL_TASK}) AS active_tasks,
+      (SELECT count(*)::int FROM employee_tasks WHERE status = 'failed' AND ${REAL_TASK}) AS failed_tasks,
       (SELECT count(*)::int FROM executive_reports WHERE created_at > now() - interval '7 days') AS reports_7d,
       (SELECT count(*)::int FROM improvement_proposals WHERE status = 'proposed') AS proposals_pending`)).rows;
   return { accounts: num(r.accounts), employees: num(r.employees), activeTasks: num(r.active_tasks), failedTasks: num(r.failed_tasks), reports7d: num(r.reports_7d), proposalsPending: num(r.proposals_pending) };

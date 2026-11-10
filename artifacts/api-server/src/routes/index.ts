@@ -8,6 +8,10 @@ import authRouter from "./auth";
 import adminRouter from "./admin";
 import whatsappRouter from "./whatsapp";
 import orgRouter from "./org";
+import orgTicketsRouter from "./org-tickets";
+import orgDocsRouter from "./org-docs";
+import orgVoiceRouter from "./org-voice";
+import orgSimRouter from "./org-sim";
 import contactsRouter from "./contacts";
 import campaignsRouter from "./campaigns";
 import dashboardRouter from "./dashboard";
@@ -89,6 +93,11 @@ router.use("/ai", aiRouter);
 router.use("/settings", settingsRouter);
 router.use("/diagnostics", diagnosticsRouter);
 router.use("/accounts", accountsRouter);
+// الأخص قبل /org: مسارات المنظّمة الفرعية.
+router.use("/org/tickets", orgTicketsRouter);
+router.use("/org/docs", orgDocsRouter);
+router.use("/org/voice", orgVoiceRouter);
+router.use("/org/sim", orgSimRouter);
 router.use("/org", orgRouter);
 
 export default router;

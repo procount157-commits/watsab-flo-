@@ -42,6 +42,7 @@ import { newToken, htmlToText } from "./tracking";
 import { updateCard } from "../lead-card";
 import { replyVoice } from "./agent";
 import { lt, gt, isNotNull } from "drizzle-orm";
+import { dryRun, personaFor, simPersona } from "../org/simulation";
 
 /**
  * النيّات التي يجوز أن يجيبها ردٌّ آلي. الشكوى والرفض ينتظران شخصاً،
@@ -559,7 +560,9 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
   const out = await asAgent(userId, nora ? "email" : "sales", () => complete([
     { role: "system", content: [
       noraVoice || (sales ? `اسمك ${sales.name}${sales.title ? `، ${sales.title}` : ""}.` : "أنت مندوب مبيعات."),
-      noraVoice ? "" : sales?.persona ?? "",
+      noraVoice ? "" : personaFor("sales", sales?.persona) ?? "",
+      // الظل: تعليمات ليلى المقترحة تدخل الصوت؛ خارج المحاكاة لا شيء هنا.
+      simPersona("email_replies") ?? "",
       profile?.name ? `تعمل لدى ${profile.name}${profile.industry ? ` — ${profile.industry}` : ""}.` : "",
       profile?.description ? `عن الشركة: ${profile.description}` : "",
       "",
@@ -604,7 +607,7 @@ export async function draftReply(userId: number, inboundId: number): Promise<{ s
   const body = /الرد\s*[:：]\s*\n?([\s\S]+)$/.exec(out.text)?.[1]?.trim() ?? out.text.trim();
   const signed = s?.signature ? `${body}\n\n${htmlToText(s.signature)}` : body;
 
-  await db.update(emailInboundTable).set({ summary, draftSubject: subject.slice(0, 300), draftReply: signed, state: "drafted" }).where(eq(emailInboundTable.id, inboundId));
+  if (!dryRun()) await db.update(emailInboundTable).set({ summary, draftSubject: subject.slice(0, 300), draftReply: signed, state: "drafted" }).where(eq(emailInboundTable.id, inboundId));
   return { subject, body: signed, summary };
 }
 

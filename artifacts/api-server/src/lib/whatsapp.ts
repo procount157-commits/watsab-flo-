@@ -1081,6 +1081,21 @@ export class WhatsAppInstance {
 
   // ── Event logging ───────────────────────────────────────────────
 
+  /**
+   * الجلسة مُسحت وتنتظر مسحاً جديداً. صاحب الحساب يعرف مرةً واحدة لكل خروج، بالعربية وبالمكان
+   * الذي يصلحه (تليجرام، تحميلٌ متأخر فلا دورة استيراد، والفشل لا يوقف الإصلاح — الجاهزية
+   * واللوحة تقولانه أيضاً). يعود الحق في إشعارٍ جديد حين يتصل الرقم (awaitingRescanSince = null).
+   */
+  async markAwaitingRescan(): Promise<boolean> {
+    const first = !this.awaitingRescanSince;
+    this.awaitingRescanSince = new Date();
+    if (!first) return false;
+    await import("./telegram").then((t) => t.notify(this.userId,
+      "⚠️ خرج واتساب من حسابك: الجلسة لم تعد صالحة فمُسحت ليُعاد الربط. افتح صفحة الربط /connect وامسح رمز QR من جديد. إلى أن تفعل لا تخرج رسائل واتساب ولا تصل.", "wa_logged_out"))
+      .catch(() => {});
+    return true;
+  }
+
   private async logEvent(event: string, detail?: string) {
     try {
       await db.insert(waSessionEventsTable).values({ userId: this.userId, event, detail: detail ?? null });
@@ -1745,7 +1760,7 @@ export class WhatsAppInstance {
             this.log.error({ err }, "could not clear auth state");
           }
 
-          this.awaitingRescanSince = new Date();
+          void this.markAwaitingRescan();
           this.state.status = "disconnected";
           this.state.qr = null;
           this.scheduleReconnect(3_000);   // comes back up needing a scan

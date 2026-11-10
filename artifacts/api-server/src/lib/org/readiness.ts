@@ -16,17 +16,19 @@ import { isHalted } from "./controls";
 import { queueReview } from "./queue";
 import { ensureOrgTables } from "./schema";
 
-export type ReadyStatus = "READY" | "BLOCKED" | "NEEDS_TEST";
+/** OPTIONAL: أطفأه صاحب العمل عمداً (رد آلي متوقف). ليس عطلاً: لا يُحسب محظوراً ولا يمنع READY. */
+export type ReadyStatus = "READY" | "BLOCKED" | "NEEDS_TEST" | "OPTIONAL";
 export interface ReadyItem { id: string; channel: string; title: string; status: ReadyStatus; ok: boolean; detail: string; action: string | null; goto: string | null }
 export interface ReadinessReport { status: ReadyStatus; checkedAt: string; verified: boolean; items: ReadyItem[] }
 
 const item = (id: string, channel: string, title: string, status: ReadyStatus, detail: string, action: string | null = null, goto: string | null = null): ReadyItem =>
-  ({ id, channel, title, status, ok: status === "READY", detail, action, goto });
+  ({ id, channel, title, status, ok: status === "READY" || status === "OPTIONAL", detail, action, goto });
 
 /** الكل من أجزائه: محظورٌ واحد يكفي، ثم ما لم يُختبر، وREADY فقط إن كانت كلها READY. Pure. */
 export function overallStatus(items: Array<{ status: ReadyStatus }>): ReadyStatus {
-  if (!items.length || items.some((i) => i.status === "BLOCKED")) return "BLOCKED";
-  return items.some((i) => i.status === "NEEDS_TEST") ? "NEEDS_TEST" : "READY";
+  const counted = items.filter((i) => i.status !== "OPTIONAL");
+  if (!counted.length || counted.some((i) => i.status === "BLOCKED")) return "BLOCKED";
+  return counted.some((i) => i.status === "NEEDS_TEST") ? "NEEDS_TEST" : "READY";
 }
 
 /** حالة ما له اتصال: لا ضبط محظور، ولا فحص لم يُختبر، ولا عمل حقيقي لم يُختبر أيضاً. Pure. */
@@ -126,8 +128,8 @@ export async function readiness(userId: number, o: { verify?: boolean; deps?: Re
     count(*) FILTER (WHERE status IN ('bounced','invalid'))::int AS dead, count(*) FILTER (WHERE status IN ('unsubscribed','complained'))::int AS stopped FROM email_contacts WHERE user_id = ${userId}`);
   items.push(item("email.lists", "email", "قوائم البريد", num(lists.active) ? "READY" : "BLOCKED",
     `${num(lists.lists)} قائمة، ${num(lists.contacts)} جهة: صالح ${num(lists.active)}، مرتد ${num(lists.dead)}، موقف ${num(lists.stopped)}.`, num(lists.active) ? null : "ارفع قائمة جهات صالحة", "/email/lists"));
-  items.push(item("email.auto_reply", "email", "الرد الآلي على البريد", s?.autoReply ? (provenMail ? "READY" : "NEEDS_TEST") : "BLOCKED",
-    s?.autoReply ? `مفعّل، بعد ${s.autoReplyDelayMin} دقيقة` : "متوقف: الردود تنتظر شخصاً", s?.autoReply ? null : "شغّله من إعدادات البريد إن أردته", "/email/settings"));
+  items.push(item("email.auto_reply", "email", "الرد الآلي على البريد", s?.autoReply ? (provenMail ? "READY" : "NEEDS_TEST") : "OPTIONAL",
+    s?.autoReply ? `مفعّل، بعد ${s.autoReplyDelayMin} دقيقة` : "متوقف عمداً: الردود تنتظر شخصاً", s?.autoReply ? null : "شغّله من إعدادات البريد إن أردته", "/email/settings"));
 
   // ── واتساب والفريق ──
   const profile = await one(sql`SELECT auto_reply, smart_followup, team_paused FROM business_profile WHERE user_id = ${userId}`);
@@ -135,7 +137,10 @@ export async function readiness(userId: number, o: { verify?: boolean; deps?: Re
   const waProof = await one(sql`SELECT count(*)::int AS n FROM wa_firewall_sends WHERE user_id = ${userId} AND at > now() - interval '30 days'`);
   items.push(item("whatsapp.connection", "whatsapp", "اتصال واتساب", !wa?.connected ? "BLOCKED" : num(waProof.n) ? "READY" : "NEEDS_TEST",
     !wa ? "لا جلسة لهذا الحساب" : wa.connected ? `متصل، و${num(waProof.n)} رسالة خرجت في ٣٠ يوماً` : `غير متصل: ${wa.status}`, !wa?.connected ? "اربط الرقم من صفحة واتساب" : num(waProof.n) ? null : "أرسل رسالة اختبار", "/connect"));
-  items.push(item("whatsapp.auto_reply", "whatsapp", "الرد الآلي على واتساب", profile.auto_reply ? (num(waProof.n) ? "READY" : "NEEDS_TEST") : "BLOCKED", profile.auto_reply ? "مفعّل" : "متوقف", profile.auto_reply ? null : "شغّله من ملف العمل إن أردته", "/knowledge"));
+  // خرج واتساب ومُسحت الجلسة (auto_repair في whatsapp.ts) ولم يتصل بعدها: يحتاج مسحاً جديداً.
+  const loggedOut = await waLoggedOut(userId).catch(() => null);
+  if (loggedOut) items.push(item("whatsapp.logged_out", "whatsapp", "خروج واتساب", "BLOCKED", `خرج واتساب ${loggedOut.toISOString().slice(0, 16).replace("T", " ")} ومُسحت الجلسة: لا يخرج شيء ولا يصل.`, "امسح رمز QR من صفحة الربط", "/connect"));
+  items.push(item("whatsapp.auto_reply", "whatsapp", "الرد الآلي على واتساب", profile.auto_reply ? (num(waProof.n) ? "READY" : "NEEDS_TEST") : "OPTIONAL", profile.auto_reply ? "مفعّل" : "متوقف عمداً: الردود تنتظر شخصاً", profile.auto_reply ? null : "شغّله من ملف العمل إن أردته", "/knowledge"));
   const fu = String(profile.smart_followup ?? "dry");
   items.push(item("whatsapp.followup_mode", "whatsapp", "وضع المتابعة", fu === "off" ? "BLOCKED" : fu === "live" ? (num(waProof.n) ? "READY" : "NEEDS_TEST") : "NEEDS_TEST",
     `الوضع الحالي ${fu}${fu === "dry" ? ": يكتب ولا يرسل" : fu === "approve" ? ": ينتظر موافقتك" : ""}.`, fu === "live" ? null : "قرارك أنت: غيّر الوضع من صفحة المتابعة بعد مراجعة ما كتبه", "/follow-ups"));
@@ -166,6 +171,12 @@ export async function readiness(userId: number, o: { verify?: boolean; deps?: Re
   const report: ReadinessReport = { status: overallStatus(items), checkedAt: new Date().toISOString(), verified: verify, items };
   await writeHealth(userId, items).catch((err) => logger.warn({ userId, err: String(err?.message ?? err).slice(0, 160) }, "صحة التكامل لم تُكتب"));
   return report;
+}
+
+/** متى خرج واتساب ولم يعد: آخر حدثٍ من الثلاثة auto_repair. null = متصل أو لم يخرج. */
+export async function waLoggedOut(userId: number): Promise<Date | null> {
+  const [e] = (await db.execute<any>(sql`SELECT event, created_at FROM wa_session_events WHERE user_id = ${userId} AND event IN ('auto_repair','connected','logged_out') ORDER BY id DESC LIMIT 1`)).rows;
+  return e?.event === "auto_repair" ? new Date(e.created_at) : null;
 }
 
 /** آخر ما عُرف عن كل تكامل. فحصٌ بلا اتصال لا يمحو نتيجة فحصٍ حقيقي سابقة. */
