@@ -14,8 +14,10 @@ export const SHADOW: Record<string, { label: string; cls: string }> = {
   better: { label: "أفضل", cls: G },
   same: { label: "مثله", cls: N },
   failed_checks: { label: "خالف الفحوص", cls: R },
+  mixed: { label: "مختلط", cls: Y },
   no_output: { label: "لم يكتب", cls: R },
-  no_model_path: { label: "لا مسار كتابة", cls: N },
+  no_model_path: { label: "بالكود وحده", cls: N },
+  not_covered: { label: "لم يُجرَّب", cls: Y },
   no_samples: { label: "لا عيّنات", cls: Y },
   budget: { label: "السقف نفد", cls: Y },
 };
@@ -38,7 +40,7 @@ const Issues = ({ v }: { v: unknown }) => {
 };
 
 export function ShadowRow({ r }: { r: any }) {
-  const [open, setOpen] = useState(r.verdict === "failed_checks");
+  const [open, setOpen] = useState(r.verdict === "failed_checks" || r.verdict === "mixed");
   const compared = r.current_output != null || r.proposed_output != null;
   return (
     <div className="py-2.5 text-xs space-y-2">
@@ -50,6 +52,12 @@ export function ShadowRow({ r }: { r: any }) {
         {compared && <button className={ghost} onClick={() => setOpen(!open)}>{open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />} المقارنة</button>}
       </div>
       <p className="text-[11px] text-muted-foreground" dir="auto">{r.detail}</p>
+      {r.verdict === "mixed" && !open && (
+        <div className="grid md:grid-cols-2 gap-2">
+          <div><p className="text-[10px] text-muted-foreground">مخالفات الحالي</p><Issues v={r.current_issues} /></div>
+          <div><p className="text-[10px] text-muted-foreground">مخالفات المقترح</p><Issues v={r.proposed_issues} /></div>
+        </div>
+      )}
       {open && compared && (
         <div className="grid md:grid-cols-2 gap-2">
           <div className="space-y-1"><p className="text-[10px] text-muted-foreground">بالتعليمات الحالية</p><Pre>{r.current_output ?? "— لم يكتب شيئاً —"}</Pre><Issues v={r.current_issues} /></div>

@@ -4,7 +4,7 @@
 // sim_e2e_runs/steps: السيناريو جاسم ← … ← جاسم، خطوةً خطوة.
 //
 // النشر لا يشغّل ملفات SQL: تُنشأ عند الإقلاع من artifacts/api-server/src/lib/org/sim-schema.ts
-// (ORG_SIM_SQL) بالنص نفسه الذي في 075_shadow.sql.
+// (ORG_SIM_SQL) بالنص نفسه الذي في 075_shadow.sql و080_shadow_verdicts.sql.
 
 import { sql } from "drizzle-orm";
 import { bigserial, boolean, check, index, integer, jsonb, pgTable, serial, text, timestamp, unique, varchar } from "drizzle-orm/pg-core";
@@ -13,7 +13,7 @@ import { usersTable } from "./users";
 const at = (name: string) => timestamp(name, { withTimezone: true });
 const owner = () => integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" });
 
-export const SHADOW_VERDICTS = ["failed_checks", "better", "same", "no_output", "no_model_path", "no_samples", "budget"] as const;
+export const SHADOW_VERDICTS = ["failed_checks", "better", "same", "mixed", "no_output", "no_model_path", "not_covered", "no_samples", "budget"] as const;
 
 export const shadowRunsTable = pgTable("shadow_runs", {
   id:             bigserial("id", { mode: "number" }).primaryKey(),
@@ -36,7 +36,7 @@ export const shadowRunsTable = pgTable("shadow_runs", {
 }, (t) => [
   index("idx_shadow_runs_user").on(t.userId, t.employeeKey, t.createdAt),
   index("idx_shadow_runs_proposal").on(t.userId, t.proposalId),
-  check("shadow_runs_verdict", sql`${t.verdict} IN ('failed_checks','better','same','no_output','no_model_path','no_samples','budget')`),
+  check("shadow_runs_verdict", sql`${t.verdict} IN ('failed_checks','better','same','mixed','no_output','no_model_path','not_covered','no_samples','budget')`),
 ]);
 
 export const simFixturesTable = pgTable("sim_fixtures", {

@@ -1,10 +1,13 @@
 // ── الظل: التعليمات الحالية مقابل المقترحة، على مدخلات الحساب الحقيقية ─────
 // لكل موظفٍ له نسخة في المكتبة: يُؤخذ من حسابه هو وحده حتى ٣ مدخلات حديثة، ويكتب عليها
 // مرتين بمسار الكتابة الحقيقي نفسه داخل المحاكاة — بشخصيته المحفوظة، ثم بالنص المقترح —
-// ثم تُطبَّق فحوص الكود الحقيقية على الاثنين. الحكم بالكود وحده:
-//   failed_checks: المقترح خالف فحصاً · better: الحالي خالف أو لم يكتب والمقترح سليم
-//   same: كلاهما سليم (أو كلاهما خالف بالقدر نفسه ولا جديد) · no_output: المقترح لم يكتب شيئاً
-//   no_model_path: لا مسار كتابة موصول (أو موظف بالكود وحده) — بلا أي نداء.
+// ثم تُطبَّق فحوص الكود الحقيقية على الاثنين. الحكم بالكود وحده، على «قواعد» المخالفات
+// لا نصّها (issueRule: «الرسالة ١٢٦ كلمة» و«الرسالة ١٢١ كلمة» قاعدةٌ واحدة: length):
+//   better: قواعد المقترح جزءٌ من قواعد الحالي وأقل · same: القواعد نفسها (سليمان، أو خالفا الفحص نفسه)
+//   failed_checks: المقترح جاء بقاعدةٍ لم يخالفها الحالي ولم يُصلح شيئاً
+//   mixed: أصلح قاعدةً وجاء بأخرى — يحجب التفعيل الآلي ويُعرض بالقائمتين · no_output: المقترح لم يكتب
+//   no_model_path: موظفٌ بالكود وحده فعلاً (model-paths.ts) — بلا أي نداء
+//   not_covered: له مسار نموذج لا يمرّ به الظل بعد — «لم يُجرَّب»، لا يُفعَّل آلياً ولا جماعياً.
 // المحاكاة تعني: البوابة ترفض كل إرسال، ولا صف عمل يُكتب، ولا إيصال ولا استهلاك ولا مقياس
 // مزوّد ولا نبض ولا تنفيذ يُحسب. سقف ٤٠ نداء نموذج للحساب في اليوم. لا شيء يُفعَّل هنا.
 
@@ -15,7 +18,7 @@ import { asAgent } from "../agent-context";
 import { logger } from "../logger";
 import { dubaiNow } from "../accounts/pure";
 import { accountHalted, isHalted } from "./controls";
-import { ROLE_MAP } from "./departments";
+import { isCodeOnly, MODEL_PATHS } from "./model-paths";
 import { PROMPT_LIBRARY, renderPrompt } from "./prompts";
 import { promptTarget } from "./proposals";
 import { ensureSimTables } from "./sim-schema";
@@ -23,7 +26,9 @@ import { newSimContext, withPersona, withSimulation, type SimContext } from "./s
 
 export const SHADOW_DAILY_CALLS = 40;
 export const SHADOW_MAX_SAMPLES = 3;
-export type ShadowVerdict = "failed_checks" | "better" | "same" | "no_output" | "no_model_path" | "no_samples" | "budget";
+export type ShadowVerdict = "failed_checks" | "better" | "same" | "mixed" | "no_output" | "no_model_path" | "not_covered" | "no_samples" | "budget";
+/** أحكامٌ قارنت عيّنةً فعلاً. */
+export const COMPARED: ShadowVerdict[] = ["failed_checks", "better", "same", "mixed", "no_output"];
 
 export interface Sample { ref: Record<string, unknown>; excerpt: string; data: any }
 export interface Output { text: string | null; issues: string[]; label?: string | null; note?: string | null }
@@ -36,14 +41,68 @@ interface Adapter {
 }
 
 // ── الحكم ─────────────────────────────────────────────────────────
-/** الحكم بالكود على عيّنةٍ واحدة. Pure. */
+// كل مخالفةٍ تُردّ إلى قاعدتها: الرقم والنص المقتبس فيها ليسا القاعدة.
+const RULES: Array<[RegExp, string | ((m: RegExpExecArray) => string)]> = [
+  [/^لا ملخص في أولها/, "lead_missing"],
+  [/^الملخص \S+ كلمة/, "lead_long"],
+  [/^لا زر دعوة/, "cta_missing"],
+  [/^الرسالة الأولى \S+ كلمة/, "first_length"],
+  [/^الرسالة \S+ كلمة/, "length"],
+  [/^مبالغة أو ضمان/, "hype"],
+  [/^استعجال مصطنع/, "urgency"],
+  [/^يوحي بإشعار رسمي/, "official"],
+  [/^رقم ليس في معرفة الشركة/, "number_not_in_knowledge"],
+  [/^رقم ليس في الوقائع/, "number_not_in_facts"],
+  [/^شكل السرد/, "narrative_shape"],
+  [/^تشبه موجة سابقة/, "similar_wave"],
+  [/^العنوان \S+ كلمة/, "subject_length"],
+  [/تطلب موعداً أو مكالمة/, "asks_meeting"],
+  [/^لا سؤال في الرسالة الأولى/, "no_question"],
+  [/^أول الرسالة لا يذكر شركته/, "opening_no_company"],
+  [/^عبارة قالب/, "cliche"],
+  [/^المتابعة الثانية ناقصة/, "followup2_missing"],
+  [/^المتابعة الثانية \S+ كلمة/, "followup2_length"],
+  [/^المتابعة الثالثة ناقصة/, "followup3_missing"],
+  [/^المتابعة الثالثة \S+ كلمة/, "followup3_length"],
+  [/^ملاحظة لينكدإن ناقصة/, "linkedin_missing"],
+  [/^ملاحظة لينكدإن \S+ حرفاً/, "linkedin_length"],
+  [/^مال في الرسالة/, "money"],
+  [/^الرد العلني أطول من سطرين/, "public_reply_long"],
+  // التصنيف: الخطأ نفسه (machine بدل not_customer) قاعدة، وخطأٌ آخر (hot بدل not_customer) قاعدة أخرى.
+  [/^صنّف (\S+) والمسجَّل (\S+)/, (m) => `label:${m[1]}≠${m[2]}`],
+];
+/** قاعدة المخالفة، بلا أرقامها ولا ما اقتُبس فيها. Pure. */
+export function issueRule(issue: string): string {
+  const t = issue.trim();
+  for (const [re, r] of RULES) { const m = re.exec(t); if (m) return typeof r === "string" ? r : r(m); }
+  return t.replace(/«[^»]*»/g, "«…»").replace(/[\d٠-٩][\d٠-٩.,٬]*/g, "#").replace(/\s+/g, " ").trim();
+}
+const rulesOf = (o: Output) => new Set(o.issues.map(issueRule));
+const firstOf = (o: Output, rules: Set<string>) => o.issues.filter((i, n, a) => rules.has(issueRule(i)) && a.findIndex((x) => issueRule(x) === issueRule(i)) === n);
+
+/** الحكم بالكود على عيّنةٍ واحدة، بمقارنة قواعد المخالفات. Pure. */
 export function verdictOf(current: Output, proposed: Output): { verdict: ShadowVerdict; detail: string } {
   const has = (o: Output) => !!(o.text && o.text.trim()) || !!o.label;
   if (!has(proposed)) return { verdict: "no_output", detail: proposed.note ?? "المقترح لم يكتب شيئاً" };
-  if (proposed.issues.length) return { verdict: "failed_checks", detail: `المقترح خالف: ${proposed.issues.slice(0, 3).join(" · ")}` };
-  if (!has(current)) return { verdict: "better", detail: "الحالي لم يكتب شيئاً، والمقترح كتب وسلم من الفحوص" };
-  if (current.issues.length) return { verdict: "better", detail: `الحالي خالف (${current.issues.slice(0, 2).join(" · ")})، والمقترح سليم` };
-  return { verdict: "same", detail: "كلاهما سلم من الفحوص" };
+  const P = rulesOf(proposed), C = rulesOf(current);
+  const list = (xs: string[]) => xs.slice(0, 3).join(" · ");
+  if (!has(current)) return P.size
+    ? { verdict: "failed_checks", detail: `الحالي لم يكتب، والمقترح خالف: ${list(proposed.issues)}` }
+    : { verdict: "better", detail: "الحالي لم يكتب شيئاً، والمقترح كتب وسلم من الفحوص" };
+  const added = new Set([...P].filter((r) => !C.has(r))), fixed = new Set([...C].filter((r) => !P.has(r)));
+  if (!added.size && !fixed.size) return P.size
+    ? { verdict: "same", detail: `كلاهما خالف الفحص نفسه: ${list(firstOf(proposed, P))}` }
+    : { verdict: "same", detail: "كلاهما سلم من الفحوص" };
+  if (!added.size) return { verdict: "better", detail: `المقترح أصلح: ${list(firstOf(current, fixed))}${P.size ? ` · وبقي فيه ما في الحالي: ${list(firstOf(proposed, P))}` : "، وسلم من الفحوص"}` };
+  if (!fixed.size) return { verdict: "failed_checks", detail: `المقترح خالف ما لم يخالفه الحالي: ${list(firstOf(proposed, added))}` };
+  return { verdict: "mixed", detail: `مختلط — أصلح: ${list(firstOf(current, fixed))} · وجاء بجديد: ${list(firstOf(proposed, added))}` };
+}
+
+/** موظفٌ بلا مسار موصول للظل: بالكود وحده فعلاً، أو له نموذج لم يُجرَّب. Pure. */
+export function uncoveredVerdict(key: string): { verdict: "no_model_path" | "not_covered"; detail: string } {
+  if (isCodeOnly(key)) return { verdict: "no_model_path", detail: `موظف بالكود وحده: لا نداء نموذج في عمله (${MODEL_PATHS[key]!.where})` };
+  const where = MODEL_PATHS[key]?.where;
+  return { verdict: "not_covered", detail: `لم يُجرَّب: له مسار نموذج${where ? ` (${where})` : ""} لا يمرّ به الظل بعد — لا يُفعَّل آلياً` };
 }
 
 export interface ShadowSummary {
@@ -54,14 +113,15 @@ export interface ShadowSummary {
 export function summarize(rows: Array<{ verdict: string; created_at?: unknown }>): ShadowSummary {
   const verdicts: Partial<Record<ShadowVerdict, number>> = {};
   for (const r of rows) verdicts[r.verdict as ShadowVerdict] = (verdicts[r.verdict as ShadowVerdict] ?? 0) + 1;
-  const samples = rows.filter((r) => ["failed_checks", "better", "same", "no_output"].includes(r.verdict)).length;
+  const samples = rows.filter((r) => COMPARED.includes(r.verdict as ShadowVerdict)).length;
   const warnings: string[] = [];
   if (!rows.length) warnings.push("لم يُشغَّل الظل لهذا المقترح بعد");
-  else if (!samples) warnings.push(verdicts.no_model_path ? "لا مسار كتابة لهذا الموظف: لا مقارنة ممكنة" : "لا عيّنات حقيقية من هذا الحساب للمقارنة");
+  else if (!samples) warnings.push(verdicts.not_covered ? "لم يُجرَّب: له مسار نموذج لا يمرّ به الظل بعد" : verdicts.no_model_path ? "لا مسار نموذج لهذا الموظف (بالكود وحده): لا مقارنة ممكنة" : "لا عيّنات حقيقية من هذا الحساب للمقارنة");
   if (verdicts.failed_checks) warnings.push(`المقترح خالف فحوص الكود في ${verdicts.failed_checks} عيّنة`);
+  if (verdicts.mixed) warnings.push(`مختلط في ${verdicts.mixed} عيّنة: أصلح فحصاً وخالف آخر`);
   if (verdicts.no_output) warnings.push(`المقترح لم يكتب شيئاً في ${verdicts.no_output} عيّنة`);
   const last = rows.map((r) => (r.created_at ? new Date(r.created_at as string).getTime() : 0)).sort((a, b) => b - a)[0];
-  return { runs: rows.length, samples, verdicts, lastRunAt: last ? new Date(last).toISOString() : null, warnings, ok: samples > 0 && !verdicts.failed_checks && !verdicts.no_output };
+  return { runs: rows.length, samples, verdicts, lastRunAt: last ? new Date(last).toISOString() : null, warnings, ok: samples > 0 && !verdicts.failed_checks && !verdicts.mixed && !verdicts.no_output && !verdicts.not_covered };
 }
 
 // ── المسارات ───────────────────────────────────────────────────────
@@ -92,7 +152,7 @@ async function thread(userId: number, phone: string, limit = 14) {
   return r.reverse().map((x) => ({ fromMe: !!x.from_me, text: String(x.text ?? ""), at: new Date(x.created_at), voice: x.msg_type === "voice" }));
 }
 
-function campaignAdapter(key: string, role: "email" | "email_followup"): Adapter {
+function campaignAdapter(key: string, role: "email" | "email_followup" | "email_creator"): Adapter {
   return {
     key, role, maxCalls: 1,
     samples: async (userId) => (await rows(sql`SELECT id, name, goal, filter, language, tone, intensity, angle FROM email_missions WHERE user_id = ${userId} AND coalesce(goal, '') <> ''
@@ -123,6 +183,28 @@ function campaignAdapter(key: string, role: "email" | "email_followup"): Adapter
 const ADAPTERS: Adapter[] = [
   campaignAdapter("email.copywriter", "email"),
   campaignAdapter("email.followup", "email_followup"),
+  // المنشئ يكتب بمسار الكاتب نفسه (runMission → writeCampaign بدوره)، فتُطبَّق عليه فحوص الكاتب نفسها.
+  campaignAdapter("email.creator", "email_creator"),
+  {
+    // المدير التنفيذي: السرد فوق حزمة وقائع اليوم؛ الفحص هو فحص الكود نفسه — بلا رقم، أو كل رقمٍ من الوقائع.
+    key: "executive.ceo", role: "ceo_agent", maxCalls: 2,
+    samples: async (userId) => {
+      const { collectFacts } = await import("./ceo");
+      const pack = await collectFacts(userId);
+      if (pack.thin) return []; // الوقائع القليلة لا تمرّ بالنموذج في المسار الحقيقي
+      return [{ ref: { table: "fact_pack", day: pack.day }, excerpt: `وقائع ${pack.day}: ${pack.activity.executions} تنفيذ، ${pack.problems.length} مشكلة`, data: pack }];
+    },
+    run: async (userId, s) => {
+      const { writeNarrative, CEO_PERSONA, CEO_ROLE } = await import("./ceo");
+      const { personaFor } = await import("./simulation");
+      const [emp] = await rows(sql`SELECT persona FROM bot_employees WHERE user_id = ${userId} AND role = ${CEO_ROLE} LIMIT 1`);
+      const n = await writeNarrative(s.data, personaFor(CEO_ROLE, (emp as any)?.persona || CEO_PERSONA));
+      if (n.status === "model_unavailable") return { text: null, issues: [], note: "لم يرد نموذج" };
+      if (n.status === "validated") return { text: n.summary, issues: [] };
+      const issues = n.violations.length ? n.violations.map((x) => `رقم ليس في الوقائع: «${x}»`) : ["شكل السرد غير صحيح (ليس JSON بالشكل المطلوب أو نصه فارغ)"];
+      return { text: "— رُفض السرد مرتين، والتقرير بالوقائع وحدها —", issues };
+    },
+  },
   {
     key: "email.replies", role: "email_replies", maxCalls: 1,
     samples: async (userId) => (await rows(sql`SELECT id, subject, text, intent FROM email_inbound WHERE user_id = ${userId} AND coalesce(kind, 'reply') = 'reply' AND coalesce(text, '') <> ''
@@ -229,8 +311,6 @@ const ADAPTERS: Adapter[] = [
 ];
 export const SHADOW_KEYS = ADAPTERS.map((a) => a.key);
 const adapterFor = (key: string) => ADAPTERS.find((a) => a.key === key);
-/** موظف بالكود وحده: جدوله يقول ذلك، أو لا نموذج في وظيفته. */
-const CODE_ONLY = new Set(["email.registrar", "email.opens", "ops.monitor", "ops.controller", "whatsapp.list_keeper", "whatsapp.vetter"]);
 
 // ── التشغيل ───────────────────────────────────────────────────────
 /** ما استُهلك اليوم (بتوقيت دبي) من نداءات الظل والسيناريو لهذا الحساب. */
@@ -297,9 +377,8 @@ export async function runShadow(userId: number, o: { employeeKey?: string | null
     const a = adapters.find((x) => x.key === key);
     const base = { employeeKey: key, proposalId, version: lib.version, trigger };
     if (!a) {
-      const codeOnly = CODE_ONLY.has(key) || Object.values(ROLE_MAP).some((r) => r.key === key && r.execution === "none");
-      const why = codeOnly ? "موظف بالكود وحده: لا نداء نموذج في عمله" : "لا مسار كتابة موصول للظل لهذا الموظف بعد";
-      out.rows.push(await insertRun(userId, batchId, { ...base, verdict: "no_model_path", detail: why, calls: 0 }));
+      const u = uncoveredVerdict(key);
+      out.rows.push(await insertRun(userId, batchId, { ...base, verdict: u.verdict, detail: u.detail, calls: 0 }));
       continue;
     }
     const role = a.role;

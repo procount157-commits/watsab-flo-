@@ -100,10 +100,12 @@ function Shadow() {
   const batch = rows.filter((r) => r.batch_id === lastBatch);
   const shown = (only === "all" ? batch : batch.filter((r) => r.verdict === only));
   const count = (v: string) => batch.filter((r) => r.verdict === v).length;
-  const samples = batch.filter((r) => ["better", "same", "failed_checks", "no_output"].includes(r.verdict)).length;
+  const samples = batch.filter((r) => ["better", "same", "failed_checks", "mixed", "no_output"].includes(r.verdict)).length;
   const summary = { warnings: [
     ...(lastBatch && !samples ? ["لا عيّنات حقيقية في آخر تشغيل: لا مقارنة"] : []),
     ...(count("failed_checks") ? [`المقترح خالف فحوص الكود في ${count("failed_checks")} عيّنة`] : []),
+    ...(count("mixed") ? [`مختلط في ${count("mixed")} عيّنة: أصلح فحصاً وخالف آخر — لا يُفعَّل آلياً`] : []),
+    ...(count("not_covered") ? [`لم يُجرَّب ${count("not_covered")} موظفاً: لهم مسار نموذج لا يمرّ به الظل، فلا يُفعَّلون آلياً`] : []),
   ] };
   return (
     <Section title="الظل: التعليمات الحالية مقابل المقترحة" action={

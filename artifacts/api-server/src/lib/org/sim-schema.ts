@@ -1,5 +1,5 @@
 // ── جداول المحاكاة والظل عند الإقلاع ───────────────────────────────
-// النشر لا يشغّل ملفات SQL: ما في 075_shadow.sql يُنشأ هنا بالنص نفسه، وorg-shadow.test.ts
+// النشر لا يشغّل ملفات SQL: ما في 075_shadow.sql و080_shadow_verdicts.sql يُنشأ هنا بالنص نفسه، وorg-shadow.test.ts
 // يقارن الاثنين. يُعاد تشغيله بأمان. ومعها أعمدة تقرير المدير الجديدة (§8).
 
 import { sql } from "drizzle-orm";
@@ -37,6 +37,13 @@ export const ORG_SIM_SQL = [
   `ALTER TABLE executive_reports ADD COLUMN IF NOT EXISTS assigned_ticket_ids jsonb`,
   `ALTER TABLE executive_reports ADD COLUMN IF NOT EXISTS data_gaps jsonb`,
   `ALTER TABLE executive_reports ADD COLUMN IF NOT EXISTS confidence varchar(10)`,
+  // 080_shadow_verdicts.sql: يوسّع قيد الحكم مرةً واحدة (mixed، not_covered).
+  `DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shadow_runs_verdict' AND pg_get_constraintdef(oid) LIKE '%not_covered%') THEN
+      ALTER TABLE shadow_runs DROP CONSTRAINT IF EXISTS shadow_runs_verdict;
+      ALTER TABLE shadow_runs ADD CONSTRAINT shadow_runs_verdict CHECK (verdict IN ('failed_checks','better','same','mixed','no_output','no_model_path','not_covered','no_samples','budget'));
+    END IF;
+  END $$`,
 ];
 
 let ready: Promise<boolean> | null = null;

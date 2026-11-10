@@ -2,8 +2,9 @@
 // مقترح تعليماتٍ معلَّق يُفعَّل آلياً فقط إن:
 //   • مدخل المكتبة externalBehavior = false (فئته prompt_internal وخطره low) — يُسأل مرتين:
 //     من صف المقترح ومن المكتبة نفسها، فما يمسّ الناس لا يمرّ أبداً ويبقى لصاحب الحساب؛
-//   • والظل في آخر ٧ أيام له عيّنةٌ واحدة على الأقل (same/better) ولا failed_checks ولا no_output؛
-//   • أو لا مسار نموذج للموظف (no_model_path) وملفه كامل (١٩ قسماً غير فارغ).
+//   • والظل في آخر ٧ أيام له عيّنةٌ واحدة على الأقل (same/better) ولا failed_checks ولا mixed ولا no_output؛
+//   • أو موظفٌ بالكود وحده فعلاً (model-paths.ts isCodeOnly، لا صف no_model_path وحده) وملفه كامل.
+//   من له مسار نموذج لا يمرّ به الظل (not_covered) «لم يُجرَّب»: لا يُفعَّل آلياً ولا جماعياً أبداً.
 // التفعيل يمرّ على activatePrompt نفسه (نسخة سابقة + rollback_version)، ويُسجَّل
 // proposal.auto_applied منخفض الخطر مع «الإرجاع متاح». يعمل بعد الظل اليومي وبعد
 // POST /org/sim/shadow/run. كل استعلامٍ مقيَّد بحسابٍ واحد.
@@ -15,6 +16,7 @@ import { accountHalted, audit, isHalted } from "./controls";
 import { PROMPT_LIBRARY } from "./prompts";
 import { activatePrompt, classifyPrompt } from "./proposals";
 import { missingSections } from "./docs/model";
+import { isCodeOnly } from "./model-paths";
 
 export const SHADOW_WINDOW_DAYS = 7;
 export type GateBasis = "shadow" | "no_model_path";
@@ -36,16 +38,22 @@ export async function shadowGate(userId: number, p: { change_id: number; target:
   try {
     [c] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE verdict IN ('same','better'))::int AS good,
         count(*) FILTER (WHERE verdict = 'failed_checks')::int AS failed, count(*) FILTER (WHERE verdict = 'no_output')::int AS empty,
+        count(*) FILTER (WHERE verdict = 'mixed')::int AS mixed, count(*) FILTER (WHERE verdict = 'not_covered')::int AS uncovered,
         count(*) FILTER (WHERE verdict = 'no_model_path')::int AS nopath
       FROM shadow_runs WHERE user_id = ${userId} AND employee_key = ${key} AND created_at >= ${since}
         AND library_version = ${String(entry.version)} AND (proposal_id IS NULL OR proposal_id = ${p.change_id})`)).rows;
   } catch { return no("لا ظل لهذا الحساب بعد"); }
   const good = Number(c?.good ?? 0), failed = Number(c?.failed ?? 0), empty = Number(c?.empty ?? 0), nopath = Number(c?.nopath ?? 0);
+  const mixed = Number(c?.mixed ?? 0), uncovered = Number(c?.uncovered ?? 0);
+  const codeOnly = isCodeOnly(key);
   if (failed > 0) return no(`خالف فحصاً في الظل (${failed} عيّنة failed_checks)`, good, failed);
+  if (mixed > 0) return no(`مختلط في الظل (${mixed} عيّنة): أصلح فحصاً وخالف آخر — يقرّره صاحب العمل بالقائمتين`, good, mixed);
   if (empty > 0) return no(`المقترح لم يكتب شيئاً في ${empty} عيّنة`, good, failed);
   if (good >= 1) return { ok: true, basis: "shadow", why: `${good} عيّنة سليمة في الظل خلال ${SHADOW_WINDOW_DAYS} أيام، بلا مخالفة`, samples: good, failed: 0 };
-  if (o.requireSamples) return no(nopath ? "لا مسار نموذج: لا عيّنة ظل تُعتمد بها" : `لا عيّنة ظل في آخر ${SHADOW_WINDOW_DAYS} أيام`);
-  if (!nopath) return no(`لا عيّنة ظل في آخر ${SHADOW_WINDOW_DAYS} أيام`);
+  // له نموذج ولا عيّنة: «لم يُجرَّب» — ولو حمل صفاً قديماً مكتوباً no_model_path قبل تصحيح الخريطة.
+  if (uncovered > 0 || (!codeOnly && nopath > 0)) return no("لم يُجرَّب: له مسار نموذج لا يمرّ به الظل بعد — يقرّره صاحب العمل بنفسه");
+  if (o.requireSamples) return no(nopath ? "لا مسار نموذج: لا عيّنة ظل تُعتمد بها" : `لم يُجرَّب: لا عيّنة ظل في آخر ${SHADOW_WINDOW_DAYS} أيام`);
+  if (!nopath || !codeOnly) return no(`لم يُجرَّب: لا عيّنة ظل في آخر ${SHADOW_WINDOW_DAYS} أيام`);
   // بلا مسار نموذج: الملف الذي سيُفعَّل (بذرة نسخة المكتبة الحالية) يجب أن يكون كاملاً.
   const [d] = (await db.execute<any>(sql`SELECT sections FROM employee_documentation WHERE user_id = ${userId} AND employee_key = ${key} AND author = 'system.seed'
       AND library_version = ${entry.version} AND status IN ('draft','proposed','approved') ORDER BY version DESC LIMIT 1`).catch(() => ({ rows: [] as any[] }))).rows;

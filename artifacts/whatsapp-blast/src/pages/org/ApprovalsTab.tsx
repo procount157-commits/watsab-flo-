@@ -186,7 +186,7 @@ const BulkRows = ({ items }: { items: any[] }) => (
   <ul className="space-y-1 max-h-72 overflow-y-auto">
     {items.map((i) => (
       <li key={`${i.kind}:${i.id}`} className="flex gap-2 text-[11px] items-start">
-        <span className={cn("w-14 flex-shrink-0", BULK_RESULT[i.result])}>{i.result === "approved" ? "يُعتمد" : i.result === "failed" ? "فشل" : "يُترك"}</span>
+        <span className={cn("w-16 flex-shrink-0", BULK_RESULT[i.result])}>{i.result === "approved" ? "يُعتمد" : i.result === "failed" ? "فشل" : /^لم يُجرَّب/.test(String(i.why ?? "")) ? "لم يُجرَّب" : /^مختلط/.test(String(i.why ?? "")) ? "مختلط" : "يُترك"}</span>
         <span className="w-24 flex-shrink-0 text-muted-foreground">{BULK_KIND[i.kind] ?? i.kind}</span>
         <b className="min-w-0 truncate" dir="ltr">{i.label}</b>
         <span className="mr-auto text-muted-foreground text-left" dir="auto">{i.why}</span>
@@ -205,7 +205,7 @@ function BulkApprove() {
   const will = items.filter((i) => i.result === "approved");
   return (
     <Section title="اعتماد كل المؤهل" action={!open ? <button className={primary} onClick={() => { setResult(null); setOpen(true); }}><Check className="w-3 h-3" />اعتماد كل المؤهل</button> : undefined}>
-      <p className="text-[11px] text-muted-foreground">يعتمد ما يجتاز بوابته فقط: تعليماتٌ لها عيّنة ظل سليمة في ٧ أيام بلا مخالفة، واعتراضاتٌ دليلها من المعرفة المعتمدة، ومهامٌ تنتظر موافقتك. لا يغيّر أوضاع الإرسال ولا المتابعة ولا التواصل ولا الحدود ولا الدروس.</p>
+      <p className="text-[11px] text-muted-foreground">يعتمد ما يجتاز بوابته فقط: تعليماتٌ لها عيّنة ظل سليمة في ٧ أيام بلا مخالفة ولا حكمٍ مختلط (وما «لم يُجرَّب» في الظل يُترك ويُقال لك)، واعتراضاتٌ دليلها من المعرفة المعتمدة، ومهامٌ تنتظر موافقتك. لا يغيّر أوضاع الإرسال ولا المتابعة ولا التواصل ولا الحدود ولا الدروس.</p>
       {open && !result && (
         <Q q={preview} what="المعاينة">
           {() => (

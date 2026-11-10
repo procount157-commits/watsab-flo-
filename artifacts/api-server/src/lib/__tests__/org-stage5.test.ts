@@ -3,7 +3,7 @@
 // الجزء الأول بلا قاعدة:
 //   DATABASE_URL=postgres://x:x@127.0.0.1:1/x npx tsx src/lib/__tests__/org-stage5.test.ts
 // والبقية على قاعدة الاختبار وحدها، بلا شبكة ولا إرسال ولا نموذج حقيقي:
-//   DATABASE_URL=postgres://t:t@127.0.0.1:55445/t npx tsx src/lib/__tests__/org-stage5.test.ts
+//   DATABASE_URL=postgres://t:t@127.0.0.1:55447/t npx tsx src/lib/__tests__/org-stage5.test.ts
 export {};
 
 let fetched = 0;
@@ -31,7 +31,7 @@ check("رقمٌ مخترع: يُرفض", !AN.numbersGrounded("ارتفع الت�
 check("نص الوقائع بلا نموذج", /12 تعليقاً على 3/.test(AN.factsText(F1)));
 
 const URL_ = process.env["DATABASE_URL"] ?? "";
-if (!/127\.0\.0\.1:(55445|55444|55440)\//.test(URL_)) {
+if (!/127\.0\.0\.1:(55447|55445|55444|55440)\//.test(URL_)) {
   console.log(`\n${pass} passed, ${fail} failed (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }
@@ -61,8 +61,8 @@ const ENG = await import("../social/engine");
 const { PROMPT_LIBRARY } = await import("../org/prompts");
 
 await ensureOrgTables(); await ensureTicketTables(); await ensureSimTables(); await ensureDocsTables(); await ensureVoiceTables();
-const A = 11, B = 12, C = 13, D = 14, S = 15, V = 16, W = 17;
-const ALL = [A, B, C, D, S, V, W];
+const A = 11, B = 12, C = 13, D = 14, S = 15, V = 16, W = 17, X = 18;
+const ALL = [A, B, C, D, S, V, W, X];
 const wipe = async () => {
   for (const t of ["shadow_runs", "improvement_proposals", "employee_prompt_versions", "employee_documentation", "account_knowledge", "agent_memory", "employee_tasks", "ticket_action_events",
     "employee_heartbeats", "employee_executions", "org_controls", "org_audit_log", "social_activity", "social_actions", "social_targets", "social_comments", "social_posts", "social_messages", "social_threads",
@@ -81,12 +81,13 @@ const shadow = (u: number, key: string, proposalId: number | null, verdict: stri
     VALUES (${u}, ${`t:${u}`}, ${key}, ${proposalId}, ${String(PROMPT_LIBRARY[key]!.version)}, ${ref ? sql`'{"id":1}'::jsonb` : sql`NULL::jsonb`}, ${verdict}, 'اختبار', 0, 'manual')`);
 
 // ════ ١. المرحلة ٥ ═════════════════════════════════════════════════
-const INT = "email.registrar", INT2 = "email.opens", EXT = "email.director";
+const INT = "email.registrar", INT2 = "email.opens", EXT = "email.director", CODE = "ops.monitor";
 check("المكتبة: الداخلي داخلي والخارجي خارجي", PROMPT_LIBRARY[INT]!.externalBehavior === false && PROMPT_LIBRARY[INT2]!.externalBehavior === false && PROMPT_LIBRARY[EXT]!.externalBehavior === true);
 await hire(A, "email_registrar", INT, "راشد", "OLD-RASHED"); await hire(A, "email_opens", INT2, "فتحات"); await hire(A, "email_manager", EXT, "المدير", "OLD-DIR");
+await hire(A, "monitor", CODE, "المراقب", "OLD-MON");
 await hire(B, "email_registrar", INT, "راشد ب", "B-OLD");
 await P.seedPromptProposals(A); await P.seedPromptProposals(B); await DS.seedDossiers(A); await DS.seedDossiers(B);
-const pInt = await prop(A, `prompt:${INT}`), pInt2 = await prop(A, `prompt:${INT2}`), pExt = await prop(A, `prompt:${EXT}`), pB = await prop(B, `prompt:${INT}`);
+const pInt = await prop(A, `prompt:${INT}`), pInt2 = await prop(A, `prompt:${INT2}`), pExt = await prop(A, `prompt:${EXT}`), pB = await prop(B, `prompt:${INT}`), pCode = await prop(A, `prompt:${CODE}`);
 check("البذر: مقترحات معلّقة، الداخلي low والخارجي approval_required", pInt?.risk === "low" && pExt?.risk === "approval_required" && pInt.status === "proposed" && pExt.status === "proposed");
 
 check("بلا ظل: لا شيء يُفعَّل", (await AA.autoApplyLowRisk(A)).every((r) => !r.applied));
@@ -105,23 +106,43 @@ check("مُدقَّق: auto_applied منخفض الخطر والإرجاع مت�
 const rB = await AA.autoApplyLowRisk(B);
 check("failed_checks يحجب (حساب ب)", (await prop(B, `prompt:${INT}`)).status === "proposed" && rB.some((x) => /failed_checks/.test(x.why)), rB);
 check("عزل: ظل أ لا يفعّل في ب", (await db.execute<any>(sql`SELECT persona FROM bot_employees WHERE user_id = ${B} AND employee_key = ${INT}`)).rows[0].persona === "B-OLD");
-// no_model_path + ملف كامل
+// no_model_path + ملف كامل: لمن هو بالكود وحده فعلاً (المراقب)
+await shadow(A, CODE, Number(pCode.change_id), "no_model_path", false);
+// والفتحات تصوغ تقريرها بنموذج: صفٌّ قديم مكتوب no_model_path (قبل تصحيح الخريطة) لا يمرّ
 await shadow(A, INT2, Number(pInt2.change_id), "no_model_path", false);
 const r2 = await AA.autoApplyLowRisk(A);
-const g2 = r2.find((x) => x.changeId === Number(pInt2.change_id));
-check("بلا مسار نموذج وملف كامل: فُعّل", !!g2?.applied && g2.basis === "no_model_path", r2);
+const g2 = r2.find((x) => x.changeId === Number(pCode.change_id));
+check("بالكود وحده وملف كامل: فُعّل", !!g2?.applied && g2.basis === "no_model_path", r2);
+const g2o = r2.find((x) => x.changeId === Number(pInt2.change_id));
+check("له نموذج وصفٌّ قديم no_model_path: لا يُفعَّل، «لم يُجرَّب»", !!g2o && !g2o.applied && /لم يُجرَّب/.test(g2o.why) && (await prop(A, `prompt:${INT2}`)).status === "proposed", g2o);
 // الإرجاع
 const back = await P.rollbackProposal(A, Number(pInt.change_id), A);
 const [rashed2] = (await db.execute<any>(sql`SELECT persona FROM bot_employees WHERE user_id = ${A} AND employee_key = ${INT}`)).rows;
 check("الإرجاع يعيد ما كان", back.status === "rolled_back" && rashed2.persona === "OLD-RASHED");
 // ملف ناقص يحجب no_model_path (حساب ب، موظف آخر)
-await hire(B, "email_opens", INT2, "فتحات ب");
+await hire(B, "monitor", CODE, "المراقب ب");
 await P.seedPromptProposals(B); await DS.seedDossiers(B);
-const pB2 = await prop(B, `prompt:${INT2}`);
-await db.execute(sql`UPDATE employee_documentation SET sections = sections || '{"mission":""}'::jsonb WHERE user_id = ${B} AND employee_key = ${INT2}`);
-await shadow(B, INT2, Number(pB2.change_id), "no_model_path", false);
-const gB2 = await AA.shadowGate(B, { change_id: Number(pB2.change_id), target: `prompt:${INT2}` });
+const pB2 = await prop(B, `prompt:${CODE}`);
+await db.execute(sql`UPDATE employee_documentation SET sections = sections || '{"mission":""}'::jsonb WHERE user_id = ${B} AND employee_key = ${CODE}`);
+await shadow(B, CODE, Number(pB2.change_id), "no_model_path", false);
+const gB2 = await AA.shadowGate(B, { change_id: Number(pB2.change_id), target: `prompt:${CODE}` });
 check("بلا مسار والملف ناقص: لا يمرّ", !gB2.ok && /ناقص/.test(gB2.why), gB2);
+// mixed وnot_covered يحجبان (حساب س)
+await hire(X, "email_registrar", INT, "راشد س"); await hire(X, "email_opens", INT2, "فتحات س");
+await P.seedPromptProposals(X); await DS.seedDossiers(X);
+const pC = await prop(X, `prompt:${INT}`), pC2 = await prop(X, `prompt:${INT2}`);
+await shadow(X, INT, Number(pC.change_id), "same"); await shadow(X, INT, Number(pC.change_id), "mixed");
+await shadow(X, INT2, Number(pC2.change_id), "not_covered", false);
+const gC = await AA.shadowGate(X, { change_id: Number(pC.change_id), target: `prompt:${INT}` });
+const gC2 = await AA.shadowGate(X, { change_id: Number(pC2.change_id), target: `prompt:${INT2}` });
+check("mixed يحجب ولو مع عيّنة same", !gC.ok && /مختلط/.test(gC.why), gC);
+check("not_covered يحجب: «لم يُجرَّب»", !gC2.ok && /لم يُجرَّب/.test(gC2.why), gC2);
+const rC = await AA.autoApplyLowRisk(X);
+check("ولا تفعيل آلي لأيٍّ منهما", rC.every((x) => !x.applied) && (await prop(X, `prompt:${INT}`)).status === "proposed" && (await prop(X, `prompt:${INT2}`)).status === "proposed", rC);
+const bC = await BK.bulkApprove(X, X, { dryRun: true });
+const bC2 = bC.items.find((i) => i.kind === "proposal" && i.id === Number(pC2.change_id));
+check("الاعتماد الجماعي: يُترك، وصاحب العمل يرى «لم يُجرَّب»", bC2?.result === "skipped" && /^لم يُجرَّب/.test(bC2.why), bC2);
+check("...والمختلط يُترك بسببه", bC.items.find((i) => i.kind === "proposal" && i.id === Number(pC.change_id))?.result === "skipped");
 
 // ════ ٢. «اعتماد كل المؤهل» ═══════════════════════════════════════
 await db.execute(sql`INSERT INTO improvement_proposals (user_id, requested_by, target, reason, category, risk) VALUES (${A}, 'test', 'limits:daily', 'رفع الحد', 'limits', 'approval_required')`);
@@ -219,7 +240,10 @@ await hire(D, "email_opens", null, "جديد ٢");
 await DS.docsTick(); await DS.docsTick();
 check("المرور الدوري يلتقط من فاته، ومرتين بأمان", (await dossiersOf()) === 2);
 
-// POST /org/sim/shadow/run: بعد اكتماله يمرّ التفعيل الآلي، ويُقال ما فُعّل
+// POST /org/sim/shadow/run: بعد اكتماله يمرّ التفعيل الآلي، ويُقال ما فُعّل — للمراقب (بالكود وحده)
+// وحده؛ المسجّل والفتحات يصوغان تقريريهما بنموذج فـ«لم يُجرَّب» ولا يُفعَّلان.
+await hire(D, "monitor", null, "مراقب");
+await DS.docsTick();
 await P.seedPromptProposals(D);
 const simApp = express();
 simApp.use(express.json());
@@ -235,7 +259,9 @@ const simRes = await new Promise<any>((ok, no) => {
   });
 });
 simServer.close();
-check("تشغيل الظل يدوياً يتبعه التفعيل الآلي (بلا مسار نموذج وملف كامل)", simRes.status === 200 && simRes.body.autoApplied?.filter((x: any) => x.applied).length === 2, simRes.body?.autoApplied);
+const autoD: any[] = simRes.body?.autoApplied ?? [];
+check("تشغيل الظل يدوياً يتبعه التفعيل الآلي: المراقب وحده (بالكود وملف كامل)", simRes.status === 200 && autoD.filter((x) => x.applied).map((x) => x.employeeKey).join() === "ops.monitor", autoD);
+check("...والمسجّل والفتحات «لم يُجرَّب» فلا يُفعَّلان", ["email.registrar", "email.opens"].every((k) => autoD.some((x) => x.employeeKey === k && !x.applied && /لم يُجرَّب/.test(x.why))), autoD);
 
 // ════ ٦. planned / no_account، الناقل، المحلل ══════════════════════
 await hire(S, "li_manager", "linkedin.manager", "خليفة"); await hire(S, "li_inviter", "linkedin.inviter", "منيرة");

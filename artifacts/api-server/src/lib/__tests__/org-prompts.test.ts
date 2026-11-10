@@ -123,6 +123,31 @@ check("tiktok's caps are its own", PROMPT_LIBRARY["tiktok.manager"]!.sections.de
 check("inviter and analyst name their engine (v2)", ["instagram.inviter", "tiktok.analyst"].every((k) => PROMPT_LIBRARY[k]!.version === 2 && !/بلا محرّك/.test(PROMPT_LIBRARY[k]!.sections.identity))
   && /inviteCommenters/.test(PROMPT_LIBRARY["instagram.inviter"]!.sections.approvedTools) && /runEngagementAnalysis/.test(PROMPT_LIBRARY["tiktok.analyst"]!.sections.approvedTools));
 
+// ── قواعد الظل الصلبة (2026-11-10): الحد والرقم والكتل وقائمة المنع وأول جملة والتصنيف، في النسخة 2 ──
+// في أقسامٍ تدخل التعليمات المجمَّعة دائماً (شكل المخرج، الممنوعات، طريقة العمل، إطار القرار).
+const M = await import("../org/docs/model");
+const O = await import("../org/docs/objections");
+const runtimeOf = (k: string, a: { name: string; vertical: string }) => {
+  const e = PROMPT_LIBRARY[k]!;
+  const lib = O.libraryFor(a);
+  const kn = lib ? O.libraryRows(lib).map((r: any) => ({ key: r.key, value: r.value })) : [];
+  return M.renderRuntime({ employeeKey: k, sections: M.buildDossierSections(k, e, a, { version: 1, author: "t", reason: "t", libraryVersion: e.version }), externalBehavior: e.externalBehavior, account: a, knowledge: kn });
+};
+const HARD: Array<[string, RegExp[]]> = [
+  ["email.copywriter", [/٤٠–٩٠ كلمة، ولا تتجاوز ١١٠ كلمات أبداً/, /فقط إن ورد حرفياً في المعرفة المعطاة/, /\[عنوان\] و\[الرسالة\] و\[ملخص\] و\[زر\]/]],
+  ["email.creator", [/٤٠–٩٠ كلمة، ولا تتجاوز ١١٠ كلمات أبداً/, /فقط إن ورد حرفياً في المعرفة المعطاة/, /\[عنوان\] و\[الرسالة\] و\[ملخص\] و\[زر\]/]],
+  ["email.followup", [/٥٠–٧٠ كلمة ولا تتجاوز ٧٠ أبداً/, /سطر \[ملخص\] لا يغيب/, /طلبٌ واحد/, /إلا ما ورد حرفياً في المعرفة المعطاة/]],
+  ["email.replies", [/urgent، best، leading، guaranteed، last chance، limited time/]],
+  ["target_accounts.writer", [/الجملة الأولى تسمّي شركته باسمها \({company}/, /والإشارة معاً/]],
+  ["shared.collector", [/not_customer/, /machine/, /hot فقط بإشارة شراء صريحة بكلماته هو/]],
+];
+for (const [k, res] of HARD) {
+  check(`${k}: v2 and its hard rules in the library`, PROMPT_LIBRARY[k]!.version === 2 && res.every((re) => re.test(renderPrompt(PROMPT_LIBRARY[k]!, PROCOUNT))));
+  const rts = [FLORET, PROCOUNT, OTHER].map((a) => runtimeOf(k, a));
+  check(`${k}: hard rules survive the ≤${LIMIT} runtime, every account`, rts.every((t) => t.length <= LIMIT && res.every((re) => re.test(t))), rts.map((t) => t.length).join(","));
+}
+check("the WRITER blocks stay exactly as parseDraft reads them", ["email.copywriter", "email.followup", "email.creator"].every((k) => /\[عنوان\] <الأول>\n\[عنوان\] <ثانٍ بزاوية أخرى>\n\[الرسالة\]/.test(PROMPT_LIBRARY[k]!.sections.outputSchema)));
+
 console.log(`\n${pass}/${total} passed`);
 if (pass !== total) process.exit(1);
 process.exit(0);

@@ -2,7 +2,7 @@
 // قاعدة الاختبار وحدها، بلا شبكة: المزوّدون يرفضون وكل fetch يُعدّ.
 //   DATABASE_URL=postgres://t:t@127.0.0.1:55444/t npx tsx src/lib/__tests__/org-e2e.test.ts
 export {};
-if (!/127\.0\.0\.1:(55445|55444|55440)/.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
+if (!/127\.0\.0\.1:(55447|55445|55444|55440)/.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
 
 let fetched = 0;
 globalThis.fetch = (async (url: any) => { fetched++; throw new Error(`no network in this test: ${url}`); }) as any;
