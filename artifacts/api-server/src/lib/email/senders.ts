@@ -38,8 +38,10 @@ export function senderWarmupCap(dailyCap: number, ageDays: number, on = true): n
   return Math.min(dailyCap, Math.round(20 * Math.pow(1.15, Math.max(0, ageDays))));
 }
 
-/** حدّ الارتداد الذي يُمهَل بعده صندوقٌ وحده، وأقل عيّنةٍ يُحكم عليها. ٤٪ — إرشاد Gmail ٢٪، والصندوق الأول أشدّ منه. */
-export const SENDER_BOUNCE_HOLD = { pct: 4, minSent: 20, hours: 24 };
+/** حدّ الارتداد الذي يُمهَل بعده صندوقٌ وحده، وأقل عيّنةٍ يُحكم عليها. ٤٪ — إرشاد Gmail ٢٪، والصندوق الأول أشدّ منه.
+ *  ١١ نوفمبر ٢٠٢٦: عيّنة ٢٠ وارتدادٌ واحد (٥٪) كانت تُمهل صندوقاً جديداً يوماً كاملاً — ضجيجٌ لا سمعة.
+ *  فصارت العيّنة ٥٠ ولا يُحكم بأقل من ٣ ارتدادات. */
+export const SENDER_BOUNCE_HOLD = { pct: 4, minSent: 50, minBounced: 3, hours: 24 };
 
 export interface Candidate {
   id: number | null;            // null = الصندوق الأول
@@ -138,7 +140,7 @@ export async function holdBouncingSenders(userId: number): Promise<Array<{ email
   const out: Array<{ email: string; pct: number }> = [];
   for (const x of r.rows) {
     const sent = Number(x.sent), pct = sent ? Math.round((1000 * Number(x.bounced)) / sent) / 10 : 0;
-    if (sent >= SENDER_BOUNCE_HOLD.minSent && pct >= SENDER_BOUNCE_HOLD.pct) {
+    if (sent >= SENDER_BOUNCE_HOLD.minSent && Number(x.bounced) >= SENDER_BOUNCE_HOLD.minBounced && pct >= SENDER_BOUNCE_HOLD.pct) {
       await db.update(emailSendersTable).set({ heldUntil: new Date(Date.now() + SENDER_BOUNCE_HOLD.hours * 3_600_000), heldReason: `ارتداد ${pct}٪ من ${sent} رسالة في يومين — أُمهِل يوماً وحده، والباقون يكملون` }).where(eq(emailSendersTable.id, Number(x.id)));
       out.push({ email: x.email, pct });
     }
