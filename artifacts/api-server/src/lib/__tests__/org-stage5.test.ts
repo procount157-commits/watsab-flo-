@@ -31,7 +31,7 @@ check("رقمٌ مخترع: يُرفض", !AN.numbersGrounded("ارتفع الت�
 check("نص الوقائع بلا نموذج", /12 تعليقاً على 3/.test(AN.factsText(F1)));
 
 const URL_ = process.env["DATABASE_URL"] ?? "";
-if (!/127\.0\.0\.1:(55447|55445|55444|55440)\//.test(URL_)) {
+if (!/127\.0\.0\.1:(55449|55447|55445|55444|55440)\//.test(URL_)) {
   console.log(`\n${pass} passed, ${fail} failed (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }
@@ -61,8 +61,8 @@ const ENG = await import("../social/engine");
 const { PROMPT_LIBRARY } = await import("../org/prompts");
 
 await ensureOrgTables(); await ensureTicketTables(); await ensureSimTables(); await ensureDocsTables(); await ensureVoiceTables();
-const A = 11, B = 12, C = 13, D = 14, S = 15, V = 16, W = 17, X = 18;
-const ALL = [A, B, C, D, S, V, W, X];
+const A = 11, B = 12, C = 13, D = 14, S = 15, V = 16, W = 17, X = 18, Y = 19;
+const ALL = [A, B, C, D, S, V, W, X, Y];
 const wipe = async () => {
   for (const t of ["shadow_runs", "improvement_proposals", "employee_prompt_versions", "employee_documentation", "account_knowledge", "agent_memory", "employee_tasks", "ticket_action_events",
     "employee_heartbeats", "employee_executions", "org_controls", "org_audit_log", "social_activity", "social_actions", "social_targets", "social_comments", "social_posts", "social_messages", "social_threads",
@@ -143,6 +143,27 @@ const bC = await BK.bulkApprove(X, X, { dryRun: true });
 const bC2 = bC.items.find((i) => i.kind === "proposal" && i.id === Number(pC2.change_id));
 check("الاعتماد الجماعي: يُترك، وصاحب العمل يرى «لم يُجرَّب»", bC2?.result === "skipped" && /^لم يُجرَّب/.test(bC2.why), bC2);
 check("...والمختلط يُترك بسببه", bC.items.find((i) => i.kind === "proposal" && i.id === Number(pC.change_id))?.result === "skipped");
+// «same» لأن الاثنين خالفا الحد نفسه ليس دليلاً (المنشئ، 2026-11-11: ١٢٣ و١٢٨ كلمة) — حساب ي
+await hire(Y, "email_registrar", INT, "راشد ي");
+await P.seedPromptProposals(Y); await DS.seedDossiers(Y);
+const pY = await prop(Y, `prompt:${INT}`);
+const shadowIssues = (u: number, key: string, proposalId: number, verdict: string, issues: string[]) =>
+  db.execute(sql`INSERT INTO shadow_runs (user_id, batch_id, employee_key, proposal_id, library_version, sample_ref, verdict, detail, model_calls, trigger, current_issues, proposed_issues)
+    VALUES (${u}, ${`t:${u}`}, ${key}, ${proposalId}, ${String(PROMPT_LIBRARY[key]!.version)}, '{"id":1}'::jsonb, ${verdict}, 'اختبار', 2, 'manual', ${JSON.stringify(issues)}::jsonb, ${JSON.stringify(issues)}::jsonb)`);
+await shadowIssues(Y, INT, Number(pY.change_id), "same", []);
+await shadowIssues(Y, INT, Number(pY.change_id), "same", ["الرسالة ١٢٨ كلمة — الحد ١١٠ تقريباً"]);
+const gY = await AA.shadowGate(Y, { change_id: Number(pY.change_id), target: `prompt:${INT}` });
+check("بوابة: same بمخالفةٍ في المقترح يحجب ولو مع عيّنة سليمة", !gY.ok && /خالف فحص الكود في 1 عيّنة/.test(gY.why) && /ليس دليلاً/.test(gY.why), gY);
+const rY = await AA.autoApplyLowRisk(Y);
+check("...ولا تفعيل آلي", rY.every((x) => !x.applied) && (await prop(Y, `prompt:${INT}`)).status === "proposed", rY);
+const bY = (await BK.bulkApprove(Y, Y, { dryRun: true })).items.find((i) => i.kind === "proposal" && i.id === Number(pY.change_id));
+check("...والاعتماد الجماعي يتركه بسببه", bY?.result === "skipped" && /ليس دليلاً/.test(bY.why), bY);
+await shadowIssues(Y, INT, Number(pY.change_id), "better", ["مبالغة أو ضمان: best"]);
+await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${Y} AND verdict = 'same' AND jsonb_array_length(proposed_issues) > 0`);
+check("better بمخالفةٍ باقية في المقترح يحجب أيضاً", !(await AA.shadowGate(Y, { change_id: Number(pY.change_id), target: `prompt:${INT}` })).ok);
+await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${Y} AND jsonb_array_length(proposed_issues) > 0`);
+const gY2 = await AA.shadowGate(Y, { change_id: Number(pY.change_id), target: `prompt:${INT}` });
+check("كل العيّنات same/better ومخالفات المقترح فارغة: يمرّ", gY2.ok && gY2.samples === 1, gY2);
 
 // ════ ٢. «اعتماد كل المؤهل» ═══════════════════════════════════════
 await db.execute(sql`INSERT INTO improvement_proposals (user_id, requested_by, target, reason, category, risk) VALUES (${A}, 'test', 'limits:daily', 'رفع الحد', 'limits', 'approval_required')`);

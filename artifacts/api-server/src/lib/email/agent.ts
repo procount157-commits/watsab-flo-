@@ -262,7 +262,8 @@ const BODY_CLOSE = /\**\[\/(?:الرسالة|message|body|email)\]\**/i;
 /** Where the body ends when its closing mark is missing: the first follow-up or the reason, else EOF. */
 const NEXT_BLOCK = /\**\[(?:متابعة|follow|السبب|why)/i;
 const FOLLOW_BLOCK = /\**\[(?:متابعة|follow-?up)([^\]]*)\]\**[ \t]*\n?([\s\S]*?)(?=\**\[\/(?:متابعة|follow-?up)\]|\**\[(?:متابعة|follow-?up)[^\]]*\]|\**\[(?:السبب|why)\]|$(?![\s\S]))/gi;
-const FOLLOW_SUBJECT = /^\s*\**(?:عنوان|العنوان|subject)\**\s*[:：]\s*(.+)$/im;
+const FOLLOW_START = /\**\[(?:متابعة|follow-?up)[^\]]*\]/i;
+const FOLLOW_SUBJECT =/^\s*\**(?:عنوان|العنوان|subject)\**\s*[:：]\s*(.+)$/im;
 const WHY_LINE = /^\s*\**\[(?:السبب|why)\]\**\s*[:：]?\s*(.+)$/im;
 const unquote = (x: string) => x.trim().replace(/^["«“]|["»”]$/g, "").replace(/\*\*/g, "").trim();
 
@@ -277,24 +278,48 @@ export function bodyOf(text: string): string | null {
   return body || null;
 }
 
-/** Read what she wrote. Pure. */
-export function parseDraft(text: string): EmailDraft | null {
+/**
+ * Read what she wrote. Pure.
+ *
+ * `followup`: a follow-up wave (يوسف). Its first email IS a follow-up, and the
+ * models answer that request in the follow-up's own shape far more often than
+ * in the first email's: only [متابعة] blocks, or «Subject:» and the text with no
+ * [الرسالة] mark. Each of those used to read as no draft at all (null) — in the
+ * mission a «model did not answer» and in the shadow an empty pair of outputs
+ * (2026-11-11, account 2, all three samples). For that role the first [متابعة]
+ * block, else the text after the subject lines, is the body. The first email's
+ * reading is unchanged.
+ */
+export function parseDraft(text: string, opts: { followup?: boolean } = {}): EmailDraft | null {
   const bracketed = [...text.matchAll(SUBJECT_LINE)].map((m) => unquote(m[1]!)).filter(Boolean);
   // A bare «Subject: …» counts only before the body — inside a follow-up it is that follow-up's own.
-  const bodyAt = BODY_OPEN.exec(text)?.index ?? text.length;
+  const bodyAt = BODY_OPEN.exec(text)?.index ?? FOLLOW_START.exec(text)?.index ?? text.length;
   const bare = bracketed.length ? [] : [...text.slice(0, bodyAt).matchAll(BARE_SUBJECT)].map((m) => unquote(m[1]!)).filter(Boolean);
-  const subjects = [...new Set(bracketed.length ? bracketed : bare)].slice(0, 3);
-  const body = bodyOf(text);
+  let subjects = [...new Set(bracketed.length ? bracketed : bare)].slice(0, 3);
+  let body = bodyOf(text);
+  let blocks = [...text.matchAll(FOLLOW_BLOCK)].map((m) => {
+    const inner = m[2]!.trim();
+    return { attrs: m[1] ?? "", subject: FOLLOW_SUBJECT.exec(inner)?.[1]?.trim() ?? "", bodyText: inner.replace(FOLLOW_SUBJECT, "").trim() };
+  });
+  if (!body && opts.followup) {
+    const first = blocks.findIndex((b) => b.bodyText);
+    if (first >= 0) {
+      body = blocks[first]!.bodyText;
+      if (!subjects.length && blocks[first]!.subject) subjects = [unquote(blocks[first]!.subject)];
+      blocks = blocks.filter((_, i) => i !== first);
+    } else if (subjects.length) {
+      // «Subject: …» then the text, no marks: everything up to the reason is the body.
+      const end = NEXT_BLOCK.exec(text)?.index ?? text.length;
+      body = text.slice(0, end).replace(SUBJECT_LINE, "").replace(BARE_SUBJECT, "").trim() || null;
+    }
+  }
   if (!subjects.length || !body) return null;
   const followups: EmailDraft["followups"] = [];
-  for (const m of text.matchAll(FOLLOW_BLOCK)) {
-    const attrs = m[1] ?? "";
+  for (const b of blocks) {
+    const attrs = b.attrs;
     const after = Number(/(?:بعد|after)\s*=\s*(\d+)/i.exec(attrs)?.[1] ?? 72);
     const audience: EmailDraft["followups"][number]["audience"] = /وداع|breakup/i.test(attrs) ? "breakup" : /قيمة|value/i.test(attrs) ? "value" : /زاوية|angle/i.test(attrs) ? "angle" : /تذكير|bump/i.test(attrs) ? "bump" : /بارد|cold/i.test(attrs) ? "cold" : "warm";
-    const inner = m[2]!.trim();
-    const subject = FOLLOW_SUBJECT.exec(inner)?.[1]?.trim();
-    const bodyText = inner.replace(FOLLOW_SUBJECT, "").trim();
-    if (subject && bodyText) followups.push({ audience, afterHours: Math.min(24 * 30, Math.max(24, after)), subject: unquote(subject), html: toHtml(bodyText) });
+    if (b.subject && b.bodyText) followups.push({ audience, afterHours: Math.min(24 * 30, Math.max(24, after)), subject: unquote(b.subject), html: toHtml(b.bodyText) });
   }
   const why = WHY_LINE.exec(text)?.[1]?.trim() ?? "";
   return { subjects, html: toHtml(body), followups, why };
@@ -312,7 +337,56 @@ export interface WriteInput {
   /** This wave's angle (the mission's), and the angles already spent on the audience. */
   angle?: string | null;
   usedAngles?: string[];
+  /** Filled by writeCampaign when it returns null: no model answered, or one did and its text did not parse (with its start). */
+  trace?: { reason?: "no_reply" | "unparsed"; raw?: string };
 }
+
+/**
+ * The first email's block for a follow-up wave. يوسف's wave goes to people who
+ * already got the first email, so [الرسالة] is itself a follow-up: the summary
+ * and the button, 50–70 words, no details. The template used to ask him for a
+ * first email with [تفاصيل] and «40–90 words» beside FOLLOWUP_CRAFT and his
+ * own «no details section» — two shapes for one request. Pure, exported for tests.
+ */
+export const FOLLOWUP_BODY_TEMPLATE = [
+  "[الرسالة]",
+  "Hello {{first_name|there}},",
+  "",
+  "[ملخص] <THIS WAVE IS ITSELF A FOLLOW-UP — they already got our first email: ONE new angle or fact from the knowledge that they have not read, about {{company|your company}}, and ONE easy question. At most 45 words.>",
+  "",
+  "[زر] <the call-to-action button: 2 to 5 English words, one easy step>",
+  "",
+  "Best regards,",
+  "The Pro Count team",
+  "[/الرسالة]",
+  "Structure rules for this follow-up wave: the [الرسالة] block above IS the follow-up and is never left out — 50–70 words, never more than 70; [ملخص] right after the greeting, then [زر]; no [تفاصيل], no [إبراز], no list, and not the first email again. Keep every label exactly as written.",
+];
+
+/** The first email's block, as it always was. */
+const FIRST_BODY_TEMPLATE = [
+  "[الرسالة]",
+  "[معاينة] <PREVIEW TEXT, 6–12 words: completes the subject, never repeats it — the second reason to open>",
+  "[عنوان كبير] <HEADLINE, 4–9 words: the outcome they want or the risk they avoid — about them, not us>",
+  "Hello {{first_name|there}},",
+  "",
+  "[ملخص] <THE WHOLE EMAIL IN 2–3 LINES, at most 45 words, opening on ONE verifiable fact about their sector from the knowledge (a Ministry fine figure, a legal deadline): their situation (name {{company|your company}}), why it matters now, and the ONE thing we offer. Someone who reads only this line must know what we want and why it is worth their time.>",
+  "",
+  "[زر] <the call-to-action button: 2 to 5 English words, an interest or a free resource — never a meeting on the first email, e.g. «Get the goAML checklist», «Check my AML gaps», «Worth a look?»>",
+  "",
+  "[تفاصيل]",
+  "- <point 1: what the requirement or problem actually is — from the knowledge only>",
+  "- <point 2: what we would check or do for them>",
+  "- <point 3 (optional): what they get out of it>",
+  "",
+  "[إبراز] <ONE line, the single strongest fact in this email — from the knowledge only; omit the line if there is none>",
+  "",
+  "<ONE short paragraph, max 2 sentences: the reference (law/regulator) or a concrete example — only if it is in the knowledge>",
+  "",
+  "Best regards,",
+  "The Pro Count team",
+  "[/الرسالة]",
+  "Structure rules: summary first and complete on its own; the button straight after it; everything else under [تفاصيل]; the whole email 40–90 words (at most 110 with the details list); no paragraph longer than 2 sentences.",
+];
 
 /** The block that keeps a wave from repeating the last one. Pure, exported for tests. */
 export function priorWavesBlock(priorWaves: WriteInput["priorWaves"], angle?: string | null, usedAngles: string[] = []): string {
@@ -341,6 +415,7 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
     return writeShopCampaign(userId, input, { name: st?.brandName ?? (prof?.name ?? "").split("(")[0]!.trim() ?? null, site: st?.website ?? STORE_URL });
   }
   // The writer's own voice — نورة, or يوسف for a follow-up wave — with the team's doctrine.
+  const followupWave = (input.role ?? "email") === "email_followup";
   const head = await teamVoice(userId, input.role ?? "email");
   const sectors = input.filter.sectors ?? [];
   const query = `${input.goal} ${input.angle ?? ""} ${sectors.join(" ")}`;
@@ -373,7 +448,7 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
       COLD_CRAFT,
       HOOK_CRAFT,
       // والمتابعات التي تُكتب مع الحملة — ومهمات يوسف كلها — بصنعة المتابعة.
-      (input.role ?? "email") === "email_followup" ? FOLLOWUP_CRAFT : "المتابعات [متابعة] أدناه: كلٌّ تحمل شيئاً لم يكن في الرسالة الأولى، أقصر منها، بطلبٍ واحد — وبلا «just following up» ولا «checking in» ولا اعتذار عن المتابعة.",
+      followupWave ? FOLLOWUP_CRAFT : "المتابعات [متابعة] أدناه: كلٌّ تحمل شيئاً لم يكن في الرسالة الأولى، أقصر منها، بطلبٍ واحد — وبلا «just following up» ولا «checking in» ولا اعتذار عن المتابعة.",
       "",
       priorWavesBlock(input.priorWaves, input.angle, input.usedAngles),
       guidance.block,
@@ -384,28 +459,7 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
       "المطلوب: حملة بريد لجمهور محدد. اكتبي بهذا الشكل بالضبط ولا شيء خارجه:",
       "[عنوان] <العنوان الأول>",
       "[عنوان] <عنوان ثانٍ بزاوية مختلفة تماماً — سنختبرهما على شريحة>",
-      "[الرسالة]",
-      "[معاينة] <PREVIEW TEXT, 6–12 words: completes the subject, never repeats it — the second reason to open>",
-      "[عنوان كبير] <HEADLINE, 4–9 words: the outcome they want or the risk they avoid — about them, not us>",
-      "Hello {{first_name|there}},",
-      "",
-      "[ملخص] <THE WHOLE EMAIL IN 2–3 LINES, at most 45 words, opening on ONE verifiable fact about their sector from the knowledge (a Ministry fine figure, a legal deadline): their situation (name {{company|your company}}), why it matters now, and the ONE thing we offer. Someone who reads only this line must know what we want and why it is worth their time.>",
-      "",
-      "[زر] <the call-to-action button: 2 to 5 English words, an interest or a free resource — never a meeting on the first email, e.g. «Get the goAML checklist», «Check my AML gaps», «Worth a look?»>",
-      "",
-      "[تفاصيل]",
-      "- <point 1: what the requirement or problem actually is — from the knowledge only>",
-      "- <point 2: what we would check or do for them>",
-      "- <point 3 (optional): what they get out of it>",
-      "",
-      "[إبراز] <ONE line, the single strongest fact in this email — from the knowledge only; omit the line if there is none>",
-      "",
-      "<ONE short paragraph, max 2 sentences: the reference (law/regulator) or a concrete example — only if it is in the knowledge>",
-      "",
-      "Best regards,",
-      "The Pro Count team",
-      "[/الرسالة]",
-      "Structure rules: summary first and complete on its own; the button straight after it; everything else under [تفاصيل]; the whole email 40–90 words (at most 110 with the details list); no paragraph longer than 2 sentences.",
+      ...(followupWave ? FOLLOWUP_BODY_TEMPLATE : FIRST_BODY_TEMPLATE),
       "[متابعة بعد=72 جمهور=دافئ]",
       "عنوان: <for those who OPENED and did not reply — a new pain point from their sector and ONE easy qualification question>",
       "<[ملخص] one or two lines with the new angle, then [زر] the button — at most 70 words, no [تفاصيل] section>",
@@ -432,9 +486,13 @@ export async function writeCampaign(userId: number, input: WriteInput): Promise<
       input.notes ? `ملاحظات صاحب العمل: ${input.notes}` : "",
     ].filter(Boolean).join("\n") },
   ], 90_000, { maxTokens: WRITER_MAX_TOKENS }));
-  if (!out?.text) return null;
-  const draft = parseDraft(out.text);
-  if (!draft) { logger.warn({ userId, sample: out.text.slice(0, 300) }, "مسودة نورة لم تُقرأ"); return null; }
+  if (!out?.text) { if (input.trace) input.trace.reason = "no_reply"; return null; }
+  const draft = parseDraft(out.text, { followup: followupWave });
+  if (!draft) {
+    if (input.trace) { input.trace.reason = "unparsed"; input.trace.raw = out.text.slice(0, 400); }
+    logger.warn({ userId, role: input.role ?? "email", sample: out.text.slice(0, 300) }, "مسودة نورة لم تُقرأ");
+    return null;
+  }
   // كُتبت بها فعلاً: الآن فقط تُعدّ مستعملة.
   // المحاكاة لا تستهلك توجيهاً حقيقياً (lib/org/simulation.ts).
   if (!dryRun()) for (const id of guidance.taskIds) await markUsed(userId, id, { by: input.role ?? "email", subject: draft.subjects[0] ?? null }).catch(() => {});

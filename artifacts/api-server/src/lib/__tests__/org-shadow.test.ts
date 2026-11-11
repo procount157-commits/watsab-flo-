@@ -153,7 +153,32 @@ const sumF = SH.summarize([{ verdict: "same" }, { verdict: "failed_checks" }]);
 check("خالف في عيّنة: إنذار، وليس ok", /خالف/.test(sumF.warnings.join()) && !sumF.ok && sumF.samples === 2);
 check("كلها سليمة: ok بلا إنذار", SH.summarize([{ verdict: "same" }, { verdict: "better" }]).ok && !SH.summarize([{ verdict: "same" }]).warnings.length);
 check("بلا مسار: إنذار يقوله", /لا مسار/.test(SH.summarize([{ verdict: "no_model_path" }]).warnings.join()));
-check("السقف والعيّنات كما في المواصفة", SH.SHADOW_DAILY_CALLS === 40 && SH.SHADOW_MAX_SAMPLES === 3);
+check("السقف والعيّنات كما في المواصفة (٦٠ منذ 2026-11-11)", SH.SHADOW_DAILY_CALLS === 60 && SH.SHADOW_MAX_SAMPLES === 3);
+
+// ── المتابعة (2026-11-11، الحساب ٢): ٣ عيّنات no_output والمخرجان فارغان ──
+// السبب في الحزام لا في التعليمات: موجة يوسف طُلبت بقالب الرسالة الأولى ([تفاصيل]، ٤٠–٩٠ كلمة)
+// بجانب صنعة المتابعة وشخصيته («بلا قسم تفاصيل»)، فيجيب النموذج بشكل المتابعة — كتل [متابعة]
+// وحدها أو «Subject:» ونصاً بلا [الرسالة] — وparseDraft يقرأ ذلك null للاثنين.
+const AG = await import("../email/agent");
+const FU_WORDS = (n: number) => Array.from({ length: n }, (_, i) => `word${i}`).join(" ");
+const FU_ONLY = `[عنوان] Source of funds at {{company|your firm}}\n[متابعة بعد=72 جمهور=دافئ]\nعنوان: One question on files\nHello {{first_name|there}},\n[ملخص] ${FU_WORDS(30)}\n[زر] Send me the checklist\nBest regards,\nThe Pro Count team\n[/متابعة]\n[متابعة جمهور=وداع]\nعنوان: Closing the loop\nLast note from us.\n[/متابعة]\n[السبب] new angle`;
+const SUBJ_ONLY = `Subject: One question on files\n\nHello {{first_name|there}},\n[ملخص] ${FU_WORDS(30)}\n[زر] Send me the checklist\nBest regards,\nThe Pro Count team\n[السبب] new angle`;
+check("الرسالة الأولى كما كانت: بلا [الرسالة] لا مسودة", AG.parseDraft(FU_ONLY) === null && AG.parseDraft(SUBJ_ONLY) === null);
+const fu1 = AG.parseDraft(FU_ONLY, { followup: true });
+check("المتابعة: أول كتلة [متابعة] هي الجسم، والباقي متابعاتها", !!fu1 && fu1.subjects[0] === "Source of funds at {{company|your firm}}" && /class="lead"/.test(fu1.html) && /class="cta"/.test(fu1.html)
+  && fu1.followups.length === 1 && fu1.followups[0]!.audience === "breakup" && TEAM.formatIssues(fu1.html, "followup").length === 0, fu1);
+const fu2 = AG.parseDraft(SUBJ_ONLY, { followup: true });
+check("المتابعة: «Subject:» ثم النص بلا علامات = مسودة", !!fu2 && fu2.subjects[0] === "One question on files" && /class="lead"/.test(fu2.html) && !/Subject/.test(fu2.html) && !/new angle/.test(fu2.html), fu2);
+check("وبالشكل الكامل لا يتغيّر شيء", JSON.stringify(AG.parseDraft(`[عنوان] A\n[الرسالة]\n[ملخص] x\n[/الرسالة]`, { followup: true })) === JSON.stringify(AG.parseDraft(`[عنوان] A\n[الرسالة]\n[ملخص] x\n[/الرسالة]`)));
+const tpl = AG.FOLLOWUP_BODY_TEMPLATE.join("\n");
+check("قالب موجة المتابعة: [الرسالة] متابعةٌ ٥٠–٧٠ بلا تفاصيل", /\[الرسالة\][\s\S]*\[ملخص\][\s\S]*\[زر\][\s\S]*\[\/الرسالة\]/.test(tpl) && /50–70 words, never more than 70/.test(tpl) && !/^\[تفاصيل\]/m.test(tpl));
+check("السبب يُقال: لم يرد نموذج ≠ لم يُقرأ شكله", /لم يرد نموذج/.test(SH.noteOf({ reason: "no_reply" })) && /لا يقرؤه parseDraft: «\[متابعة/.test(SH.noteOf({ reason: "unparsed", raw: "[متابعة] x" })));
+
+// ── الدوران اليومي ──
+check("rotateFrom: من حيث توقف، ثم أول القائمة", SH.rotateFrom(["a", "b", "c", "d"], "c").join() === "c,d,a,b" && SH.rotateFrom(["a", "b"], null).join() === "a,b" && SH.rotateFrom(["a", "b"], "z").join() === "a,b");
+// ── same بمخالفةٍ في المقترح ليس سليماً ──
+const sumDirty = SH.summarize([{ verdict: "same", proposed_issues: ["الرسالة ١٢٨ كلمة — الحد ١١٠ تقريباً"] }, { verdict: "same", proposed_issues: [] }]);
+check("same والمقترح خالف (والحالي أيضاً): إنذار، وليس ok", !sumDirty.ok && /same\/better/.test(sumDirty.warnings.join()), sumDirty);
 
 // سياق المحاكاة
 check("خارج المحاكاة: لا محاكاة ولا بديل", !SIM.inSimulation() && SIM.personaFor("email", "OLD") === "OLD" && SIM.takeSimCall());
@@ -235,7 +260,7 @@ check("جاسم: فتح ضعيف، لا رد نافع، ارتداد، وحار�
 check("بيانات الاختبار معلَّمة", (fx as any).test_data === true && /اختبار/.test(fx.name));
 
 // ── على القاعدة ───────────────────────────────────────────────────
-if (!/127\.0\.0\.1:(55447|55445|55444|55440)/.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55449|55447|55445|55444|55440)/.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`\n${pass} passed, ${fail} failed (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }
@@ -318,6 +343,69 @@ check("له نموذج وبلا مسار في هذه الدفعة: not_covered",
 const sNot = await SH.shadowSummary(A, { employeeKey: "email.registrar" });
 check("خلاصته: «لم يُجرَّب» وليست ok", !sNot.ok && sNot.warnings.some((w) => /لم يُجرَّب/.test(w)), sNot);
 await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${A}`);
+
+// ── المتابعة بمسارها الحقيقي ونموذجٍ مزيّف يجيب بشكل المتابعة (إعادة إنتاج 2026-11-11) ──
+const realFetch = globalThis.fetch;
+const asked: string[] = [];
+const fuBody = (n: number) => `[عنوان] Source of funds at {{company|your firm}}\n[متابعة بعد=72 جمهور=دافئ]\nعنوان: One question on files\nHello {{first_name|there}},\n[ملخص] ${FU_WORDS(n)}\n[زر] Send me the checklist\nBest regards,\nThe Pro Count team\n[/متابعة]\n[السبب] new angle`;
+let words = 90;
+globalThis.fetch = (async (url: any, init: any) => {
+  const sys = (() => { try { return String(JSON.parse(init?.body ?? "{}")?.messages?.[0]?.content ?? ""); } catch { return ""; } })();
+  asked.push(sys);
+  const text = fuBody(words);
+  return new Response(JSON.stringify({ choices: [{ message: { content: text } }], candidates: [{ content: { parts: [{ text }] } }] }), { status: 200, headers: { "content-type": "application/json" } });
+}) as any;
+// نورة في المسار الحقيقي وظّفت الفريق (ensureEmailTeam): يوسف موجود، يُعطى مفتاحه وشخصيته المحفوظة.
+await db.execute(sql`DELETE FROM bot_employees WHERE user_id = ${A} AND role = 'email_followup'`);
+await db.execute(sql`INSERT INTO bot_employees (user_id, name, role, employee_key, persona) VALUES (${A}, 'يوسف', 'email_followup', 'email.followup', 'OLD-YOUSEF')`);
+await db.execute(sql`INSERT INTO email_missions (user_id, name, goal, filter, agent_role) VALUES (${A}, 'قائمة — متابعة فتحوا ولم يردّوا', 'متابعة لمن فتح رسالتنا ولم يرد. زاوية ألم جديدة', '{"listIds":[]}'::jsonb, 'email_followup')`);
+const rFu = await SH.runShadow(A, { employeeKey: "email.followup" });
+const fuRows = rFu.rows.filter((x: any) => x.employee_key === "email.followup");
+check("المتابعة: المخرجان مكتوبان في كل عيّنة (لا no_output)", fuRows.length === 3 && fuRows.every((x: any) => x.verdict !== "no_output" && !!x.current_output && !!x.proposed_output), fuRows.map((x: any) => [x.verdict, x.detail]));
+check("...ومحكومان بحد المتابعة (٧٠) لا بحد الأولى", fuRows.every((x: any) => x.proposed_issues.some((i: string) => /الحد ٧٠/.test(i)) && x.current_issues.some((i: string) => /الحد ٧٠/.test(i))), fuRows.map((x: any) => x.proposed_issues));
+check("...وكلاهما خالف الحد نفسه: same، ومخالفة المقترح محفوظة", fuRows.every((x: any) => x.verdict === "same" && x.proposed_issues.length > 0));
+check("...والكاتب طُلب منه [الرسالة] متابعةً، بلا قالب الرسالة الأولى", asked.length === 6 && asked.every((t) => /Structure rules for this follow-up wave/.test(t) && !/the whole email 40–90 words/.test(t)));
+check("...والشخصيتان: المحفوظة ثم المقترحة", asked[0]!.includes("OLD-YOUSEF") && !asked[1]!.includes("OLD-YOUSEF"));
+words = 30;
+await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${A}`);
+const rFu2 = await SH.runShadow(A, { employeeKey: "email.followup" });
+check("المتابعة بطولٍ سليم: same بلا مخالفة", rFu2.rows.every((x: any) => x.verdict === "same" && x.proposed_issues.length === 0 && !!x.proposed_output), rFu2.rows.map((x: any) => [x.verdict, x.proposed_issues]));
+globalThis.fetch = realFetch;
+await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${A}`);
+await db.execute(sql`DELETE FROM email_missions WHERE user_id = ${A} AND agent_role = 'email_followup'`);
+await db.execute(sql`DELETE FROM bot_employees WHERE user_id = ${A} AND employee_key = 'email.followup'`);
+
+// ── السقف ٦٠ والدوران: كل موظفٍ مغطّى يأخذ عيّناته خلال يومين ──
+// تكلفة كل عيّنة ٢×maxCalls كما في المسار؛ البريد أولاً أبجدياً كان يأكل السقف كل يوم (الواتساب budget).
+const costed: Array<[string, string, number]> = [["email.copywriter", "email", 1], ["email.creator", "email_creator", 1], ["email.followup", "email_followup", 1], ["email.replies", "email_replies", 1],
+  ["shared.collector", "collector", 1], ["target_accounts.writer", "accounts_writer", 3], ["whatsapp.followup", "followup", 4], ["whatsapp.sales", "sales", 2], ["whatsapp.support", "support", 2]];
+await db.execute(sql`DELETE FROM bot_employees WHERE user_id = ${A}`);
+for (const [k, role] of costed) await db.execute(sql`INSERT INTO bot_employees (user_id, name, role, employee_key, persona) VALUES (${A}, ${k}, ${role}, ${k}, 'OLD')`);
+const spenders = costed.map(([key, role, maxCalls]) => ({
+  key, role, maxCalls,
+  samples: async () => [1, 2, 3].map((i) => ({ ref: { i }, excerpt: "x", data: {} })),
+  run: async () => { for (let i = 0; i < maxCalls; i++) SIM.takeSimCall(); return { text: "ok", issues: [] }; },
+}));
+const sampled = (rs: any[]) => new Set(rs.filter((x: any) => SH.COMPARED.includes(x.verdict)).map((x: any) => String(x.employee_key)));
+const day1 = await SH.runShadow(A, { adapters: spenders as any });
+check("اليوم الأول: ٦٠ نداء على الأكثر، وتوقف عند الواتساب", day1.callsUsed <= 60 && day1.rows.some((x: any) => x.verdict === "budget" && /^whatsapp\./.test(x.employee_key)), day1.rows.map((x: any) => `${x.employee_key}:${x.verdict}`));
+const firstStop = String(day1.rows.find((x: any) => x.verdict === "budget")!.employee_key);
+const missed1 = costed.map(([k]) => k).filter((k) => !sampled(day1.rows).has(k));
+check("...وبقي موظفٌ مغطّى بلا عيّنة في اليوم الأول", missed1.length > 0, missed1);
+// اليوم التالي: صفوف الأمس تُرجَع يوماً
+await db.execute(sql`UPDATE shadow_runs SET created_at = created_at - interval '1 day' WHERE user_id = ${A}`);
+check("stoppedAt: أول موظفٍ كُتب له budget أمس", (await SH.stoppedAt(A)) === firstStop);
+const day2 = await SH.runShadow(A, { adapters: spenders as any });
+const firstKey = String(day2.rows[0]?.employee_key);
+check("اليوم الثاني يبدأ من حيث توقف الأمس", firstKey === firstStop, { firstKey, firstStop });
+const both = new Set([...sampled(day1.rows), ...sampled(day2.rows)]);
+check("خلال يومين: كل موظفٍ مغطّى له عيّنة", costed.every(([k]) => both.has(k)), costed.map(([k]) => k).filter((k) => !both.has(k)));
+check("...وسقف اليوم الثاني ٦٠ وحده", day2.callsUsed <= 60 && (await SH.callsToday(A)) <= 60);
+await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${A}`);
+await db.execute(sql`DELETE FROM bot_employees WHERE user_id = ${A}`);
+await db.execute(sql`INSERT INTO bot_employees (user_id, name, role, employee_key, persona) VALUES
+  (${A}, 'ريم', 'collector', 'shared.collector', 'OLD-REEM'), (${A}, 'راشد', 'email_registrar', 'email.registrar', 'x'), (${A}, 'نورة', 'email', 'email.copywriter', 'OLD-NORA'),
+  (${A}, 'المراقب', 'monitor', 'ops.monitor', 'x')`);
 
 // الجدول: أيام العمل 06:30، مرة في اليوم، لمن عنده مقترح ولم يُوقَف
 SH.forgetShadowSchedule();

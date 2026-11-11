@@ -2,7 +2,8 @@
 // مقترح تعليماتٍ معلَّق يُفعَّل آلياً فقط إن:
 //   • مدخل المكتبة externalBehavior = false (فئته prompt_internal وخطره low) — يُسأل مرتين:
 //     من صف المقترح ومن المكتبة نفسها، فما يمسّ الناس لا يمرّ أبداً ويبقى لصاحب الحساب؛
-//   • والظل في آخر ٧ أيام له عيّنةٌ واحدة على الأقل (same/better) ولا failed_checks ولا mixed ولا no_output؛
+//   • والظل في آخر ٧ أيام له عيّنةٌ واحدة على الأقل، وكل عيّنةٍ فيه same/better ومخالفات المقترح فيها فارغة
+//     (لا failed_checks ولا mixed ولا no_output، ولا «same» لأن الاثنين خالفا الفحص نفسه — ذلك ليس دليلاً)؛
 //   • أو موظفٌ بالكود وحده فعلاً (model-paths.ts isCodeOnly، لا صف no_model_path وحده) وملفه كامل.
 //   من له مسار نموذج لا يمرّ به الظل (not_covered) «لم يُجرَّب»: لا يُفعَّل آلياً ولا جماعياً أبداً.
 // التفعيل يمرّ على activatePrompt نفسه (نسخة سابقة + rollback_version)، ويُسجَّل
@@ -22,6 +23,8 @@ export const SHADOW_WINDOW_DAYS = 7;
 export type GateBasis = "shadow" | "no_model_path";
 export interface GateResult { ok: boolean; basis: GateBasis | null; why: string; samples: number; failed: number }
 
+/** عيّنةٌ خالف فيها المقترح فحصاً، أيّاً كان الحكم. */
+const DIRTY = sql`(jsonb_typeof(proposed_issues) = 'array' AND jsonb_array_length(proposed_issues) > 0)`;
 const keyOf = (target: string | null | undefined) => (target?.startsWith("prompt:") ? target.slice(7) : null);
 
 /**
@@ -36,7 +39,8 @@ export async function shadowGate(userId: number, p: { change_id: number; target:
   const since = new Date((o.now ?? new Date()).getTime() - SHADOW_WINDOW_DAYS * 86_400_000);
   let c: any;
   try {
-    [c] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE verdict IN ('same','better'))::int AS good,
+    [c] = (await db.execute<any>(sql`SELECT count(*) FILTER (WHERE verdict IN ('same','better') AND NOT ${DIRTY})::int AS good,
+        count(*) FILTER (WHERE verdict IN ('same','better') AND ${DIRTY})::int AS dirty,
         count(*) FILTER (WHERE verdict = 'failed_checks')::int AS failed, count(*) FILTER (WHERE verdict = 'no_output')::int AS empty,
         count(*) FILTER (WHERE verdict = 'mixed')::int AS mixed, count(*) FILTER (WHERE verdict = 'not_covered')::int AS uncovered,
         count(*) FILTER (WHERE verdict = 'no_model_path')::int AS nopath
@@ -44,11 +48,13 @@ export async function shadowGate(userId: number, p: { change_id: number; target:
         AND library_version = ${String(entry.version)} AND (proposal_id IS NULL OR proposal_id = ${p.change_id})`)).rows;
   } catch { return no("لا ظل لهذا الحساب بعد"); }
   const good = Number(c?.good ?? 0), failed = Number(c?.failed ?? 0), empty = Number(c?.empty ?? 0), nopath = Number(c?.nopath ?? 0);
-  const mixed = Number(c?.mixed ?? 0), uncovered = Number(c?.uncovered ?? 0);
+  const mixed = Number(c?.mixed ?? 0), uncovered = Number(c?.uncovered ?? 0), dirty = Number(c?.dirty ?? 0);
   const codeOnly = isCodeOnly(key);
   if (failed > 0) return no(`خالف فحصاً في الظل (${failed} عيّنة failed_checks)`, good, failed);
   if (mixed > 0) return no(`مختلط في الظل (${mixed} عيّنة): أصلح فحصاً وخالف آخر — يقرّره صاحب العمل بالقائمتين`, good, mixed);
   if (empty > 0) return no(`المقترح لم يكتب شيئاً في ${empty} عيّنة`, good, failed);
+  // «same» لأن الحالي خالف الفحص نفسه (١٢٣ و١٢٨ كلمة فوق الحد، 2026-11-11) ليس دليلاً على المقترح.
+  if (dirty > 0) return no(`المقترح خالف فحص الكود في ${dirty} عيّنة حُكم عليها same/better لأن الحالي خالفه أيضاً — ليس دليلاً`, good, dirty);
   if (good >= 1) return { ok: true, basis: "shadow", why: `${good} عيّنة سليمة في الظل خلال ${SHADOW_WINDOW_DAYS} أيام، بلا مخالفة`, samples: good, failed: 0 };
   // له نموذج ولا عيّنة: «لم يُجرَّب» — ولو حمل صفاً قديماً مكتوباً no_model_path قبل تصحيح الخريطة.
   if (uncovered > 0 || (!codeOnly && nopath > 0)) return no("لم يُجرَّب: له مسار نموذج لا يمرّ به الظل بعد — يقرّره صاحب العمل بنفسه");

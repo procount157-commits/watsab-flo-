@@ -9,7 +9,9 @@
 //   no_model_path: موظفٌ بالكود وحده فعلاً (model-paths.ts) — بلا أي نداء
 //   not_covered: له مسار نموذج لا يمرّ به الظل بعد — «لم يُجرَّب»، لا يُفعَّل آلياً ولا جماعياً.
 // المحاكاة تعني: البوابة ترفض كل إرسال، ولا صف عمل يُكتب، ولا إيصال ولا استهلاك ولا مقياس
-// مزوّد ولا نبض ولا تنفيذ يُحسب. سقف ٤٠ نداء نموذج للحساب في اليوم. لا شيء يُفعَّل هنا.
+// مزوّد ولا نبض ولا تنفيذ يُحسب. سقف ٦٠ نداء نموذج للحساب في اليوم، وترتيب الموظفين يدور يومياً:
+// يبدأ اليوم من الموظف الذي توقف عنده السقف في آخر دفعة سابقة، فلا يأخذ البريد الميزانية كل يوم
+// ويبقى الواتساب «budget» (2026-11-11). لا شيء يُفعَّل هنا.
 
 import { sql } from "drizzle-orm";
 import { db, targetAccountsTable } from "@workspace/db";
@@ -24,7 +26,7 @@ import { promptTarget } from "./proposals";
 import { ensureSimTables } from "./sim-schema";
 import { newSimContext, withPersona, withSimulation, type SimContext } from "./simulation";
 
-export const SHADOW_DAILY_CALLS = 40;
+export const SHADOW_DAILY_CALLS = 60;
 export const SHADOW_MAX_SAMPLES = 3;
 export type ShadowVerdict = "failed_checks" | "better" | "same" | "mixed" | "no_output" | "no_model_path" | "not_covered" | "no_samples" | "budget";
 /** أحكامٌ قارنت عيّنةً فعلاً. */
@@ -105,12 +107,18 @@ export function uncoveredVerdict(key: string): { verdict: "no_model_path" | "not
   return { verdict: "not_covered", detail: `لم يُجرَّب: له مسار نموذج${where ? ` (${where})` : ""} لا يمرّ به الظل بعد — لا يُفعَّل آلياً` };
 }
 
+/** ترتيب اليوم: من الموظف الذي توقف عنده السقف، ثم الدوران إلى أول القائمة. Pure. */
+export function rotateFrom(keys: string[], start: string | null | undefined): string[] {
+  const i = start ? keys.indexOf(start) : -1;
+  return i <= 0 ? keys : [...keys.slice(i), ...keys.slice(0, i)];
+}
+
 export interface ShadowSummary {
   runs: number; samples: number; verdicts: Partial<Record<ShadowVerdict, number>>; lastRunAt: string | null;
   warnings: string[]; ok: boolean;
 }
 /** خلاصة دفعة: إنذار إن لم تكن عيّنة أو خالف المقترح فحصاً واحداً. Pure. */
-export function summarize(rows: Array<{ verdict: string; created_at?: unknown }>): ShadowSummary {
+export function summarize(rows: Array<{ verdict: string; created_at?: unknown; proposed_issues?: unknown }>): ShadowSummary {
   const verdicts: Partial<Record<ShadowVerdict, number>> = {};
   for (const r of rows) verdicts[r.verdict as ShadowVerdict] = (verdicts[r.verdict as ShadowVerdict] ?? 0) + 1;
   const samples = rows.filter((r) => COMPARED.includes(r.verdict as ShadowVerdict)).length;
@@ -120,8 +128,11 @@ export function summarize(rows: Array<{ verdict: string; created_at?: unknown }>
   if (verdicts.failed_checks) warnings.push(`المقترح خالف فحوص الكود في ${verdicts.failed_checks} عيّنة`);
   if (verdicts.mixed) warnings.push(`مختلط في ${verdicts.mixed} عيّنة: أصلح فحصاً وخالف آخر`);
   if (verdicts.no_output) warnings.push(`المقترح لم يكتب شيئاً في ${verdicts.no_output} عيّنة`);
+  // «same» لأن الاثنين خالفا الفحص نفسه ليس دليلاً على المقترح.
+  const dirty = rows.filter((r) => (r.verdict === "same" || r.verdict === "better") && Array.isArray(r.proposed_issues) && r.proposed_issues.length).length;
+  if (dirty) warnings.push(`المقترح خالف فحصاً في ${dirty} عيّنة حُكم عليها same/better (خالفه الحالي أيضاً)`);
   const last = rows.map((r) => (r.created_at ? new Date(r.created_at as string).getTime() : 0)).sort((a, b) => b - a)[0];
-  return { runs: rows.length, samples, verdicts, lastRunAt: last ? new Date(last).toISOString() : null, warnings, ok: samples > 0 && !verdicts.failed_checks && !verdicts.mixed && !verdicts.no_output && !verdicts.not_covered };
+  return { runs: rows.length, samples, verdicts, lastRunAt: last ? new Date(last).toISOString() : null, warnings, ok: samples > 0 && !dirty && !verdicts.failed_checks && !verdicts.mixed && !verdicts.no_output && !verdicts.not_covered };
 }
 
 // ── المسارات ───────────────────────────────────────────────────────
@@ -152,18 +163,31 @@ async function thread(userId: number, phone: string, limit = 14) {
   return r.reverse().map((x) => ({ fromMe: !!x.from_me, text: String(x.text ?? ""), at: new Date(x.created_at), voice: x.msg_type === "voice" }));
 }
 
+/** لماذا لم تُكتب مسودة: لم يرد نموذج، أو ردّ بشكلٍ لا يقرؤه parseDraft (وأوله). Pure. */
+export function noteOf(t: { reason?: "no_reply" | "unparsed"; raw?: string }): string {
+  if (t.reason === "unparsed") return `كتب النموذج بشكلٍ لا يقرؤه parseDraft: «${(t.raw ?? "").replace(/\s+/g, " ").slice(0, 200)}»`;
+  return "لم يرد نموذج (المزوّدون تعذّروا أو نفدت ميزانية العيّنة)";
+}
+
 function campaignAdapter(key: string, role: "email" | "email_followup" | "email_creator"): Adapter {
   return {
     key, role, maxCalls: 1,
-    samples: async (userId) => (await rows(sql`SELECT id, name, goal, filter, language, tone, intensity, angle FROM email_missions WHERE user_id = ${userId} AND coalesce(goal, '') <> ''
+    samples: async (userId) => (await rows(sql`SELECT id, user_id, name, goal, filter, language, tone, intensity, angle, source_list_id FROM email_missions WHERE user_id = ${userId} AND coalesce(goal, '') <> ''
         ORDER BY (coalesce(agent_role, 'email') = ${role}) DESC, id DESC LIMIT ${SHADOW_MAX_SAMPLES}`))
       .map((m: any) => ({ ref: { table: "email_missions", id: Number(m.id) }, excerpt: `${m.name}: ${cut(m.goal, 240)}`, data: m })),
     run: async (userId, s) => {
       const { writeCampaign, brief } = await import("../email/agent");
       const { formatIssues, guardCheck, tooSimilar, leadOf } = await import("../email/team");
       const m = s.data;
-      const out = await writeCampaign(userId, { filter: m.filter ?? {}, goal: m.goal, language: m.language ?? undefined, tone: m.tone, intensity: m.intensity, angle: m.angle, role });
-      if (!out) return { text: null, issues: [], note: "لم تُقرأ مسودة (parseDraft) أو لم يرد نموذج" };
+      // المدخل نفسه الذي يعطيه runMission للكاتب: ما قيل لهذا الجمهور، والشدّة من الإعدادات إن لم تحملها المهمة.
+      const { priorWavesFor } = await import("../email/missions");
+      const { getSettings } = await import("../email/service");
+      const prior = await priorWavesFor({ id: Number(m.id), userId, sourceListId: m.source_list_id ?? null, filter: m.filter ?? {} } as any);
+      const intensity = m.intensity ?? (await getSettings(userId).catch(() => null))?.followIntensity ?? null;
+      const trace: { reason?: "no_reply" | "unparsed"; raw?: string } = {};
+      const out = await writeCampaign(userId, { filter: m.filter ?? {}, goal: m.goal, language: m.language ?? undefined, tone: m.tone, intensity, angle: m.angle, role,
+        priorWaves: prior.waves, usedAngles: prior.angles, trace });
+      if (!out) return { text: null, issues: [], note: noteOf(trace) };
       const d = out.draft;
       const text = `${d.subjects.join(" | ")}\n${stripTags(d.html)}`;
       if (await shopAccount(userId)) return { text, issues: [...new Set(await floretIssues(text))] };
@@ -322,6 +346,19 @@ export async function callsToday(userId: number, now = new Date()): Promise<numb
   return Number((r as any)?.n ?? 0);
 }
 
+/**
+ * أين توقف السقف في آخر دفعةٍ كاملة قبل اليوم (بتوقيت دبي): أول موظفٍ كُتب له budget فيها.
+ * دفعة موظفٍ واحد لا تُحسب. لا توقف = null (الترتيب العادي).
+ */
+export async function stoppedAt(userId: number, now = new Date()): Promise<string | null> {
+  const from = new Date(`${dubaiNow(now).date}T00:00:00+04:00`);
+  const [last] = await rows<any>(sql`SELECT batch_id FROM shadow_runs WHERE user_id = ${userId} AND created_at < ${from}
+      GROUP BY batch_id HAVING count(DISTINCT employee_key) > 1 ORDER BY max(id) DESC LIMIT 1`);
+  if (!last) return null;
+  const [b] = await rows<any>(sql`SELECT employee_key FROM shadow_runs WHERE user_id = ${userId} AND batch_id = ${last.batch_id} AND verdict = 'budget' ORDER BY id LIMIT 1`);
+  return b ? String(b.employee_key) : null;
+}
+
 async function proposedPrompt(userId: number, key: string): Promise<{ text: string; version: number } | null> {
   const entry = PROMPT_LIBRARY[key];
   if (!entry) return null;
@@ -363,7 +400,7 @@ export async function runShadow(userId: number, o: { employeeKey?: string | null
   const out: ShadowResult = { batchId, ran: 0, skipped: [], callsUsed: 0, rows: [] };
   if (await accountHalted(userId, "org_shadow")) { out.skipped.push({ employeeKey: o.employeeKey ?? "*", why: "الحساب موقوف" }); return out; }
   const staff = (await rows<{ employee_key: string }>(sql`SELECT employee_key FROM bot_employees WHERE user_id = ${userId} AND employee_key IS NOT NULL ORDER BY employee_key`)).map((r) => String(r.employee_key));
-  const keys = staff.filter((k) => PROMPT_LIBRARY[k] && (!o.employeeKey || k === o.employeeKey));
+  const keys = rotateFrom(staff.filter((k) => PROMPT_LIBRARY[k] && (!o.employeeKey || k === o.employeeKey)), await stoppedAt(userId));
   if (o.employeeKey && !keys.length) { out.skipped.push({ employeeKey: o.employeeKey, why: "ليس موظفاً في هذا الحساب أو بلا نسخة في المكتبة" }); return out; }
   const pending = new Map((await rows<any>(sql`SELECT change_id, target FROM improvement_proposals WHERE user_id = ${userId} AND status = 'proposed' AND target LIKE 'prompt:%' ORDER BY change_id DESC`))
     .map((r) => [String(r.target).slice(7), Number(r.change_id)] as const).reverse());
@@ -421,7 +458,7 @@ export async function shadowSummary(userId: number, o: { employeeKey?: string | 
     const [last] = await rows<any>(sql`SELECT batch_id FROM shadow_runs WHERE user_id = ${userId} ${o.employeeKey ? sql`AND employee_key = ${o.employeeKey}` : sql``}
       ${o.proposalId ? sql`AND proposal_id = ${o.proposalId}` : sql``} ORDER BY id DESC LIMIT 1`);
     if (!last) return { ...summarize([]), batchId: null };
-    const r = await rows<any>(sql`SELECT verdict, created_at FROM shadow_runs WHERE user_id = ${userId} AND batch_id = ${last.batch_id}
+    const r = await rows<any>(sql`SELECT verdict, created_at, proposed_issues FROM shadow_runs WHERE user_id = ${userId} AND batch_id = ${last.batch_id}
       ${o.employeeKey ? sql`AND employee_key = ${o.employeeKey}` : sql``} ${o.proposalId ? sql`AND proposal_id = ${o.proposalId}` : sql``}`);
     return { ...summarize(r), batchId: String(last.batch_id) };
   } catch { return { ...summarize([]), batchId: null }; }

@@ -133,16 +133,18 @@ const runtimeOf = (k: string, a: { name: string; vertical: string }) => {
   const kn = lib ? O.libraryRows(lib).map((r: any) => ({ key: r.key, value: r.value })) : [];
   return M.renderRuntime({ employeeKey: k, sections: M.buildDossierSections(k, e, a, { version: 1, author: "t", reason: "t", libraryVersion: e.version }), externalBehavior: e.externalBehavior, account: a, knowledge: kn });
 };
-const HARD: Array<[string, RegExp[]]> = [
+const HARD: Array<[string, RegExp[], number?]> = [
   ["email.copywriter", [/٤٠–٩٠ كلمة، ولا تتجاوز ١١٠ كلمات أبداً/, /فقط إن ورد حرفياً في المعرفة المعطاة/, /\[عنوان\] و\[الرسالة\] و\[ملخص\] و\[زر\]/]],
-  ["email.creator", [/٤٠–٩٠ كلمة، ولا تتجاوز ١١٠ كلمات أبداً/, /فقط إن ورد حرفياً في المعرفة المعطاة/, /\[عنوان\] و\[الرسالة\] و\[ملخص\] و\[زر\]/]],
+  ["email.creator", [/جسم الرسالة ٩٠ كلمة على الأكثر، ولا يتجاوز ١١٠ كلمات أبداً ومعه قائمة التفاصيل/, /فاحذف من التفاصيل قبل أن تمسّ الملخص/, /فقط إن ورد حرفياً في المعرفة المعطاة/, /\[عنوان\] و\[الرسالة\] و\[ملخص\] و\[زر\]/], 3],
   ["email.followup", [/٥٠–٧٠ كلمة ولا تتجاوز ٧٠ أبداً/, /سطر \[ملخص\] لا يغيب/, /طلبٌ واحد/, /إلا ما ورد حرفياً في المعرفة المعطاة/]],
   ["email.replies", [/urgent، best، leading، guaranteed، last chance، limited time/]],
   ["target_accounts.writer", [/الجملة الأولى تسمّي شركته باسمها \({company}/, /والإشارة معاً/]],
-  ["shared.collector", [/not_customer/, /machine/, /hot فقط بإشارة شراء صريحة بكلماته هو/]],
+  // v3 (2026-11-11): مرسلٌ آلي صُنّف not_customer والمسجَّل machine.
+  ["shared.collector", [/not_customer/, /hot فقط بإشارة شراء صريحة بكلماته هو/,
+    /المرسل الآلي \(بلا صياغة إنسان، إشعار توصيل، رمز تحقق OTP، رسالة نظام أو بث، رد تلقائي[^)]*\) ← machine لا not_customer؛ not_customer إنسانٌ ليس عميلاً محتملاً/], 3],
 ];
-for (const [k, res] of HARD) {
-  check(`${k}: v2 and its hard rules in the library`, PROMPT_LIBRARY[k]!.version === 2 && res.every((re) => re.test(renderPrompt(PROMPT_LIBRARY[k]!, PROCOUNT))));
+for (const [k, res, v = 2] of HARD) {
+  check(`${k}: v${v} and its hard rules in the library`, PROMPT_LIBRARY[k]!.version === v && res.every((re) => re.test(renderPrompt(PROMPT_LIBRARY[k]!, PROCOUNT))));
   const rts = [FLORET, PROCOUNT, OTHER].map((a) => runtimeOf(k, a));
   check(`${k}: hard rules survive the ≤${LIMIT} runtime, every account`, rts.every((t) => t.length <= LIMIT && res.every((re) => re.test(t))), rts.map((t) => t.length).join(","));
 }
