@@ -26,7 +26,7 @@ const want: Array<[string, string[]]> = [
   ["مطاعم ومقاهي", ["services"]], ["مقاولات", ["services"]],
 ];
 for (const [sector, tracks] of want) check(`استهداف · ${sector} ← ${tracks.join(" + ")}`, JSON.stringify(P.tracksFor(sector)) === JSON.stringify(tracks), P.tracksFor(sector).join("+"));
-for (const s of ["سياحة وسفر", "تقنية", "تجارة عامة", "مالية وتأمين", "استشارات", "محاسبة وتدقيق", null]) {
+for (const s of ["تقنية", "مالية وتأمين", "استشارات", "محاسبة وتدقيق", null]) {
   check(`خارج الاستهداف · ${s ?? "بلا قطاع"}`, !P.isTargeted(s));
 }
 // الوساطة العقارية والمحامون بأسمائهم كما تصل من الملفات
@@ -78,7 +78,10 @@ check("مسار · المحامون AML دائماً", ct("قانونية", 800,
 check("مسار · المطاعم تنتظر حين يمتلئ السقف", ct("مطاعم ومقاهي", 800, 200) === null);
 check("مسار · والمطاعم تأخذ حين يتّسع", ct("مطاعم ومقاهي", 800, 100)!.track === "services");
 check("مسار · سقفٌ أضيق من موجةٍ لا يُطلق خدمات", ct("عقارات", 40, 0)!.track === "aml");
-check("مسار · خارج الاستهداف لا مسار", ct("سياحة وسفر", 800, 0) === null);
+check("مسار · خارج الاستهداف لا مسار", ct("تقنية", 800, 0) === null);
+// القطاعات العامة (11 نوفمبر): محاسبة وضرائب فقط، بزوايا عامة، بلا AML.
+for (const s of ["متاجر وتجزئة", "تجميل وصالونات", "طبي وصحي", "سياحة وسفر", "تجارة عامة"]) check(`عام · ${s} ← services فقط بزوايا عامة`, JSON.stringify(P.tracksFor(s)) === '["services"]' && P.anglesFor("services", s)[0]?.id === "gen_ct_records" && P.nextAngle("aml", s, []) === null);
+check("عام · لا رقم في زوايا العام", P.anglesFor("services", "تجارة عامة").every((a) => !/\d/.test(a.goal)));
 
 // محاكاة: قائمة عقاراتٍ وحدها، موجةً بعد موجة — إلى أين تستقرّ النسبة؟
 { const s = { aml: 0, services: 0 };
