@@ -184,11 +184,24 @@ export async function busy(listId: number, sector?: string | null): Promise<bool
 // `busy` يعدّ status = 'active' وحدها: المتروكة (giveUp ← paused) والموقوفة
 // بالاستهداف (paused) والملغاة لا تحجز قطاعها — وإلا جاع القطاع إلى الأبد.
 
-/** موجة AML نشطة ترسل الآن — حين توجد، لا يُرفع سقف الخدمات. */
+/** حين يبقى لـAML على الأقل هذا العدد من الرسائل الأولى في الطابور، لا يُرفع سقف الخدمات. */
+export const AML_BACKLOG_FLOOR = 50;
+
+/**
+ * موجة AML ما زال عندها ما ترسله فعلاً — حين توجد، لا يُرفع سقف الخدمات.
+ * كان الشرط «مهمة AML في مرحلة sending»، فبقيت مهامٌ تقريباً بلا رسائل تحجز
+ * الخدمات: ١١ نوفمبر، ٢٦ مهمة «ترسل»، والطابور ٤٩٨ أغلبها متابعات تنتظر
+ * ٤٨ ساعة، وخرجت ٨ رسائل في نصف ساعة من سعة ١٢٠٠ يومياً. الآن يُعدّ ما
+ * ينتظر الخروج من رسائلها الأولى (لا درجات المتابعة).
+ */
 export async function amlSending(userId: number): Promise<boolean> {
-  const [r] = await db.select({ n: sql<number>`count(*)` }).from(emailMissionsTable)
-    .where(and(eq(emailMissionsTable.userId, userId), eq(emailMissionsTable.status, "active"), eq(emailMissionsTable.track, "aml"), eq(emailMissionsTable.stage, "sending")));
-  return Number(r?.n ?? 0) > 0;
+  const r = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int AS n FROM email_messages m
+    JOIN email_campaigns c ON c.id = m.campaign_id
+    JOIN email_missions ms ON ms.campaign_id = c.id
+    WHERE m.user_id = ${userId} AND m.status = 'queued' AND c.status = 'sending'
+      AND ms.status = 'active' AND ms.track = 'aml'`);
+  return Number(r.rows[0]?.n ?? 0) >= AML_BACKLOG_FLOOR;
 }
 
 /** At most this many sector waves running per list at once, and none for a sector too small to be worth a campaign. */
