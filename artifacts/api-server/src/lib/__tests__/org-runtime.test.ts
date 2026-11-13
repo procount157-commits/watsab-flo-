@@ -104,7 +104,7 @@ const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const mig = norm(readFileSync(join(here, "../../../../../lib/db/migrations/073_org_runtime.sql"), "utf8"));
 check("073 يحمل كل ما عند الإقلاع", ORG_RUNTIME_SQL.every((q) => mig.includes(norm(q))));
 
-if (!/127\.0\.0\.1:(55446|55445|55439|55440|55441|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55446|55445|55439|55440|55441|55442|55444)/.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`\n${pass} نجح، ${fail} فشل (بلا قاعدة)`);
   process.exit(fail ? 1 : 0);
 }
