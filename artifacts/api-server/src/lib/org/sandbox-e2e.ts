@@ -76,17 +76,19 @@ export function analyseCampaign(f: { sent: number; opened: number; replied: numb
 }
 
 // ── السجل ─────────────────────────────────────────────────────────
-async function step(runId: number, userId: number, n: number, s: { role: string | null; name: string | null; kind: string; title: string; detail?: unknown; ticket?: SimTicket | null; parent?: SimTicket | null }) {
+export async function step(runId: number, userId: number, n: number, s: { role: string | null; name: string | null; kind: string; title: string; detail?: unknown; ticket?: SimTicket | null; parent?: SimTicket | null }) {
   await db.execute(sql`INSERT INTO sim_e2e_steps (run_id, user_id, step, actor_role, actor_name, kind, title, detail, ticket_id, parent_ticket_id)
     VALUES (${runId}, ${userId}, ${n}, ${s.role}, ${s.name}, ${s.kind}, ${s.title}, ${JSON.stringify(s.detail ?? null)}::jsonb, ${s.ticket?.taskId ?? null}, ${s.parent?.taskId ?? null})`);
 }
 
-async function fixtureFor(userId: number): Promise<{ id: number; data: typeof WEAK_FIXTURE.data }> {
-  await db.execute(sql`INSERT INTO sim_fixtures (user_id, kind, label, data, is_test) VALUES (${userId}, ${WEAK_FIXTURE.kind}, ${WEAK_FIXTURE.label}, ${JSON.stringify(WEAK_FIXTURE.data)}::jsonb, true)
+/** بيانات الاختبار لهذا الحساب: صفٌّ واحد لكل نوع واسم، is_test دائماً. */
+export async function fixtureRow<D>(userId: number, fx: { kind: string; label: string; data: D }): Promise<{ id: number; data: D }> {
+  await db.execute(sql`INSERT INTO sim_fixtures (user_id, kind, label, data, is_test) VALUES (${userId}, ${fx.kind}, ${fx.label}, ${JSON.stringify(fx.data)}::jsonb, true)
     ON CONFLICT (user_id, kind, label) DO NOTHING`);
-  const [f] = await rows<any>(sql`SELECT id, data FROM sim_fixtures WHERE user_id = ${userId} AND kind = ${WEAK_FIXTURE.kind} AND label = ${WEAK_FIXTURE.label}`);
+  const [f] = await rows<any>(sql`SELECT id, data FROM sim_fixtures WHERE user_id = ${userId} AND kind = ${fx.kind} AND label = ${fx.label}`);
   return { id: Number(f.id), data: f.data };
 }
+const fixtureFor = (userId: number) => fixtureRow<typeof WEAK_FIXTURE.data>(userId, WEAK_FIXTURE);
 
 export interface E2eDeps {
   /** مسار نورة. الافتراضي writeCampaign الحقيقي داخل المحاكاة. */
@@ -106,7 +108,7 @@ export async function runE2e(userId: number, deps: E2eDeps = {}): Promise<E2eRes
   await ensureSimTables();
   if (await accountHalted(userId, "org_sim_e2e")) throw new Error("الحساب موقوف: لا سيناريو تجريبي");
   const fx = await fixtureFor(userId);
-  const [run] = await rows<any>(sql`INSERT INTO sim_e2e_runs (user_id, fixture_id) VALUES (${userId}, ${fx.id}) RETURNING id`);
+  const [run] = await rows<any>(sql`INSERT INTO sim_e2e_runs (user_id, fixture_id, summary) VALUES (${userId}, ${fx.id}, ${JSON.stringify({ channel: "email" })}::jsonb) RETURNING id`);
   const runId = Number(run.id);
   const left = Math.max(0, SHADOW_DAILY_CALLS - (await callsToday(userId)));
   const ctx: SimContext = newSimContext({ userId, kind: "e2e", runId: `e2e:${runId}`, budget: Math.min(E2E_CALLS, left) });
@@ -163,23 +165,23 @@ export async function runE2e(userId: number, deps: E2eDeps = {}): Promise<E2eRes
         : `إعادة كتابة «${f.name}» لم تمرّ: ${issues.slice(0, 2).join("؛ ")}`;
       await step(runId, userId, ++n, { role: "email_analyst", name: "جاسم", kind: "learning_candidate", title: "درسٌ مرشّح ينتظر المراجعة", detail: { status: "pending", lesson, source: `sim_e2e:${runId}`, test_data: true, note: "من بيانات اختبار: لا يدخل ذاكرة أحد" } });
     });
-    await db.execute(sql`UPDATE sim_e2e_runs SET status = 'succeeded', finished_at = now(), model_calls = ${ctx.budget.used}, summary = ${JSON.stringify({ steps: n, accepted, sandbox: ctx.sandbox })}::jsonb WHERE id = ${runId}`);
+    await db.execute(sql`UPDATE sim_e2e_runs SET status = 'succeeded', finished_at = now(), model_calls = ${ctx.budget.used}, summary = ${JSON.stringify({ channel: "email", steps: n, accepted, sandbox: ctx.sandbox })}::jsonb WHERE id = ${runId}`);
     return { runId, status: "succeeded", steps: n, accepted, modelCalls: ctx.budget.used, sandbox: ctx.sandbox };
   } catch (err: any) {
     const error = String(err?.message ?? err).slice(0, 500);
     logger.warn({ userId, runId, err: error }, "السيناريو التجريبي فشل");
-    await db.execute(sql`UPDATE sim_e2e_runs SET status = 'failed', finished_at = now(), model_calls = ${ctx.budget.used}, error = ${error}, summary = ${JSON.stringify({ steps: n, sandbox: ctx.sandbox })}::jsonb WHERE id = ${runId}`);
+    await db.execute(sql`UPDATE sim_e2e_runs SET status = 'failed', finished_at = now(), model_calls = ${ctx.budget.used}, error = ${error}, summary = ${JSON.stringify({ channel: "email", steps: n, sandbox: ctx.sandbox })}::jsonb WHERE id = ${runId}`);
     return { runId, status: "failed", steps: n, accepted, modelCalls: ctx.budget.used, sandbox: ctx.sandbox, error };
   }
 }
 
 export async function e2eRuns(userId: number, limit = 20) {
   await ensureSimTables();
-  return rows(sql`SELECT id, status, fixture_id, model_calls, summary, error, started_at, finished_at FROM sim_e2e_runs WHERE user_id = ${userId} ORDER BY id DESC LIMIT ${Math.min(Math.max(limit, 1), 100)}`);
+  return rows(sql`SELECT id, status, fixture_id, COALESCE(summary->>'channel', 'email') AS channel, model_calls, summary, error, started_at, finished_at FROM sim_e2e_runs WHERE user_id = ${userId} ORDER BY id DESC LIMIT ${Math.min(Math.max(limit, 1), 100)}`);
 }
 export async function e2eRun(userId: number, runId: number) {
   await ensureSimTables();
-  const [run] = await rows(sql`SELECT r.*, f.label AS fixture_label, f.data AS fixture, f.is_test FROM sim_e2e_runs r LEFT JOIN sim_fixtures f ON f.id = r.fixture_id WHERE r.id = ${runId} AND r.user_id = ${userId}`);
+  const [run] = await rows(sql`SELECT r.*, COALESCE(r.summary->>'channel', 'email') AS channel, f.label AS fixture_label, f.data AS fixture, f.is_test FROM sim_e2e_runs r LEFT JOIN sim_fixtures f ON f.id = r.fixture_id WHERE r.id = ${runId} AND r.user_id = ${userId}`);
   if (!run) return null;
   const steps = await rows(sql`SELECT step, actor_role, actor_name, kind, title, detail, ticket_id, parent_ticket_id, created_at FROM sim_e2e_steps WHERE run_id = ${runId} AND user_id = ${userId} ORDER BY step`);
   return { run, steps };

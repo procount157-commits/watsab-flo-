@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { requireAuth } from "../lib/auth";
 import { e2eRun, e2eRuns, runE2e } from "../lib/org/sandbox-e2e";
+import { e2eChannelOf, runSocialE2e, runWaE2e } from "../lib/org/sandbox-e2e-channels";
 import { autoApplyLowRisk } from "../lib/org/auto-apply";
 import { callsToday, runShadow, SHADOW_DAILY_CALLS, SHADOW_KEYS, shadowResults, shadowSummary } from "../lib/org/shadow";
 
@@ -46,10 +47,15 @@ router.get("/shadow/results", async (req, res) => {
   res.json({ results, summary });
 });
 
+// القناة: email (الافتراضي، كما كان)، whatsapp، social (ومعها platform: instagram|tiktok وsource: comment|dm).
 router.post("/e2e/run", async (req, res) => {
   const userId = req.session.userId!;
+  const channel = e2eChannelOf(req.body?.channel ?? req.query["channel"]);
+  if (!channel) return res.status(400).json({ error: "القناة: email أو whatsapp أو social" });
+  const platform = req.body?.platform === "tiktok" ? "tiktok" : "instagram";
+  const source = req.body?.source === "dm" ? "dm" : "comment";
   try {
-    const r = await once(`e2e:${userId}`, () => runE2e(userId));
+    const r = await once(`e2e:${userId}`, () => channel === "whatsapp" ? runWaE2e(userId) : channel === "social" ? runSocialE2e(userId, { platform, source }) : runE2e(userId));
     if (!r) return res.status(409).json({ error: "سيناريو يعمل الآن لهذا الحساب" });
     res.json(r);
   } catch (err: any) {

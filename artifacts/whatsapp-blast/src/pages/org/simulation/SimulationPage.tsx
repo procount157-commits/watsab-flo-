@@ -1,5 +1,7 @@
 // المحاكاة: الظل (التعليمات الحالية مقابل المقترحة على مدخلات حقيقية) والسيناريو التجريبي
-// جاسم ← منصور ← سلمى ← نورة ← ماجد ← البوابة ← جاسم، خطوةً خطوة. داخل المحاكاة ترفض البوابة
+// خطوةً خطوة، على قناة يختارها صاحب العمل: البريد (جاسم ← منصور ← سلمى ← نورة ← ماجد ← البوابة ← جاسم)،
+// أو واتساب (هال ← شمّة ← الرد ← خالد ← سيف ← البوابة ← شمّة)، أو إنستجرام/تيك توك (المراقب ← المصنّفة ←
+// الكاتب ← الحارس ← البوابة ← المدير). داخل المحاكاة ترفض البوابة
 // كل إرسال، ولا يُفعَّل شيء، وبيانات السيناريو بيانات اختبار لا تختلط بأي رقم حقيقي.
 
 import { useState } from "react";
@@ -12,6 +14,19 @@ import { SHADOW, ShadowRow, ShadowWarnings } from "./ShadowCompare";
 const STEP: Record<string, string> = {
   analysis: "تحليل", review: "مراجعة", plan: "تخطيط", revision: "إعادة كتابة", accepted: "قبول", returned: "إعادة بملاحظات",
   sandbox_execution: "تنفيذ تجريبي", outcome_event: "حدث النتيجة", learning_candidate: "درسٌ مرشّح",
+  classification: "تصنيف", routing: "توجيه", reply_draft: "رد مقترح", followup_plan: "خطة متابعة", found: "رصد",
+};
+/** ما يُرسل للمسار مع كل اختيار. البريد بلا جسم: المسار القديم كما هو. */
+const CHANNELS: Array<{ id: string; label: string; body?: Record<string, string>; flow: string }> = [
+  { id: "email", label: "البريد", flow: "جاسم ← منصور ← سلمى ← نورة ← ماجد ← البوابة ← جاسم" },
+  { id: "whatsapp", label: "واتساب", body: { channel: "whatsapp" }, flow: "هال ← شمّة ← الرد ← خالد ← سيف ← البوابة ← شمّة" },
+  { id: "instagram", label: "إنستجرام", body: { channel: "social", platform: "instagram" }, flow: "ريّان ← لمياء ← تركي ← ماجد الحارس ← البوابة ← عبدالله" },
+  { id: "tiktok", label: "تيك توك", body: { channel: "social", platform: "tiktok" }, flow: "مشعل ← رزان ← زياد ← سيف ← البوابة ← فيصل" },
+];
+const channelLabel = (r: any) => {
+  const c = r?.summary?.channel ?? r?.channel ?? "email";
+  const id = c === "social" ? (r?.summary?.platform ?? "instagram") : c;
+  return CHANNELS.find((x) => x.id === id)?.label ?? c;
 };
 const RUN: Record<string, string> = { running: "يجري", succeeded: "اكتمل", failed: "فشل" };
 
@@ -24,6 +39,7 @@ function E2eRun({ id }: { id: number }) {
           <div className={cn(card, "p-3 text-xs flex items-center gap-2 flex-wrap border-yellow-500/30")}>
             <TestTube2 className="w-3.5 h-3.5 text-yellow-400" />
             <span className={cn(pill, "border-yellow-500/30 bg-yellow-500/10 text-yellow-400")}>بيانات اختبار</span>
+            <span className={cn(pill, "border-border text-muted-foreground")}>{channelLabel(d.run)}</span>
             <span dir="auto">{d.run?.fixture_label ?? "—"}</span>
             <span className="text-muted-foreground">· {RUN[d.run?.status] ?? d.run?.status} · {num(d.run?.model_calls)} نداء نموذج · {when(d.run?.started_at)}</span>
             {d.run?.error && <span className="text-red-400" dir="auto">· {d.run.error}</span>}
@@ -61,15 +77,23 @@ function E2e() {
   const act = useOrgAction();
   const q = useOrg<{ runs: any[] }>("/sim/e2e/runs", false);
   const [pick, setPick] = useState<number | null>(null);
+  const [chan, setChan] = useState<string>("email");
   const runs = list(q.data?.runs);
   const shown = pick ?? (runs[0] ? Number(runs[0].id) : null);
+  const c = CHANNELS.find((x) => x.id === chan) ?? CHANNELS[0]!;
   return (
-    <Section title="السيناريو التجريبي (جاسم ← … ← جاسم)" action={
-      <button className={primary} disabled={act.isPending} onClick={() => act.mutate({ path: "/sim/e2e/run", ok: (d) => { setPick(Number(d?.runId) || null); return d?.status === "succeeded" ? `اكتمل: ${num(d?.steps)} خطوات، ${d?.accepted ? "قبل ماجد النسخة" : "أعادها ماجد"}` : `فشل: ${d?.error ?? ""}`; } })}>
-        {act.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayCircle className="w-3 h-3" />} شغّل السيناريو
-      </button>
+    <Section title={`السيناريو التجريبي (${c.label})`} action={
+      <div className="flex items-center gap-1.5">
+        <select aria-label="القناة" value={chan} onChange={(e) => setChan(e.target.value)} disabled={act.isPending} className="h-7 rounded-md border border-card-border bg-background px-2 text-[11px]">
+          {CHANNELS.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+        </select>
+        <button className={primary} disabled={act.isPending} onClick={() => act.mutate({ path: "/sim/e2e/run", ...(c.body ? { body: c.body } : {}), ok: (d) => { setPick(Number(d?.runId) || null); return d?.status === "succeeded" ? `اكتمل: ${num(d?.steps)} خطوات، ${d?.accepted ? "قُبل" : "أُعيد بملاحظات"}` : `فشل: ${d?.error ?? ""}`; } })}>
+          {act.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayCircle className="w-3 h-3" />} شغّل السيناريو
+        </button>
+      </div>
     }>
-      <p className="text-[11px] text-muted-foreground">على حملة اختبار لهذا الحساب: كل خطوة تذكرة مربوطة بما قبلها، ونورة تكتب بمسارها الحقيقي (نداء نموذج محسوب من سقف اليوم)، والبوابة ترفض الإرسال وتسجّل تنفيذاً تجريبياً. التذاكر بنوع sim_ ولا تدخل البطاقات ولا اللوحة ولا تقرير المدير.</p>
+      <p className="text-[11px] text-muted-foreground" dir="auto">{c.flow}</p>
+      <p className="text-[11px] text-muted-foreground">على بيانات اختبار لهذا الحساب: كل خطوة تذكرة مربوطة بما قبلها وسطرٌ في سجل أفعالها، والكاتب يكتب بمساره الحقيقي (نداء نموذج محسوب من سقف اليوم)، والبوابة ترفض الإرسال وتسجّل تنفيذاً تجريبياً. التذاكر بنوع sim_ ولا تدخل البطاقات ولا اللوحة ولا تقرير المدير.</p>
       <Q q={q} what="السيناريوهات">
         {() => (
           <>
@@ -77,7 +101,7 @@ function E2e() {
               <div className="flex gap-1.5 flex-wrap">
                 {runs.map((r) => (
                   <button key={r.id} onClick={() => setPick(Number(r.id))} className={cn("px-2.5 py-1 rounded-full border text-[11px]", shown === Number(r.id) ? "border-primary bg-primary/15 text-primary" : "border-card-border text-muted-foreground")}>
-                    #{num(r.id)} · {RUN[r.status] ?? r.status} · {ago(r.started_at)}
+                    #{num(r.id)} · {channelLabel(r)} · {RUN[r.status] ?? r.status} · {ago(r.started_at)}
                   </button>
                 ))}
               </div>
