@@ -134,7 +134,7 @@ export function providerRow(r: { task_type: string; provider: string; model: str
   };
 }
 
-export const LLM_SETTINGS_NOTE = "llm_settings بلا فلتر حساب: lib/llm.ts يقرأ أول صف لأي حساب ويستعمله مفتاحاً للجميع عبر ذاكرة عامة، وترتيب الصفوف غير مضمون. مُبلَّغ عنه ولم يُغيَّر (AUDIT-P0): الفصل يغيّر مزوّد الحسابين الحيّين.";
+export const LLM_SETTINGS_NOTE = "llm_settings مشترك بلا فلتر حساب كما كان: lib/llm.ts يقرأ أول صف ويستعمله للجميع، وترتيب الصفوف غير مضمون. لكل حساب الآن تجاوزٌ اختياري (llm_account_settings، «لهذا الحساب فقط») يُقرأ قبله؛ حسابٌ بلا تجاوز يبقى على المشترك. لم يُنقل شيء (AUDIT-P0).";
 
 export async function providerReport(userId: number, days = 7) {
   const d = Math.min(Math.max(Math.round(days) || 7, 1), 90);

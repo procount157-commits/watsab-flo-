@@ -7,14 +7,15 @@ import { retrieve, answerFromKnowledge, getProfile, recentAutoReplies } from "..
 import { providerStatus, providerStatusAsync, complete, activeProvider, resolveProvider, invalidateStoredProvider } from "../lib/llm";
 import { healthReport } from "../lib/llm-health";
 import { db as _db } from "@workspace/db";
-import { llmSettingsTable } from "@workspace/db";
+import { llmSettingsTable, llmAccountSettingsTable } from "@workspace/db";
 import { asWorker } from "../lib/agent-context";
 
 const router = Router();
 router.use(requireAuth);
 
 // ── Which model, if any ───────────────────────────────────────────
-router.get("/provider", async (_req, res) => res.json(await providerStatusAsync()));
+// This account's own setting if it set one (accountOverride: true), otherwise the shared one as before.
+router.get("/provider", async (req, res) => res.json(await providerStatusAsync(req.session.userId!)));
 
 /**
  * What each model has actually been doing, best first.
@@ -42,9 +43,17 @@ router.put("/provider", async (req, res) => {
   if (!allowed.includes(provider)) return res.status(400).json({ error: "مزوّد غير مدعوم" });
   if (apiKey.length < 8) return res.status(400).json({ error: "المفتاح قصير أو فارغ" });
 
+  // scope "account": this account only, in llm_account_settings. Anything else
+  // writes llm_settings exactly as before — the shared setting stays where it was.
+  const accountOnly = req.body?.scope === "account";
   const values = { userId, provider, apiKey, model, updatedAt: new Date() };
-  await _db.insert(llmSettingsTable).values(values)
-    .onConflictDoUpdate({ target: llmSettingsTable.userId, set: values });
+  if (accountOnly) {
+    await _db.insert(llmAccountSettingsTable).values(values)
+      .onConflictDoUpdate({ target: llmAccountSettingsTable.userId, set: values });
+  } else {
+    await _db.insert(llmSettingsTable).values(values)
+      .onConflictDoUpdate({ target: llmSettingsTable.userId, set: values });
+  }
   invalidateStoredProvider();   // take effect now, not in 30 seconds
 
   // Prove it works before reporting success — a key that stores but cannot
@@ -57,6 +66,7 @@ router.put("/provider", async (req, res) => {
   res.json({
     saved: true,
     provider,
+    scope: accountOnly ? "account" : "shared",
     working: !!out?.text,
     sample: out?.text?.slice(0, 60) ?? null,
     error: out ? null : "حُفظ المفتاح لكن المزوّد لم يستجب — تحقق من المفتاح أو اسم النموذج.",
@@ -64,14 +74,16 @@ router.put("/provider", async (req, res) => {
 });
 
 router.delete("/provider", async (req, res) => {
-  await _db.delete(llmSettingsTable).where(eq(llmSettingsTable.userId, req.session.userId!));
+  // ?scope=account removes this account's override only, and it reads the shared setting again.
+  if (req.query["scope"] === "account") await _db.delete(llmAccountSettingsTable).where(eq(llmAccountSettingsTable.userId, req.session.userId!));
+  else await _db.delete(llmSettingsTable).where(eq(llmSettingsTable.userId, req.session.userId!));
   invalidateStoredProvider();
   res.json({ success: true });
 });
 
 /** Round-trip the configured provider so a key can be verified before relying on it. */
 router.post("/provider/test", async (req, res) => {
-  const resolved = await resolveProvider();
+  const resolved = await resolveProvider(req.session.userId!);
   const p = resolved?.provider ?? "none";
   if (!resolved) {
     return res.json({ ok: false, provider: p, error: "لا يوجد مزوّد مضبوط — أضف مفتاحاً من هذه الصفحة" });

@@ -455,7 +455,7 @@ export async function answerFromKnowledge(
   // simply carries no specific claims, and asks the question that moves the
   // conversation on. Silence is kept only for the no-model case further down,
   // where there is genuinely nothing to send.
-  const provider0 = await resolveProvider();
+  const provider0 = await resolveProvider(userId);
   if (found.length === 0 && !provider0) {
     return { reply: null, provider: "none", kbIds: [], reason: "لا توجد معلومة مطابقة" };
   }

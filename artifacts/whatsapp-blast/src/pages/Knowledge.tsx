@@ -68,6 +68,24 @@ export default function Knowledge() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // «لهذا الحساب فقط»: مزوّد ومفتاح لهذا الحساب وحده (llm_account_settings). بلا تجاوز يبقى المشترك كما هو.
+  const [own, setOwn] = useState({ provider: "gemini", apiKey: "", model: "" });
+  const [ownOpen, setOwnOpen] = useState(false);
+  const saveOwn = useMutation({
+    mutationFn: () => api("/api/knowledge/provider", { method: "PUT", body: JSON.stringify({ ...own, scope: "account" }) }),
+    onSuccess: (d: any) => {
+      d.working ? toast.success(`حُفظ لهذا الحساب — ${d.provider} يعمل`) : toast.error(d.error ?? "حُفظ لكن المزوّد لم يستجب");
+      setOwn((o) => ({ ...o, apiKey: "" })); setOwnOpen(false);
+      qc.invalidateQueries({ queryKey: ["kb-provider"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const dropOwn = useMutation({
+    mutationFn: () => api("/api/knowledge/provider?scope=account", { method: "DELETE" }),
+    onSuccess: () => { toast.success("عاد الحساب إلى الإعداد المشترك"); qc.invalidateQueries({ queryKey: ["kb-provider"] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const ask = async () => {
     if (!probe.trim()) return;
     try { setResult(await api("/api/knowledge/ask", { method: "POST", body: JSON.stringify({ text: probe }) })); }
@@ -96,6 +114,37 @@ export default function Knowledge() {
           <p className="text-sm font-semibold">
             {provider?.configured ? `نموذج الذكاء: ${provider.provider}` : "يعمل بلا نموذج ذكاء — إجابات مباشرة من معرفتك"}
           </p>
+          {provider?.configured && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {provider.accountOverride ? "إعداد خاص بهذا الحساب" : "الإعداد المشترك"}
+              {provider.model ? ` · ${provider.model}` : ""}
+              {provider.maskedKey ? <> · <code dir="ltr">{provider.maskedKey}</code></> : null}
+            </p>
+          )}
+          <div className="mt-2 flex items-center gap-3 flex-wrap text-xs">
+            <button onClick={() => setOwnOpen((v) => !v)} className="text-primary hover:underline">
+              {provider?.accountOverride ? "غيّر مفتاح هذا الحساب" : "مفتاح لهذا الحساب فقط"}
+            </button>
+            {provider?.accountOverride && (
+              <button onClick={() => dropOwn.mutate()} disabled={dropOwn.isPending} className="text-muted-foreground hover:text-destructive">
+                {dropOwn.isPending ? <Loader2 className="w-3 h-3 animate-spin inline" /> : "ارجع إلى المشترك"}
+              </button>
+            )}
+          </div>
+          {ownOpen && (
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              <select className={inputCls} value={own.provider} onChange={(e) => setOwn({ ...own, provider: e.target.value })}>
+                {provider?.options?.map((o: any) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+              <input className={inputCls} dir="ltr" type="password" autoComplete="off" placeholder="API key" value={own.apiKey} onChange={(e) => setOwn({ ...own, apiKey: e.target.value })} />
+              <input className={inputCls} dir="ltr" placeholder="model (اختياري)" value={own.model} onChange={(e) => setOwn({ ...own, model: e.target.value })} />
+              <p className="text-xs text-muted-foreground sm:col-span-2">يُستعمل لهذا الحساب وحده؛ الحسابات الأخرى تبقى على الإعداد المشترك.</p>
+              <button onClick={() => saveOwn.mutate()} disabled={saveOwn.isPending || own.apiKey.trim().length < 8}
+                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs disabled:opacity-50">
+                {saveOwn.isPending ? <Loader2 className="w-3 h-3 animate-spin inline" /> : "احفظ لهذا الحساب فقط"}
+              </button>
+            </div>
+          )}
           {!provider?.configured && (
             <>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
