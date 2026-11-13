@@ -223,6 +223,14 @@ export const ORG_OPS_SQL = [
     updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (worker_id, name))`,
 ];
 
+/** 081_llm_account_settings.sql: مزوّد النموذج لكل حساب، تجاوزٌ اختياري فوق llm_settings المشترك (lib/llm.ts). */
+export const LLM_ACCOUNT_SQL = [
+  `CREATE TABLE IF NOT EXISTS llm_account_settings (
+    user_id integer PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    provider varchar(30) NOT NULL, api_key varchar(400) NOT NULL, model varchar(120),
+    updated_at timestamptz NOT NULL DEFAULT now())`,
+];
+
 let tablesReady: Promise<boolean> | null = null;
 
 /**
@@ -231,7 +239,7 @@ let tablesReady: Promise<boolean> | null = null;
  */
 export function ensureOrgTables(): Promise<boolean> {
   tablesReady ??= (async () => {
-    for (const q of [...ORG_TABLES_SQL, ...ORG_RUNTIME_SQL, ...ORG_INTELLIGENCE_SQL, ...ORG_OPS_SQL]) await db.execute(sql.raw(q));
+    for (const q of [...ORG_TABLES_SQL, ...ORG_RUNTIME_SQL, ...ORG_INTELLIGENCE_SQL, ...ORG_OPS_SQL, ...LLM_ACCOUNT_SQL]) await db.execute(sql.raw(q));
     return true;
   })().catch((e) => {
     tablesReady = null;

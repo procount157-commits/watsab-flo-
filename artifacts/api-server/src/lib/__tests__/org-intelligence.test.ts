@@ -130,9 +130,23 @@ const A = 13, B = 14;
 const one = async (q: any) => (await db.execute<any>(q)).rows[0];
 const rows = async (q: any) => (await db.execute<any>(q)).rows;
 check("الجداول تُنشأ فوق المخطط", await ensureOrgTables());
-for (const t of ["org_audit_log", "org_controls", "employee_executions", "employee_heartbeats", "employee_tasks", "employee_feedback", "employee_scorecards", "employee_prompt_versions", "improvement_proposals", "executive_reports", "learning_events", "department_memory", "account_knowledge", "agent_memory", "provider_metrics", "bot_employees", "agent_tasks", "email_inbound", "email_messages", "email_settings", "email_contacts", "email_agent_activity", "email_missions", "email_campaigns", "integration_health", "email_senders", "wa_firewall_sends", "conversation_reviews", "social_accounts", "business_profile", "target_accounts"]) {
-  await db.execute(sql.raw(`DELETE FROM ${t} WHERE user_id IN (${A}, ${B})`));
+// عزلٌ لا قائمة: كل جدول فيه user_id (عدا المضاف فقط) يُفرَّغ لحسابَي الاختبار وللحساب الفارغ (١٥)، فما تتركه
+// مجموعات أخرى على الأرقام نفسها (org-runtime يكتب لـ١٣ و١٤ في execution_events وreceipts وغيرها،
+// وorg-stage5 يكتب لـ١٥) لا يدخل الأعداد. قيدٌ أجنبي بين جدولين يُحلّ بالإعادة حتى لا يبقى تقدّم.
+const MINE = [A, B, 15];
+let pending = (await rows(sql`SELECT c.table_name AS t FROM information_schema.columns c JOIN information_schema.tables tb USING (table_schema, table_name)
+  WHERE c.table_schema = 'public' AND c.column_name = 'user_id' AND tb.table_type = 'BASE TABLE' AND c.table_name <> 'users'
+    -- السجلات المضافة فقط (receipts) ترفض الحذف بقادحها عمداً؛ لا تُمسّ، ولا فحص هنا يعدّها.
+    AND NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = (quote_ident(c.table_name))::regclass AND NOT g.tgisinternal AND g.tgname LIKE '%append_only%')`)).map((r: any) => String(r.t));
+for (let round = 0; pending.length && round < 10; round++) {
+  const left: string[] = [];
+  for (const t of pending) await db.execute(sql.raw(`DELETE FROM "${t}" WHERE user_id IN (${MINE.join(", ")})`)).catch(() => left.push(t));
+  if (left.length === pending.length) break;
+  pending = left;
 }
+check("عزل: لا صف باقٍ لحسابات الاختبار", pending.length === 0 || (await Promise.all(pending.map(async (t) => (await one(sql.raw(`SELECT count(*)::int AS n FROM "${t}" WHERE user_id IN (${MINE.join(", ")})`))).n))).every((n) => n === 0), pending);
+// مفتاح عام تركه غيرنا مشغولاً يوقف كل ما يلي لسببٍ لا يخص هذا الملف.
+await db.execute(sql`DELETE FROM org_controls WHERE scope = 'global'`);
 forgetControls(); forgetRuntimeCache();
 await db.execute(sql`INSERT INTO business_profile (user_id, name) VALUES (${A}, 'شركة أ'), (${B}, 'شركة ب')`);
 const OLD = new Date(Date.now() - 60 * 86_400_000);
@@ -189,8 +203,10 @@ await db.execute(sql`INSERT INTO email_inbound (user_id, message_id, from_email,
 pc = await copy();
 check("ردّان من شركة واحدة: شركة واحدة، بلا فضل كمّ", pc.value === Math.round((1 / 60) * 10000) / 10000 && Math.abs(pc.score! - 100) < 1e-6, pc);
 check("بلا رسالة منسوبة: لا تُحسب لغيره", (await S.computeScorecard(B, { role: "email", createdAt: OLD }, "weekly", NOW)).metrics.find((x) => x.key === "positive_per_company")!.sampleSize === 0);
-await db.execute(sql`INSERT INTO email_agent_activity (user_id, role, action, text, ref) SELECT ${A}, 'email_guard', 'pass', 'x', ${JSON.stringify({ missionId: mission.id })}::jsonb FROM generate_series(1, 4)`);
-await db.execute(sql`INSERT INTO email_agent_activity (user_id, role, action, text, ref) VALUES (${A}, 'email_guard', 'pass', 'x', ${JSON.stringify({ missionId: mission.id, issues: ["ع"] })}::jsonb)`);
+// قبل دقيقة لا «الآن»: now() في القاعدة بالميكروثانية ونهاية النافذة (new Date()) بالمللي، فصفٌّ كُتب في المللي
+// نفسه يقع بعد النهاية ويسقط من العيّنة — فشلٌ متقطع لا علاقة له بالحساب.
+await db.execute(sql`INSERT INTO email_agent_activity (user_id, role, action, text, ref, created_at) SELECT ${A}, 'email_guard', 'pass', 'x', ${JSON.stringify({ missionId: mission.id })}::jsonb, now() - interval '1 minute' FROM generate_series(1, 4)`);
+await db.execute(sql`INSERT INTO email_agent_activity (user_id, role, action, text, ref, created_at) VALUES (${A}, 'email_guard', 'pass', 'x', ${JSON.stringify({ missionId: mission.id, issues: ["ع"] })}::jsonb, now() - interval '1 minute')`);
 const ga = (await S.computeScorecard(A, { role: "email", createdAt: OLD }, "weekly", new Date())).metrics.find((x) => x.key === "guard_acceptance")!;
 check("قبول الحارس", ga.value === 0.8, ga);
 

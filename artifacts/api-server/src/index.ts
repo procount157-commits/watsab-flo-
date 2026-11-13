@@ -64,7 +64,7 @@ import { ensureSimTables } from "./lib/org/sim-schema";
 import { ensureTicketTables } from "./lib/org/ledger";
 import { startOrgDocs } from "./lib/org/docs/dossier";
 import { seedAllPromptProposals } from "./lib/org/proposals";
-import { everyMs } from "./lib/org/workers";
+import { everyMs, startWorkerRegistryGc } from "./lib/org/workers";
 
 // ── Process-level crash guard ─────────────────────────────────────
 // An unhandled exception would kill the server and stop ALL campaigns.
@@ -159,6 +159,8 @@ function startListening() {
     registerOrgHandlers();
     startTaskWorker();
     startWatchdog();
+    // صفوف العمليات السابقة في worker_registry: الآن، ثم كل ساعة.
+    startWorkerRegistryGc();
     startCeoAgent();
     // الظل: أيام العمل 06:30 دبي، يقارن ولا يفعّل شيئاً ولا يرسل.
     startShadowJob();

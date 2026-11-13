@@ -17,6 +17,22 @@ export const llmSettingsTable = pgTable("llm_settings", {
 
 export type LlmSettings = typeof llmSettingsTable.$inferSelect;
 
+// ── Per-account override ──────────────────────────────────────────
+// llm_settings above is read as one shared setting: lib/llm.ts takes its first
+// row, whoever saved it, for every account. Kept exactly so — the live accounts
+// run on it. An account that wants its own provider and key sets a row here,
+// and only its own calls read it; an account with no row here reads the shared
+// setting as before. Nothing is copied or moved between the two tables.
+export const llmAccountSettingsTable = pgTable("llm_account_settings", {
+  userId:    integer("user_id").primaryKey().references(() => usersTable.id, { onDelete: "cascade" }),
+  provider:  varchar("provider", { length: 30 }).notNull(),
+  apiKey:    varchar("api_key", { length: 400 }).notNull(),
+  model:     varchar("model", { length: 120 }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type LlmAccountSettings = typeof llmAccountSettingsTable.$inferSelect;
+
 // ── Measured behaviour, per model ─────────────────────────────────
 // Which model to try first is a question about what has actually been
 // answering, not about the order someone wrote them in. Not per account: the

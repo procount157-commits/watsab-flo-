@@ -91,7 +91,7 @@ check("079 يحمل كل عبارة في ORG_OPS_SQL", ORG_OPS_SQL.every((q) => 
 check("079 لا يبذر سعراً", !/INSERT INTO provider_prices/i.test(mig));
 
 // ── على القاعدة ──
-if (!/127\.0\.0\.1:(55446)\//.test(process.env["DATABASE_URL"] ?? "")) {
+if (!/127\.0\.0\.1:(55446|55442)\//.test(process.env["DATABASE_URL"] ?? "")) {
   console.log(`org-ops (pure): ${pass} ok, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }
@@ -135,6 +135,33 @@ const f = await watchdogFindings();
 check("الحارس: آخر دقّة أقدم من 3× الفاصل ← stuck_worker", f.some((x) => x.kind === "stuck_worker" && x.subject === "worker:test.loop"));
 check("...ولا يُقال في تقرير حساب", !(await watchdogFindings(A)).some((x) => x.kind === "stuck_worker"));
 check("الجرد يقول عالق", (await W.workerReport()).stuck >= 1);
+
+// تنظيف صفوف العمليات السابقة: المعرّف كله إن لم ينبض أيّ صف له منذ ست ساعات، والحالي لا يُمسّ أبداً.
+const me = (await W.workerReport()).workerId;
+const reg = (id: string, name: string, ago: string) => db.execute(sql`INSERT INTO worker_registry (worker_id, name, interval_ms, updated_at) VALUES (${id}, ${name}, 60000, now() - ${ago}::interval)`);
+await db.execute(sql`DELETE FROM worker_registry WHERE worker_id LIKE 'test-%'`);
+await reg("test-dead:1", "a", "7 hours"); await reg("test-dead:1", "b", "3 days");
+await reg("test-sibling:2", "daily", "9 hours"); await reg("test-sibling:2", "flush", "1 minute");
+await reg("test-recent:3", "a", "1 hour");
+await db.execute(sql`UPDATE worker_registry SET updated_at = now() - interval '10 hours' WHERE worker_id = ${me} AND name = 'test.loop'`);
+const byId = async () => Object.fromEntries((await db.execute<any>(sql`SELECT worker_id, count(*)::int AS n FROM worker_registry WHERE worker_id LIKE 'test-%' OR worker_id = ${me} GROUP BY 1`)).rows.map((r: any) => [r.worker_id, r.n]));
+const gone = await W.workerRetention();
+const left = await byId();
+check("التنظيف: عملية ميتة تُحذف كلها", gone === 2 && !left["test-dead:1"], { gone, left });
+check("...وشقيقة حية بصفٍّ قديم تبقى كلها", left["test-sibling:2"] === 2, left);
+check("...وما نبض قبل ساعة يبقى", left["test-recent:3"] === 1, left);
+check("...والعملية الحالية لا تُمسّ ولو قدم صفها", (await one(sql`SELECT count(*)::int AS n FROM worker_registry WHERE worker_id = ${me} AND name = 'test.loop'`)).n === 1);
+check("...والجرد والحارس كما كانا", (await W.workerReport()).workers.some((x) => x.name === "test.loop") && (await W.stuckWorkers()).some((x) => x.name === "test.loop"));
+check("مدة أقصر تُطلب صراحةً", (await W.workerRetention(0.5)) === 1 && !(await byId())["test-recent:3"]);
+check("الافتراض ست ساعات وكل ساعة", W.WORKER_STALE_HOURS === 6 && W.WORKER_GC_MS === 3_600_000);
+await reg("test-boot:4", "a", "8 hours");
+W.startWorkerRegistryGc(); W.startWorkerRegistryGc();
+await new Promise((r) => setTimeout(r, 400));
+check("عند الإقلاع: يُنظَّف فوراً", !(await byId())["test-boot:4"]);
+check("...ويُسجَّل دورياً مرة واحدة", W.workerStates().filter((x) => x.name === "org.worker_registry_gc").length === 1 && W.workerStates().find((x) => x.name === "org.worker_registry_gc")!.intervalMs === 3_600_000);
+W.stopWorker("org.worker_registry_gc");
+await db.execute(sql`DELETE FROM worker_registry WHERE worker_id LIKE 'test-%' OR name = 'org.worker_registry_gc'`);
+await db.execute(sql`UPDATE worker_registry SET updated_at = now() WHERE worker_id = ${me} AND name = 'test.loop'`);
 
 // التوجيه والتنفيذ: groq وحده بمفتاح، ثلاثة نماذج + pollinations
 const msgs = [{ role: "user" as const, content: "مرحبا" }];

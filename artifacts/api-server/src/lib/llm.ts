@@ -17,7 +17,7 @@
 
 import { currentAgent, currentMeter, routedAgent } from "./agent-context";
 import { and, eq } from "drizzle-orm";
-import { db, llmSettingsTable } from "@workspace/db";
+import { db, llmSettingsTable, llmAccountSettingsTable } from "@workspace/db";
 import { logger } from "./logger";
 import { rank, recordOk, recordFail, type Candidate } from "./llm-health";
 import { receipt, tokensOf, noteUnattributedCall } from "./graph/receipts";
@@ -149,7 +149,7 @@ let stored: { provider: Provider; apiKey: string; model: string | null } | null 
 let storedAt = 0;
 const STORED_TTL_MS = 30_000;
 
-export function invalidateStoredProvider() { storedAt = 0; stored = null; }
+export function invalidateStoredProvider() { storedAt = 0; stored = null; accountCache.clear(); }
 
 async function loadStored() {
   if (storedAt && Date.now() - storedAt < STORED_TTL_MS) return stored;
@@ -162,6 +162,31 @@ async function loadStored() {
   }
   return stored;
 }
+
+// ── Per-account override ──────────────────────────────────────────
+// llm_settings above stays the one shared setting, read exactly as before. An
+// account may set its own provider and key in llm_account_settings; only that
+// account's calls read it. No row there, or a table not created yet, means the
+// shared setting — so an account that never chose keeps what it always had.
+type StoredRow = { provider: Provider; apiKey: string; model: string | null };
+const accountCache = new Map<number, { row: StoredRow | null; at: number }>();
+
+async function loadAccount(userId: number): Promise<StoredRow | null> {
+  const hit = accountCache.get(userId);
+  if (hit && Date.now() - hit.at < STORED_TTL_MS) return hit.row;
+  try {
+    const [row] = await db.select().from(llmAccountSettingsTable).where(eq(llmAccountSettingsTable.userId, userId)).limit(1);
+    const out = row?.apiKey ? { provider: row.provider as Provider, apiKey: row.apiKey, model: row.model } : null;
+    accountCache.set(userId, { row: out, at: Date.now() });
+    return out;
+  } catch {
+    // As above: a blip keeps what was cached; nothing cached means the shared setting.
+    return hit?.row ?? null;
+  }
+}
+
+/** Whose call this is: the employee or job running it, or the account named by the caller. */
+const accountOf = (userId?: number | null) => userId ?? currentAgent()?.userId ?? null;
 
 /** Which provider will be used, given what is configured. */
 // Tried in order when LLM_PROVIDER is not set. Free-and-reliable first.
@@ -178,7 +203,10 @@ export function activeProvider(): Provider {
 }
 
 /** The provider actually in force, stored credentials included. */
-export async function resolveProvider(): Promise<{ provider: Provider; apiKey: string; model: string | null } | null> {
+export async function resolveProvider(userId?: number | null): Promise<{ provider: Provider; apiKey: string; model: string | null; scope?: "account" } | null> {
+  const uid = accountOf(userId);
+  const own = uid ? await loadAccount(uid) : null;
+  if (own) return { ...own, scope: "account" };
   const row = await loadStored();
   if (row?.apiKey) return row;
   const p = activeProvider();
@@ -186,9 +214,17 @@ export async function resolveProvider(): Promise<{ provider: Provider; apiKey: s
   return { provider: p, apiKey: KEYS[p]?.() ?? "", model: null };
 }
 
-export async function providerStatusAsync() {
+// Enough to recognise which key is in place, not enough to use it.
+const maskKey = (k: string) => (k.length > 10 ? `${k.slice(0, 4)}…${k.slice(-4)}` : "…");
+
+export async function providerStatusAsync(userId?: number | null) {
+  const uid = accountOf(userId);
+  const own = uid ? await loadAccount(uid) : null;
+  const base = { ...providerStatus(), accountOverride: !!own };
+  if (own) {
+    return { ...base, provider: own.provider, configured: true, source: "account" as const, model: own.model, maskedKey: maskKey(own.apiKey) };
+  }
   const row = await loadStored();
-  const base = providerStatus();
   if (!row?.apiKey) return base;
   return {
     ...base,
@@ -196,10 +232,7 @@ export async function providerStatusAsync() {
     configured: true,
     source: "database" as const,
     model: row.model,
-    // Enough to recognise which key is in place, not enough to use it.
-    maskedKey: row.apiKey.length > 10
-      ? `${row.apiKey.slice(0, 4)}…${row.apiKey.slice(-4)}`
-      : "…",
+    maskedKey: maskKey(row.apiKey),
   };
 }
 
