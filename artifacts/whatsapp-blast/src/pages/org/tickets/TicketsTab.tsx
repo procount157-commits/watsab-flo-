@@ -74,9 +74,9 @@ function Browse({ view, onOpen }: { view: View; onOpen: (id: number) => void }) 
   return (
     <div className="space-y-3">
       <div className={cn(card, "p-3 flex gap-2 flex-wrap items-center")}>
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <Search className="w-3.5 h-3.5 absolute right-2.5 top-2.5 text-muted-foreground" />
-          <input className={cn(field, "pr-8 w-56")} placeholder="بحث بالعنوان أو الرقم أو النوع" value={text} onChange={(e) => setText(e.target.value)} />
+          <input className={cn(field, "pr-8 w-full sm:w-56")} placeholder="بحث بالعنوان أو الرقم أو النوع" value={text} onChange={(e) => setText(e.target.value)} />
         </div>
         {view === "list" && (
           <select className={field} value={status} onChange={(e) => setStatus(e.target.value)} aria-label="الحالة">
@@ -92,7 +92,7 @@ function Browse({ view, onOpen }: { view: View; onOpen: (id: number) => void }) 
           <option value="">كل الأولويات</option>
           {Object.entries(PRIORITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
-        <input className={cn(field, "w-48")} dir="ltr" placeholder="employee key" value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="الموظف" />
+        <input className={cn(field, "w-full sm:w-48")} dir="ltr" placeholder="employee key" value={employee} onChange={(e) => setEmployee(e.target.value)} aria-label="الموظف" />
         <label className="text-xs text-muted-foreground inline-flex items-center gap-1.5 mr-auto">
           <input type="checkbox" checked={ops} onChange={(e) => setOps(e.target.checked)} /> سجلات العمليات اليومية
         </label>
@@ -207,8 +207,8 @@ function Graph({ onOpen }: { onOpen: (id: number) => void }) {
   const q = useOrg<{ nodes: any[]; edges: any[] }>(`/tickets/graph${/^\d+$/.test(root.trim()) ? `?root=${root.trim()}` : ""}`, 30_000);
   return (
     <div className="space-y-3">
-      <div className="flex gap-2 items-center">
-        <input className={cn(field, "w-40")} dir="ltr" placeholder="ticket #" value={root} onChange={(e) => setRoot(e.target.value)} aria-label="جذر المخطط" />
+      <div className="flex gap-2 items-center flex-wrap">
+        <input className={cn(field, "w-full sm:w-40")} dir="ltr" placeholder="ticket #" value={root} onChange={(e) => setRoot(e.target.value)} aria-label="جذر المخطط" />
         <p className="text-[11px] text-muted-foreground">بلا رقم: المفتوحة وما تنتظره. برقم: التذكرة وأبناؤها واعتمادها في الاتجاهين.</p>
       </div>
       <Q q={q} what="المخطط">
@@ -226,7 +226,7 @@ function Graph({ onOpen }: { onOpen: (id: number) => void }) {
                     <button key={n.id} onClick={() => onOpen(n.id)} className={cn(card, "w-full text-right p-2.5 space-y-1 hover:border-primary/50", n.overdue && "border-red-500/40")}>
                       <div className="flex items-center gap-1.5 flex-wrap text-xs">
                         <span className="text-muted-foreground" dir="ltr">#{n.id}</span>
-                        <b className="truncate max-w-[10rem]" dir="auto">{titleOf({ title: n.title, taskType: n.title })}</b>
+                        <b className="truncate min-w-0 max-w-[10rem]" dir="auto">{titleOf({ title: n.title, taskType: n.title })}</b>
                         <Badge map={STATUS} value={n.status} />
                       </div>
                       <p className="text-[10px] text-muted-foreground" dir="ltr">{n.assignedTo ?? "—"}</p>

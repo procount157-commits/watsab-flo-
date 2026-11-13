@@ -47,7 +47,7 @@ export function ShadowRow({ r }: { r: any }) {
       <div className="flex items-center gap-2 flex-wrap">
         <Pill map={SHADOW} value={r.verdict} />
         <b dir="ltr">{r.employee_key}</b>
-        {r.input_excerpt && <span className="text-muted-foreground truncate max-w-md" dir="auto">{r.input_excerpt}</span>}
+        {r.input_excerpt && <span className="text-muted-foreground truncate min-w-0 max-w-full sm:max-w-md" dir="auto">{r.input_excerpt}</span>}
         <span className="mr-auto text-[10px] text-muted-foreground" title={when(r.created_at)}>{num(r.model_calls)} نداء · {ago(r.created_at)}</span>
         {compared && <button className={ghost} onClick={() => setOpen(!open)}>{open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />} المقارنة</button>}
       </div>

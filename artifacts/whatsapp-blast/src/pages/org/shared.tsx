@@ -15,7 +15,7 @@ export const ghost = "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text
 export const primary = "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-primary text-primary-foreground disabled:opacity-40";
 export const danger = "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40";
 export const pill = "text-[10px] px-2 py-0.5 rounded-full border whitespace-nowrap";
-export const field = "bg-input border border-card-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-primary/50";
+export const field = "max-w-full min-w-0 bg-input border border-card-border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-primary/50";
 
 export const num = (v: unknown) => (v == null || v === "" || Number.isNaN(Number(v)) ? "—" : Number(v).toLocaleString("ar-SA"));
 export const when = (d: unknown) => {

@@ -99,9 +99,9 @@ export default function ControlRoom() {
   return (
     <div className="space-y-4" dir="rtl">
       <Readiness />
-      <nav className="flex gap-1.5">
+      <nav className="flex gap-1.5 overflow-x-auto">
         {VIEWS.map(({ key, label, icon: Icon }) => (
-          <button key={key} onClick={() => setView(key)} className={cn("inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border",
+          <button key={key} onClick={() => setView(key)} className={cn("inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap flex-shrink-0",
             view === key ? "bg-primary/15 text-primary border-primary/20" : "border-card-border text-muted-foreground hover:text-foreground")}><Icon className="w-3.5 h-3.5" />{label}</button>
         ))}
       </nav>

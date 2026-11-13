@@ -46,18 +46,18 @@ export default function OrgPage() {
   const View = tab.view;
 
   return (
-    <div className="p-6 space-y-4 max-w-7xl mx-auto" dir="rtl">
-      <div className="flex items-center gap-3">
+    <div className="p-3 sm:p-6 space-y-4 max-w-7xl mx-auto min-w-0 overflow-x-clip" dir="rtl">
+      <div className="flex items-center gap-3 min-w-0">
         <div className="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center flex-shrink-0"><Network className="w-5 h-5 text-primary" /></div>
-        <div>
-          <h1 className="text-xl font-bold">مركز قيادة المنظّمة</h1>
+        <div className="min-w-0">
+          <h1 className="text-lg sm:text-xl font-bold">مركز قيادة المنظّمة</h1>
           <p className="text-xs text-muted-foreground">حالة كل موظف وما ينتظر قرارك، من السجلات الحقيقية.</p>
         </div>
       </div>
-      <nav className="flex gap-1.5 flex-wrap border-b border-card-border pb-3">
+      <nav className="flex gap-1.5 overflow-x-auto sm:flex-wrap border-b border-card-border pb-3 -mx-3 px-3 sm:mx-0 sm:px-0 [scrollbar-width:thin]">
         {TABS.map(({ key, label, icon: Icon }) => (
           <Link key={key} href={key === "command" ? "/org" : `/org/${key}`} className={cn(
-            "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors",
+            "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap flex-shrink-0",
             tab.key === key ? "bg-primary/15 text-primary border-primary/20" : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50",
           )}><Icon className="w-3.5 h-3.5" />{label}</Link>
         ))}
