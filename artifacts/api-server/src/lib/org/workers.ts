@@ -173,8 +173,38 @@ export async function stuckWorkers(now = Date.now()): Promise<Array<WorkerRow & 
   return r.rows.map((x) => ({ ...x, lateMs: workerHealth(x, now).lateMs, h: workerHealth(x, now).health })).filter((x) => x.h === "stuck").map(({ h, ...x }) => x);
 }
 
-/** صفوف عمليات ماتت منذ يومين: تُحذف. صفوف العملية الحية لا تُمسّ. */
-export async function workerRetention(keepDays = 2): Promise<number> {
-  const r = await db.execute(sql`DELETE FROM worker_registry WHERE worker_id <> ${workerId()} AND updated_at < now() - make_interval(days => ${keepDays})`);
+// ── تنظيف صفوف العمليات السابقة ───────────────────────────────────
+// كل نشر عمليةٌ جديدة بمعرّفٍ جديد (الحاوية واسمها يتغيّران)، وصفوف القديمة تبقى: ١٠١ صفاً بعد
+// أسابيع. لا يقرؤها أحد — workerReport وstuckWorkers (الجرد والحارس) يقرآن العملية الحالية
+// وحدها — فحذفها لا يغيّر حكماً.
+//
+// يُحذف المعرّف كله أو لا شيء منه: عمليةٌ لم ينبض أيٌّ من صفوفها منذ ست ساعات. عمليةٌ شقيقة
+// حية (حاويتان وقت النشر) لها حلقة دقيقة (provider_metrics_flush) تنبض كل دقيقة، فلا تُحذف
+// صفوف حلقتها اليومية لأن صفها وحده قديم. وإن حُذف صفٌّ حيّ خطأً فالكتابة التالية تعيده (upsert).
+
+/** بعد هذه المدة بلا نبض من أي صف لعمليةٍ ليست الحالية تُعدّ ميتة. */
+export const WORKER_STALE_HOURS = 6;
+/** فاصل التنظيف الدوري. */
+export const WORKER_GC_MS = 60 * 60_000;
+
+/** صفوف عمليات ليست الحالية ولم ينبض أيّ صفٍّ لها منذ `staleHours`: تُحذف. العملية الحية لا تُمسّ. */
+export async function workerRetention(staleHours = WORKER_STALE_HOURS, current = workerId()): Promise<number> {
+  if (!(await ensureOrgTables())) return 0;
+  const r = await db.execute(sql`DELETE FROM worker_registry WHERE worker_id <> ${current} AND worker_id IN (
+      SELECT worker_id FROM worker_registry WHERE worker_id <> ${current} GROUP BY worker_id
+      HAVING max(updated_at) < now() - ${staleHours}::float8 * interval '1 hour')`);
   return r.rowCount ?? 0;
+}
+
+let gcStarted = false;
+/** عند الإقلاع مرة، ثم كل ساعة. الخطأ يُسجَّل ولا يوقف شيئاً. */
+export function startWorkerRegistryGc(): void {
+  if (gcStarted) return;
+  gcStarted = true;
+  const run = async () => {
+    const n = await workerRetention();
+    if (n) logger.info({ deleted: n }, "حُذفت صفوف عمليات سابقة من سجل العمّال");
+  };
+  void run().catch((err) => logger.warn({ err: short(err).slice(0, 200) }, "تنظيف سجل العمّال فشل"));
+  everyMs("org.worker_registry_gc", WORKER_GC_MS, run, { unref: true });
 }
