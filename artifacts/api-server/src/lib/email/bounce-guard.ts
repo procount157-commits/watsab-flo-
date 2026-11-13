@@ -122,6 +122,9 @@ export async function judgeTrials(): Promise<void> {
  * يفحص مسبقاً من سيُرسل إليهم قريباً — رسائل الطابور أولاً، ثم جهات
  * الملفات الموقوفة (فيعود منها ما ثبت صندوقه) — كي لا ينتظر الإرسال.
  */
+/** كل خمس دقائق: ٢٥ ≈ ٣٠٠ في الساعة، سقف الفاحص نفسه (mailbox-check.ts). كانت ١٢ — أبطأ من الإرسال، فخرج نصف الطابور بلا فحص. */
+export const PRECHECK_BATCH = 25;
+
 export async function precheck(): Promise<void> {
   const users = await db.select({ userId: emailSettingsTable.userId, from: emailSettingsTable.fromEmail }).from(emailSettingsTable);
   for (const u of users) {
@@ -130,12 +133,12 @@ export async function precheck(): Promise<void> {
       SELECT DISTINCT c.id, c.email, min(m.created_at) AS at FROM email_messages m JOIN email_contacts c ON c.id = m.contact_id
       WHERE m.user_id = ${u.userId} AND m.status = 'queued' AND c.status = 'active'
         AND (c.mailbox IS NULL OR (c.mailbox = 'unknown' AND c.mailbox_checked_at < now() - interval '1 day'))
-      GROUP BY c.id, c.email ORDER BY at LIMIT 12`)).rows;
-    const rescue = queued.length >= 12 ? [] : (await db.execute<{ id: number; email: string }>(sql`
+      GROUP BY c.id, c.email ORDER BY at LIMIT ${PRECHECK_BATCH}`)).rows;
+    const rescue = queued.length >= PRECHECK_BATCH ? [] : (await db.execute<{ id: number; email: string }>(sql`
       SELECT c.id, c.email FROM email_contacts c JOIN email_source_trials t ON t.user_id = c.user_id AND t.source = c.source
       WHERE c.user_id = ${u.userId} AND t.status = 'failed' AND c.status = 'active' AND c.last_sent_at IS NULL
         AND coalesce(c.mx_ok, true) AND c.mailbox IS NULL
-      LIMIT ${12 - queued.length}`)).rows;
+      LIMIT ${PRECHECK_BATCH - queued.length}`)).rows;
     const todo = [...queued, ...rescue].map((r) => ({ id: Number(r.id), email: String(r.email) }));
     if (!todo.length) continue;
     const got = await checkMailboxes(todo, u.from).catch(() => new Map());

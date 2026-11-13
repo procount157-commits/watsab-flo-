@@ -497,7 +497,11 @@ export async function nextQueued(userId: number) {
       deskHalted ? sql`NOT EXISTS (SELECT 1 FROM email_sequence_jobs hj JOIN email_sequences hq ON hq.id = hj.sequence_id WHERE hj.id = ${emailMessagesTable.sequenceJobId} AND hq.name LIKE ${ACCOUNTS_SEQUENCE_PREFIX + "%"})` : sql`true`))
     // رسالة مكتب الحسابات مكتوبةٌ لشخصٍ بعينه، ولا تقف خلف طابور الموجات: أول
     // تسعٍ منها انتظرت خلف ١٢٠٦ رسائل أقدمها من ٢٦ أكتوبر (٩ نوفمبر).
-    .orderBy(sql`(EXISTS (SELECT 1 FROM email_sequence_jobs dj JOIN email_sequences dq ON dq.id = dj.sequence_id WHERE dj.id = ${emailMessagesTable.sequenceJobId} AND dq.name LIKE ${ACCOUNTS_SEQUENCE_PREFIX + "%"})) DESC`, asc(emailMessagesTable.createdAt)).limit(1);
+    .orderBy(sql`(EXISTS (SELECT 1 FROM email_sequence_jobs dj JOIN email_sequences dq ON dq.id = dj.sequence_id WHERE dj.id = ${emailMessagesTable.sequenceJobId} AND dq.name LIKE ${ACCOUNTS_SEQUENCE_PREFIX + "%"})) DESC`,
+      // ما فُحص صندوقه أولاً: ١١–١٣ نوفمبر ارتدّ ٧٫٤٪ ممّا خرج بلا فحص و١٫٤٪ ممّا ثبت
+      // صندوقه، وثلثا الارتداد من الأول. غير المفحوص ينتظر الفاحص (precheck) ولا يُحرم.
+      sql`(SELECT CASE coalesce(fc.mailbox, '') WHEN 'ok' THEN 0 WHEN 'catchall' THEN 0 WHEN 'unknown' THEN 1 ELSE 2 END FROM email_contacts fc WHERE fc.id = ${emailMessagesTable.contactId})`,
+      asc(emailMessagesTable.createdAt)).limit(1);
   return m ?? null;
 }
 
