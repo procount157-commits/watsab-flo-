@@ -16,6 +16,7 @@ import { complete } from "../lib/llm";
 import { say } from "../lib/agent-comms";
 import { logger } from "../lib/logger";
 import { asWorker } from "../lib/agent-context";
+import { departmentOf, isHalted } from "../lib/org/controls";
 
 const router = Router();
 router.use(requireAuth);
@@ -128,7 +129,23 @@ router.get("/:role/form", async (req, res) =>
  * page that can be typed into can be submitted, and what gets submitted is the
  * owner's problem, not the model's.
  */
+/**
+ * Typing and pressing can submit a form to the outside, so they answer to the
+ * kill switches like a send does: platform, account, the employee's department
+ * and the employee. Fail-closed (switches unreadable = refused). The two old
+ * switches (team paused, employee off) never stopped the owner's own hand, and
+ * do not here either — the same rule decideGate keeps for a manual send.
+ * Reading a page is a GET and stays outside: see docs/org/AUDIT-P0.md.
+ */
+async function haltedHand(userId: number, role: string): Promise<string | null> {
+  const h = await isHalted({ userId, role, department: departmentOf(role) });
+  if (!h.halted || h.legacy) return null;
+  return h.reason ?? "موقوف";
+}
+
 router.post("/:role/fill", async (req, res) => {
+  const halted = await haltedHand(req.session.userId!, req.params.role!);
+  if (halted) return res.status(423).json({ error: `موقوف: ${halted}` });
   const { selector, value } = req.body ?? {};
   if (!selector || value === undefined) return res.status(400).json({ error: "selector و value مطلوبان" });
   try {
@@ -140,6 +157,8 @@ router.post("/:role/fill", async (req, res) => {
 });
 
 router.post("/:role/click", async (req, res) => {
+  const halted = await haltedHand(req.session.userId!, req.params.role!);
+  if (halted) return res.status(423).json({ error: `موقوف: ${halted}` });
   const selector = String(req.body?.selector ?? "");
   if (!selector) return res.status(400).json({ error: "selector مطلوب" });
   try {

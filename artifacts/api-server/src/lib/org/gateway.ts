@@ -160,3 +160,18 @@ export async function gateSend(i: GateInput): Promise<GateResult> {
 }
 
 export { isUnavailable };
+
+// ── إشارات واتساب: علامة القراءة ومؤشر الكتابة والحضور ─────────────
+// ليست رسالة فلا تذكرة لها ولا سطر سجل لكل علامة، لكنها تخرج إلى العميل: يُسأل عنها المفتاح
+// نفسه الذي يُسأل عن الرسالة (المنصة، الحساب، قناة واتساب وقسمه، الموظف). isHalted مخزّنة
+// CONTROLS_TTL_MS لكل حساب، وoffDuty مخزّنة لكل موظف: لا استعلام لكل رسالة. الفشل مغلق: تعذّر
+// القراءة جوابه «لا علامة». والمحاكاة لا يخرج منها شيء، ولا علامة.
+// HUMAN_KINDS كما في decideGate: رسالة صاحب العمل اليدوية تحت المفتاحين القديمين تمرّ بكتابتها.
+export async function signalAllowed(userId: number, o: { role?: string | null; kind?: string | null } = {}): Promise<boolean> {
+  if (currentSimulation()) return false;
+  try {
+    const halt = await isHalted({ userId, channel: "whatsapp", department: [departmentOf(o.role ?? null), "whatsapp"].filter((d): d is string => !!d), role: o.role ?? null });
+    if (!halt.halted) return true;
+    return !isUnavailable(halt) && !!halt.legacy && !!o.kind && HUMAN_KINDS.has(o.kind);
+  } catch { return false; }
+}
