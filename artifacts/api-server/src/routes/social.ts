@@ -8,6 +8,7 @@ import {
   socialThreadsTable, socialMessagesTable, socialContentTable, socialActionsTable,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
+import { isHalted } from "../lib/org/controls";
 import { openSession, closeSession, screenshot, remoteClick, remoteType, remoteKey, hasScreen } from "../lib/browser-agent";
 import { ACTION_KINDS, PLATFORM, isPlatform, postIdOf, type SocialPlatform } from "../lib/social/platforms";
 import { hasDriver } from "../lib/social/drivers";
@@ -49,6 +50,15 @@ router.post("/:platform/login-window", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 // The sign-in on a server: the page as a picture, and the owner's clicks and keys sent to it.
+// A click or a key on this page can post as easily as sign in, so it answers to the kill
+// switches (platform, account, this platform's channel and desk), fail-closed. The two old
+// switches never stopped the owner's own hand and do not here. The picture is read-only.
+async function handHalted(req: Request, res: Response): Promise<boolean> {
+  const h = await isHalted({ userId: uid(req), channel: P(req), department: [P(req), "social"] });
+  if (!h.halted || h.legacy) return false;
+  res.status(423).json({ error: `موقوف: ${h.reason ?? "موقوف"}` });
+  return true;
+}
 router.get("/:platform/remote/screen", async (req, res) => {
   const a = await engine.account(uid(req), P(req));
   const shot = a ? await screenshot(uid(req), a.profile) : null;
@@ -56,14 +66,17 @@ router.get("/:platform/remote/screen", async (req, res) => {
   res.setHeader("Content-Type", "image/jpeg"); res.setHeader("Cache-Control", "no-store"); res.send(shot);
 });
 router.post("/:platform/remote/click", async (req, res) => {
+  if (await handHalted(req, res)) return;
   const a = await engine.account(uid(req), P(req));
   try { await remoteClick(uid(req), a!.profile, Number(req.body?.x), Number(req.body?.y)); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });
 router.post("/:platform/remote/type", async (req, res) => {
+  if (await handHalted(req, res)) return;
   const a = await engine.account(uid(req), P(req));
   try { await remoteType(uid(req), a!.profile, String(req.body?.text ?? "")); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });
 router.post("/:platform/remote/key", async (req, res) => {
+  if (await handHalted(req, res)) return;
   const a = await engine.account(uid(req), P(req));
   try { await remoteKey(uid(req), a!.profile, String(req.body?.key ?? "")); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });

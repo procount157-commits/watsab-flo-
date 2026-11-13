@@ -503,7 +503,7 @@ async function autoReplyIfAppropriate(
     // message, which no phone user has ever seen a person do.
     const noticeMs = Math.round(wait.ms * (0.3 + Math.random() * 0.3));
     await new Promise((r) => setTimeout(r, noticeMs));
-    if (key) await markRead(userId, key).catch(() => {});
+    if (key) await markRead(userId, key, routing?.agent.role ?? "sales").catch(() => {});
     await new Promise((r) => setTimeout(r, wait.ms - noticeMs));
 
     // A voice note is answered in kind when the account allows it and the

@@ -11,7 +11,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import { logger as appLogger } from "./logger";
-import { gateSend } from "./org/gateway";
+import { gateSend, signalAllowed } from "./org/gateway";
 import * as firewall from "./wa-firewall";
 import { and, eq, sql, desc } from "drizzle-orm";
 import { db, waAuthStateTable, waSessionEventsTable, usersTable, incomingMessagesTable, contactsTable, unsubscribedPhonesTable, waContactsTable, waConversationsTable, waThreadMessagesTable, waSyncStateTable, messageLogs, campaignsTable, campaignButtonResponsesTable } from "@workspace/db";
@@ -2767,7 +2767,7 @@ export class WhatsAppInstance {
     }
 
     // Anti-ban: go online + simulate typing before every send
-    await this.simulateHumanPresence(jid, message);
+    await this.simulateHumanPresence(jid, message, gateKind);
 
     // ── WS readyState guard (pre-send check #2) ───────────────────────────────
     // simulateHumanPresence takes 2.5–15 s during which the socket can die silently.
@@ -2890,7 +2890,7 @@ export class WhatsAppInstance {
       } else if (messageType === "carousel" && carousel) {
         const cards: CarouselCard[] = JSON.parse(carousel);
         try {
-          await this.simulateHumanPresence(jid, uniqueText);
+          await this.simulateHumanPresence(jid, uniqueText, gateKind);
           result = await withTimeout(sendNativeCarousel(this.state.socket, jid, uniqueText, cards, resolveMedia), "carousel") as any;
         } catch (err: any) {
           // WhatsApp refused the carousel, or a card has no image: the same
@@ -2901,7 +2901,7 @@ export class WhatsAppInstance {
             let cardText = `*${card.title}*`;
             if (card.description) cardText += `\n${card.description}`;
             if (card.buttonText && card.buttonUrl) cardText += `\n\n🔗 *${card.buttonText}*\n👉 ${card.buttonUrl}`;
-            await this.simulateHumanPresence(jid, cardText);
+            await this.simulateHumanPresence(jid, cardText, gateKind);
             result = card.imageUrl
               ? await withTimeout(this.state.socket.sendMessage(jid, { image: await resolveMedia(card.imageUrl), caption: cardText }), "carousel-image")
               : await withTimeout(this.state.socket.sendMessage(jid, { text: cardText }), "carousel-text");
@@ -2984,7 +2984,11 @@ export class WhatsAppInstance {
    *
    * Typing duration scales with message length (~50 WPM ±25%, max 8 s).
    */
-  private async simulateHumanPresence(jid: string, message: string) {
+  private async simulateHumanPresence(jid: string, message: string, kind?: string) {
+    // The typing indicator reaches the customer as surely as the message does,
+    // so a halt (platform, account, WhatsApp, the employee) silences it too —
+    // fail-closed, from the cached switches, no ticket per indicator.
+    if (!(await signalAllowed(this.userId, { role: currentAgent()?.role ?? null, kind }))) return;
     if (!this.state.socket) return;
     // Skip presence simulation when the WebSocket is not OPEN — avoids a 20-second
     // hang waiting for Baileys' internal `defaultQueryTimeoutMs` to expire.
@@ -3035,6 +3039,8 @@ export class WhatsAppInstance {
         await sleep(firstHalf);
         await this.state.socket.sendPresenceUpdate("paused", jid);
         await sleep(thinkMs);
+        // A switch thrown mid-typing stops the indicator here (cached: no query).
+        if (!(await signalAllowed(this.userId, { role: currentAgent()?.role ?? null, kind }))) return;
         await this.state.socket.sendPresenceUpdate("composing", jid);
         await sleep(secondHalf);
       } else {
@@ -3080,9 +3086,11 @@ export class WhatsAppInstance {
    * number whose replies arrive without its ever having read anything is
    * describing itself, so the receipt goes out before the typing indicator.
    */
-  async markRead(key: { remoteJid?: string | null; id?: string | null; fromMe?: boolean | null; participant?: string | null }) {
+  async markRead(key: { remoteJid?: string | null; id?: string | null; fromMe?: boolean | null; participant?: string | null }, role?: string | null) {
     if (!this.state.socket || !this.state.connected) return;
     if (!key?.id || !key?.remoteJid) return;
+    // Blue ticks are seen by the customer: a halt withholds them, fail-closed.
+    if (!(await signalAllowed(this.userId, { role: role ?? currentAgent()?.role ?? null }))) return;
     try {
       await this.state.socket.readMessages([key as any]);
     } catch (err) {
@@ -3098,7 +3106,7 @@ export class WhatsAppInstance {
     const delay = 2_000 + Math.random() * 4_000; // 2–6 s
     setTimeout(async () => {
       try {
-        if (this.state.socket && this.state.connected) {
+        if (this.state.socket && this.state.connected && await signalAllowed(this.userId)) {
           await this.state.socket.sendPresenceUpdate("unavailable", jid);
         }
       } catch {}
@@ -3271,8 +3279,9 @@ export async function requestPairingCode(userId: number, phoneNumber: string): P
 export async function markRead(
   userId: number,
   key: { remoteJid?: string | null; id?: string | null; fromMe?: boolean | null; participant?: string | null },
+  role?: string | null,
 ) {
-  return waManager.get(userId).markRead(key);
+  return waManager.get(userId).markRead(key, role);
 }
 
 // ── Sleep detection ───────────────────────────────────────────────

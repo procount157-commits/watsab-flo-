@@ -2,7 +2,7 @@
 // that counts. Throwaway Postgres only, never the live one:
 //   DATABASE_URL=postgres://t:t@127.0.0.1:55439/t npx tsx src/lib/__tests__/org-safety-db.test.ts
 export {};
-if (!/127\.0\.0\.1:(55446|55445|55439|55440|55441|55442|55444)/.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
+if (!/127\.0\.0\.1:(55446|55445|55443|55439|55440|55441|55442|55444)/.test(process.env["DATABASE_URL"] ?? "")) { console.error("على قاعدة الاختبار وحدها"); process.exit(1); }
 
 // No provider may be reached, whichever path is wrong: any fetch is recorded and refused.
 let fetched = 0;

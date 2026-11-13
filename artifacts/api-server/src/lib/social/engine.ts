@@ -107,7 +107,7 @@ async function pageFor(userId: number, a: SocialAccount) {
 
 const hash = (fromMe: boolean, text: string) => crypto.createHash("sha1").update(`${fromMe ? 1 : 0}|${text.replace(/\s+/g, " ").trim()}`).digest("hex");
 
-async function knowledgeText(userId: number) {
+export async function knowledgeText(userId: number) {
   const [rows, [profile]] = await Promise.all([
     db.select({ c: knowledgeBaseTable.content }).from(knowledgeBaseTable).where(and(eq(knowledgeBaseTable.userId, userId), eq(knowledgeBaseTable.isActive, true))).limit(400),
     db.select().from(businessProfileTable).where(eq(businessProfileTable.userId, userId)).limit(1),
