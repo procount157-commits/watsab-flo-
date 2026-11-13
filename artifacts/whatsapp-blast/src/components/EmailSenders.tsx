@@ -35,6 +35,10 @@ export function EmailSenders({ primary, primaryCap }: { primary?: string | null;
     mutationFn: (id: number) => api(`/api/email/senders/${id}/test`, { method: "POST" }),
     onSuccess: (d: any) => { refresh(); toast[d.ok ? "success" : "error"](d.detail); }, onError: (e: Error) => toast.error(e.message),
   });
+  const release = useMutation({
+    mutationFn: (id: number) => api(`/api/email/senders/${id}/release`, { method: "POST" }),
+    onSuccess: () => { refresh(); toast.success("فُكّ الإيقاف — عاد الصندوق إلى التدوير"); }, onError: (e: Error) => toast.error(e.message),
+  });
   const del = useMutation({
     mutationFn: (id: number) => api(`/api/email/senders/${id}`, { method: "DELETE" }),
     onSuccess: () => { refresh(); toast.success("حُذف الصندوق"); },
@@ -77,7 +81,13 @@ export function EmailSenders({ primary, primaryCap }: { primary?: string | null;
             </div>
             {!s.hasPassword && <p className="text-xs text-amber-500">بانتظار كلمة المرور: اكتبها في الخانة أدناه واضغط «حفظ» — بعدها يدخل التدوير ويبدأ تسخينه.</p>}
             {s.status === "broken" && <p className="text-xs text-red-500">الدخول فشل: {s.heldReason} — اكتب كلمة المرور الصحيحة.</p>}
-            {s.held && s.status === "active" && <p className="text-xs text-amber-500">مُمهَل: {s.heldReason}</p>}
+            {s.held && s.status === "active" && (
+              <div className="flex items-center gap-2 flex-wrap text-xs text-amber-500">
+                <span>موقوف حتى {new Date(s.heldUntil).toLocaleString("ar-AE", { weekday: "short", hour: "2-digit", minute: "2-digit" })}{s.heldReason ? ` — ${s.heldReason}` : ""}</span>
+                <button className={cn(ghost, "py-1 text-amber-600 border-amber-500/40 hover:border-amber-500")} disabled={release.isPending}
+                  onClick={() => release.mutate(s.id)}>{release.isPending && release.variables === s.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}فكّ الإيقاف</button>
+              </div>
+            )}
             {s.imapLastError && <p className="text-[11px] text-muted-foreground">قراءة الوارد: {s.imapLastError}</p>}
             <div className="flex flex-wrap items-center gap-1.5">
               <input type="password" autoComplete="new-password" className={cn(input, "w-44 text-xs")} placeholder="كلمة مرور جديدة" value={newPass[s.id] ?? ""} onChange={(e) => setNewPass({ ...newPass, [s.id]: e.target.value })} dir="ltr" />

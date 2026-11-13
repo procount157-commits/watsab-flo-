@@ -148,6 +148,20 @@ export async function holdBouncingSenders(userId: number): Promise<Array<{ email
   return out;
 }
 
+/**
+ * صاحب العمل يفكّ إمهال صندوقه قبل انقضاء يومه. محصورٌ بصناديقه هو:
+ * صندوق غيره كأنه غير موجود (null). يعيد العنوان وما كان عليه الإمهال.
+ */
+export async function releaseSenderHold(userId: number, id: number, now = new Date()): Promise<{ email: string; wasHeldUntil: Date | null; reason: string } | null> {
+  const [cur] = await db.select().from(emailSendersTable).where(and(eq(emailSendersTable.id, id), eq(emailSendersTable.userId, userId))).limit(1);
+  if (!cur) return null;
+  const day = now.toLocaleString("ar-AE", { timeZone: "Asia/Dubai", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const reason = `أفرج عنه المالك يدوياً ${day}`;
+  await db.update(emailSendersTable).set({ heldUntil: null, heldReason: reason })
+    .where(and(eq(emailSendersTable.id, id), eq(emailSendersTable.userId, userId)));
+  return { email: cur.fromEmail, wasHeldUntil: cur.heldUntil, reason };
+}
+
 /** مصادقةٌ رُفضت: الصندوق معطّل حتى يصحّح صاحب العمل كلمة مروره. */
 export async function markBroken(id: number, why: string) {
   await db.update(emailSendersTable).set({ status: "broken", heldReason: why.slice(0, 300) }).where(eq(emailSendersTable.id, id));
