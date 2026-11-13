@@ -172,7 +172,10 @@ export function noteOf(t: { reason?: "no_reply" | "unparsed"; raw?: string }): s
 function campaignAdapter(key: string, role: "email" | "email_followup" | "email_creator"): Adapter {
   return {
     key, role, maxCalls: 1,
+    // موجة المتابعة عمل كاتب المتابعات وحده: أُعطيت لمنشئ الحملات يوم ١٣ نوفمبر فكتبها بقالب المتابعة
+    // ولم يقرأها parseDraft («no_output» على عيّنةٍ ليست من عمله). والعكس كذلك.
     samples: async (userId) => (await rows(sql`SELECT id, user_id, name, goal, filter, language, tone, intensity, angle, source_list_id FROM email_missions WHERE user_id = ${userId} AND coalesce(goal, '') <> ''
+        AND ${role === "email_followup" ? sql`coalesce(agent_role, 'email') = 'email_followup'` : sql`coalesce(agent_role, 'email') <> 'email_followup'`}
         ORDER BY (coalesce(agent_role, 'email') = ${role}) DESC, id DESC LIMIT ${SHADOW_MAX_SAMPLES}`))
       .map((m: any) => ({ ref: { table: "email_missions", id: Number(m.id) }, excerpt: `${m.name}: ${cut(m.goal, 240)}`, data: m })),
     run: async (userId, s) => {
