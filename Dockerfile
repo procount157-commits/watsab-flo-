@@ -2,6 +2,10 @@
 FROM node:24-slim AS build
 WORKDIR /app
 
+# A stalled mirror connection hung the build 40 min on 13 Nov 2026 (apt has no
+# read timeout of its own here) and held the deploy lock; fail fast and retry.
+RUN printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "5";\n' > /etc/apt/apt.conf.d/80-net
+
 # Baileys needs a C toolchain for its optional native deps; sharp needs libvips.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ ca-certificates \
@@ -28,6 +32,7 @@ RUN pnpm run typecheck:libs \
 # ── Runtime ───────────────────────────────────────────────────────
 FROM node:24-slim AS runtime
 WORKDIR /app
+RUN printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "5";\n' > /etc/apt/apt.conf.d/80-net
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl postgresql-client \
