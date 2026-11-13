@@ -54,9 +54,9 @@ function NewMeeting({ employees, onOpen }: { employees: any[]; onOpen: (d: any) 
           {agenda.length < 8 && <button className={ghost} onClick={() => setAgenda((xs) => [...xs, ""])}><Plus className="w-3 h-3" /> بند</button>}
         </div>
         <div className="flex gap-2 flex-wrap items-center">
-          <input className={cn(field, "flex-1 min-w-48")} placeholder="النطاق (اختياري): قسم، حملة…" value={scope} onChange={(e) => setScope(e.target.value)} />
+          <input className={cn(field, "flex-1 min-w-0 sm:min-w-48 basis-full sm:basis-auto")} placeholder="النطاق (اختياري): قسم، حملة…" value={scope} onChange={(e) => setScope(e.target.value)} />
           <label className="flex items-center gap-1">المدة <input type="number" min={5} max={60} className={cn(field, "w-16")} value={limit} onChange={(e) => setLimit(Number(e.target.value) || 20)} /> دقيقة</label>
-          <label className="flex items-center gap-1"><CalendarClock className="w-3.5 h-3.5" /> موعد لاحق <input type="datetime-local" className={field} value={schedule} onChange={(e) => setSchedule(e.target.value)} /></label>
+          <label className="flex items-center gap-1 flex-wrap"><CalendarClock className="w-3.5 h-3.5" /> موعد لاحق <input type="datetime-local" className={field} value={schedule} onChange={(e) => setSchedule(e.target.value)} /></label>
         </div>
         {schedule && <p className="text-[11px] text-yellow-400">الموعد يُحفظ داخل Flow Hub فقط — لا تقويم خارجي ولا دعوات (محجوب: لا تكامل تقويم). يبدأ حين تفتحه.</p>}
         <div className="flex gap-2 items-center flex-wrap">

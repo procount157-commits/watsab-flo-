@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useGetWhatsappStatus } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
@@ -7,7 +7,7 @@ import QrModal from "./QrModal";
 import {
   LayoutDashboard, QrCode, Users, Megaphone, Bot,
   Wifi, WifiOff, Loader2, LogOut, Shield, User, TrendingUp, Download, BarChart3,
-  MessageCircle, MessagesSquare, MessageSquare, BookOpen, RefreshCw, Sparkles, Settings2, Activity, Clock, Brain, Users2, Radar, LayoutGrid, Globe, Mail, Target, Instagram, Music2, Building2, Briefcase, CalendarRange, Network, Compass, ListChecks, Images, Rocket } from "lucide-react";
+  MessageCircle, MessagesSquare, MessageSquare, BookOpen, RefreshCw, Sparkles, Settings2, Activity, Clock, Brain, Users2, Radar, LayoutGrid, Globe, Mail, Target, Instagram, Music2, Building2, Briefcase, CalendarRange, Network, Compass, ListChecks, Images, Rocket, Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -53,6 +53,9 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const [fixing, setFixing] = useState(false);
+  // على الجوال: القائمة درجٌ يُفتح من الزر، ويُغلق عند الانتقال.
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => { setNavOpen(false); }, [location]);
 
   // Keep the browser tab alive: Wake Lock + session ping + 20-min reload
   useKeepAlive(true);
@@ -91,7 +94,9 @@ export default function Layout({ children }: { children: ReactNode }) {
       {/* Global QR / reconnect modal — appears on any page when WA needs attention */}
       <QrModal />
 
-      <aside className="w-64 flex-shrink-0 bg-sidebar border-l border-sidebar-border flex flex-col">
+      {navOpen && <div className="fixed inset-0 z-40 bg-black/60 md:hidden" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+      <aside className={cn("w-64 max-w-[85vw] flex-shrink-0 bg-sidebar border-l border-sidebar-border flex-col md:static md:flex md:z-auto",
+        navOpen ? "fixed inset-y-0 right-0 z-50 flex" : "hidden")}>
         {/* Logo */}
         <div className="p-5 border-b border-sidebar-border">
           <div className="flex items-center gap-3">
@@ -210,7 +215,14 @@ export default function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto bg-background">
+      <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-background">
+        <div className="md:hidden sticky top-0 z-30 flex items-center gap-2 px-3 py-2 border-b border-sidebar-border bg-background/95 backdrop-blur">
+          <button onClick={() => setNavOpen((o) => !o)} className="p-2 rounded-lg border border-sidebar-border text-muted-foreground hover:text-foreground" aria-label={navOpen ? "إغلاق القائمة" : "فتح القائمة"} aria-expanded={navOpen}>
+            {navOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+          </button>
+          <span className="text-sm font-semibold truncate">واتساب ماركتر</span>
+          <span className={cn("mr-auto w-2 h-2 rounded-full flex-shrink-0", connected ? "bg-green-500" : isActive ? "bg-amber-500" : "bg-red-500")} title={connected ? "متصل" : "غير متصل"} />
+        </div>
         {children}
       </main>
     </div>

@@ -27,7 +27,7 @@ export function EmployeePicker({ value, onChange, employees, exclude = [] }: { v
     return [...m.entries()];
   }, [employees, exclude]);
   return (
-    <select className={cn(field, "min-w-64")} value={value} onChange={(e) => onChange(e.target.value)}>
+    <select className={cn(field, "w-full sm:w-auto sm:min-w-64")} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">اختر موظفاً…</option>
       {groups.map(([d, es]) => (
         <optgroup key={d} label={dept(d)}>

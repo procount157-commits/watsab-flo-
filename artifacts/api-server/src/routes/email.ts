@@ -19,7 +19,7 @@ import { hygieneReport, verifyDomains, cleanList, warmupPlan } from "../lib/emai
 import { warmupCap } from "../lib/email/health";
 import { getSettings, overview, startCampaign, pauseCampaign, enrolInSequence, cancelSequencesFor, recordEvent, verdictFor, signals, varsFor } from "../lib/email/service";
 import { verifySettings, sendEmail, isConfigured, messageIdFor } from "../lib/email/provider";
-import { sendersView, cleanSenderInput, asSettings, PRESETS } from "../lib/email/senders";
+import { sendersView, cleanSenderInput, asSettings, PRESETS, releaseSenderHold } from "../lib/email/senders";
 import { checkDomain } from "../lib/email/dns";
 import { cleanRows, detectColumns, checkMx, splitBy, type ImportRow } from "../lib/email/importer";
 import { draftReply, sendReply, pollMailbox } from "../lib/email/inbound";
@@ -406,6 +406,16 @@ router.post("/senders/:id/test", async (req, res) => {
   const check = await verifySettings(asSettings(s ?? ({ userId } as any), cur)).catch((e) => ({ ok: false, detail: String(e?.message ?? e) }));
   await db.update(emailSendersTable).set(check.ok ? { status: cur.status === "broken" ? "active" : cur.status, heldReason: cur.status === "broken" ? null : cur.heldReason } : { status: "broken", heldReason: check.detail.slice(0, 300) }).where(eq(emailSendersTable.id, id));
   res.json(check);
+});
+
+// فكّ الإمهال يدوياً: الصندوق يعود إلى التدوير الآن، والسبب يبقى مكتوباً.
+router.post("/senders/:id/release", async (req, res) => {
+  const userId = req.session.userId!, id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "رقم غير صحيح" });
+  const r = await releaseSenderHold(userId, id);
+  if (!r) return res.status(404).json({ error: "غير موجود" });
+  await teamActivity(userId, "email_guard", "release", `فكّ صاحب العمل إيقاف الصندوق ${r.email}${r.wasHeldUntil ? " قبل انقضاء مهلته" : ""}؛ يعود إلى التدوير الآن.`, { senderId: id }).catch(() => {});
+  res.json({ ok: true, heldReason: r.reason });
 });
 
 router.delete("/senders/:id", async (req, res) => {

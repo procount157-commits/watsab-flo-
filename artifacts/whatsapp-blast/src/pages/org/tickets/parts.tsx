@@ -47,7 +47,7 @@ export function TicketCard({ t, onOpen, compact }: { t: any; onOpen: (id: number
     <button onClick={() => onOpen(t.taskId)} className={cn(card, "w-full text-right p-3 space-y-1.5 hover:border-primary/50 transition-colors", t.overdue && "border-red-500/40")}>
       <div className="flex items-center gap-2 flex-wrap text-xs">
         <span className="text-muted-foreground" dir="ltr">#{t.taskId}</span>
-        <b className="truncate max-w-[22rem]" dir="auto">{titleOf(t)}</b>
+        <b className="truncate min-w-0 max-w-full sm:max-w-[22rem]" dir="auto">{titleOf(t)}</b>
         {!compact && <Badge map={STATUS} value={t.status} />}
         <Badge map={PRIORITY} value={t.priorityLevel} />
         {t.overdue && <span className={cn(pill, R, "inline-flex items-center gap-1")}><Clock className="w-3 h-3" /> متأخرة</span>}
@@ -106,7 +106,7 @@ export function TicketActions({ t }: { t: any }) {
       </div>
       {assigning && (
         <div className="flex gap-2 flex-wrap items-center">
-          <input className={cn(field, "w-64")} dir="ltr" placeholder="مفتاح الموظف، مثل email.copywriter" value={key} onChange={(e) => setKey(e.target.value)} />
+          <input className={cn(field, "w-full sm:w-64")} dir="ltr" placeholder="مفتاح الموظف، مثل email.copywriter" value={key} onChange={(e) => setKey(e.target.value)} />
           <Confirm tone="primary" label={t.assignedTo ? "إعادة التكليف" : "التكليف"} busy={busy || !key.trim()}
             effect={<>تُسند التذكرة إلى <b dir="ltr">{key.trim() || "…"}</b> ويعمل بها في جولته. المفتاح لا الاسم.</>}
             onConfirm={() => { act.mutate({ path: `${path}/${t.assignedTo ? "reassign" : "assign"}`, body: { employeeKey: key.trim() }, ok: "تم التكليف" }); setAssigning(false); setKey(""); }} />

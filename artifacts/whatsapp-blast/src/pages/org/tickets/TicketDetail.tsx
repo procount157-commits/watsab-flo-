@@ -129,11 +129,11 @@ export default function TicketDetail({ id, onBack, onOpen }: { id: number; onBac
 
               {list(d.executions).length > 0 && (
                 <Section title="التنفيذات (ونداءات النموذج في الإيصالات)">
-                  <table className="w-full text-[11px]"><thead className="text-muted-foreground"><tr><th className="text-right py-1">#</th><th className="text-right">النوع</th><th className="text-right">الحالة</th><th className="text-right">النداءات</th><th className="text-right">النموذج</th><th className="text-right">المدة</th><th className="text-right">متى</th></tr></thead>
+                  <div className="overflow-x-auto"><table className="w-full text-[11px] min-w-[30rem]"><thead className="text-muted-foreground"><tr><th className="text-right py-1">#</th><th className="text-right">النوع</th><th className="text-right">الحالة</th><th className="text-right">النداءات</th><th className="text-right">النموذج</th><th className="text-right">المدة</th><th className="text-right">متى</th></tr></thead>
                     <tbody>{d.executions.map((x: any) => (
                       <tr key={x.id} className="border-t border-card-border"><td className="py-1" dir="ltr">{x.id}</td><td dir="ltr">{x.kind}</td><td>{x.status}</td><td>{num(x.model_calls)}</td><td dir="ltr">{x.model ?? "—"}</td><td>{x.duration_ms == null ? "—" : `${num(x.duration_ms)} م.ث`}</td><td>{ago(x.started_at)}</td></tr>
                     ))}</tbody>
-                  </table>
+                  </table></div>
                 </Section>
               )}
             </div>
