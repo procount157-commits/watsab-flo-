@@ -358,7 +358,8 @@ globalThis.fetch = (async (url: any, init: any) => {
 // نورة في المسار الحقيقي وظّفت الفريق (ensureEmailTeam): يوسف موجود، يُعطى مفتاحه وشخصيته المحفوظة.
 await db.execute(sql`DELETE FROM bot_employees WHERE user_id = ${A} AND role = 'email_followup'`);
 await db.execute(sql`INSERT INTO bot_employees (user_id, name, role, employee_key, persona) VALUES (${A}, 'يوسف', 'email_followup', 'email.followup', 'OLD-YOUSEF')`);
-await db.execute(sql`INSERT INTO email_missions (user_id, name, goal, filter, agent_role) VALUES (${A}, 'قائمة — متابعة فتحوا ولم يردّوا', 'متابعة لمن فتح رسالتنا ولم يرد. زاوية ألم جديدة', '{"listIds":[]}'::jsonb, 'email_followup')`);
+// ثلاث موجات متابعة: عيّنات كاتب المتابعات من موجاته وحدها (١٣ نوفمبر)، فلا تُكمَل بموجات أولى.
+for (const n of ["فتحوا ولم يردّوا", "نقروا", "لم يفتحوا"]) await db.execute(sql`INSERT INTO email_missions (user_id, name, goal, filter, agent_role) VALUES (${A}, ${"قائمة — متابعة " + n}, 'متابعة لمن فتح رسالتنا ولم يرد. زاوية ألم جديدة', '{"listIds":[]}'::jsonb, 'email_followup')`);
 const rFu = await SH.runShadow(A, { employeeKey: "email.followup" });
 const fuRows = rFu.rows.filter((x: any) => x.employee_key === "email.followup");
 check("المتابعة: المخرجان مكتوبان في كل عيّنة (لا no_output)", fuRows.length === 3 && fuRows.every((x: any) => x.verdict !== "no_output" && !!x.current_output && !!x.proposed_output), fuRows.map((x: any) => [x.verdict, x.detail]));
@@ -371,6 +372,11 @@ await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${A}`);
 const rFu2 = await SH.runShadow(A, { employeeKey: "email.followup" });
 check("المتابعة بطولٍ سليم: same بلا مخالفة", rFu2.rows.every((x: any) => x.verdict === "same" && x.proposed_issues.length === 0 && !!x.proposed_output), rFu2.rows.map((x: any) => [x.verdict, x.proposed_issues]));
 globalThis.fetch = realFetch;
+await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${A}`);
+const rCw = await SH.runShadow(A, { employeeKey: "email.creator" }).catch(() => ({ rows: [] as any[] }));
+const cwRefs = rCw.rows.map((x: any) => Number(x.sample_ref?.id)).filter(Boolean);
+const fuIds = (await db.execute<{ id: number }>(sql`SELECT id FROM email_missions WHERE user_id = ${A} AND agent_role = 'email_followup'`)).rows.map((r) => Number(r.id));
+check("منشئ الحملات لا يُعطى موجة متابعة عيّنةً", cwRefs.every((id) => !fuIds.includes(id)), { cwRefs, fuIds });
 await db.execute(sql`DELETE FROM shadow_runs WHERE user_id = ${A}`);
 await db.execute(sql`DELETE FROM email_missions WHERE user_id = ${A} AND agent_role = 'email_followup'`);
 await db.execute(sql`DELETE FROM bot_employees WHERE user_id = ${A} AND employee_key = 'email.followup'`);
